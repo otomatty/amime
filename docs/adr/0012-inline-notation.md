@@ -1,6 +1,6 @@
 # ADR-0012: 行内記法の解析結果の形と、表示の切り替え
 
-- 状態: 採用
+- 状態: 採用(コードブロックとテーブルは [ADR-0013](0013-block-notation.md) で追加)
 - 日付: 2026-11-12
 - 関連: [ADR-0005](0005-editor-architecture.md)、[ADR-0010](0010-editor-input.md)
 

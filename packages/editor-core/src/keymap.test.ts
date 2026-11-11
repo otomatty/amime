@@ -55,6 +55,33 @@ describe("commandForKey", () => {
 		},
 	);
 
+	describe("テーブルの行の中", () => {
+		const row = state(["t", " ab"], 1, 2);
+		const inTableRow = { inTableRow: true };
+
+		it("Tab はインデントではなく、タブ文字を入れて新しいセルを作る", () => {
+			expect(commandForKey(key("Tab"), inTableRow)?.(row)).toEqual(state(["t", " a\tb"], 1, 3));
+		});
+
+		it("Shift+Tab は、ほかの行と同じくインデントを浅くする", () => {
+			expect(commandForKey(key("Tab", { shift: true }), inTableRow)?.(row)).toEqual(
+				state(["t", "ab"], 1, 1),
+			);
+		});
+
+		it("ほかのキーの働きは変わらない", () => {
+			expect(commandForKey(key("Enter"), inTableRow)?.(row)).toEqual(
+				state(["t", " a", " b"], 2, 1),
+			);
+		});
+
+		it("テーブルの行でなければ、Tab はインデントのまま", () => {
+			expect(commandForKey(key("Tab"), { inTableRow: false })?.(row)).toEqual(
+				state(["t", "  ab"], 1, 3),
+			);
+		});
+	});
+
 	it("Shift+矢印(範囲選択)はまだ扱わない", () => {
 		expect(handleKey(base, key("ArrowLeft", { shift: true }))).toBeNull();
 	});

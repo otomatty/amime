@@ -38,7 +38,7 @@
 }
 
 /* タイトル行(1行目)。 */
-.line.title {
+.line[data-kind="title"] {
 	font-size: 1.6em;
 	font-weight: 700;
 	line-height: 1.5;
@@ -82,8 +82,10 @@ a.link:hover {
 }
 
 .code,
-.formula {
-	font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+.formula,
+.command-line,
+.helpfeel {
+	font-family: var(--font-mono);
 	font-size: 0.92em;
 	background: var(--color-code-bg);
 	border-radius: 0.25em;
@@ -114,6 +116,77 @@ a.link:hover {
 	border-radius: 1em;
 	background: var(--color-code-bg);
 	color: var(--color-muted);
+}
+
+/* コードブロックとテーブルの、名前を表示する見出し。 */
+.block-label {
+	display: inline-block;
+	text-indent: 0;
+	font-family: var(--font-mono);
+	font-size: 0.85em;
+	line-height: 1.6;
+	padding: 0 0.7em;
+	border-radius: 0.3em 0.3em 0 0;
+	background: var(--color-label-bg);
+	color: var(--color-label-text);
+	vertical-align: bottom;
+}
+
+.block-label .notation {
+	color: inherit;
+	opacity: 0.6;
+}
+
+/*
+ * コードブロックの中身。背景はインデントより右にだけ塗る(インデントは行の左の余白に置いてある)。
+ * 文字の大きさは中の要素で変える。行そのものの大きさを変えると、インデントの幅まで変わってしまう。
+ */
+.line[data-kind="code-body"] {
+	background: var(--color-code-bg);
+	background-clip: content-box;
+}
+
+.code-text {
+	font-family: var(--font-mono);
+	font-size: 0.92em;
+	padding-left: 0.5em;
+}
+
+/*
+ * テーブル。行(.line)は別々の要素なので、1つの枠(.table-block)で囲んで表として配置し、
+ * 列の幅をブラウザにそろえさせる。
+ */
+.table-block {
+	display: table;
+	border-collapse: collapse;
+}
+
+.line[data-kind="table-row"] {
+	display: table-row;
+}
+
+.cell {
+	display: table-cell;
+	text-indent: 0;
+	vertical-align: top;
+	border: 1px solid var(--color-border);
+}
+
+.indent-cell {
+	border: 0;
+	white-space: nowrap;
+}
+
+/* セルの中身と、残りの幅を埋める余白を横に並べる。 */
+.cell-box {
+	display: flex;
+	min-height: 1.8em;
+	padding-left: 0.6em;
+}
+
+.cell-fill {
+	flex: 1;
+	min-width: 0.6em;
 }
 
 .composing {

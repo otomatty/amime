@@ -1,3 +1,4 @@
+import type { LineKind } from "@amime/parser";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { EditorLine } from "./editor-line.tsx";
@@ -6,17 +7,38 @@ afterEach(cleanup);
 
 const line = () => screen.getByTestId("line");
 
-/** 本文の行(タイトル行ではない行)を、カーソルのない状態で描画する。 */
-function renderShown(text: string) {
-	render(<EditorLine index={1} text={text} caretColumn={null} composing={null} />);
+type Role = { readonly kind: LineKind; readonly blockIndent: number };
+const TEXT: Role = { kind: "text", blockIndent: 0 };
+
+function renderLine(
+	text: string,
+	role: Role,
+	caretColumn: number | null,
+	composing: string | null,
+) {
+	render(
+		<EditorLine
+			index={1}
+			text={text}
+			kind={role.kind}
+			blockIndent={role.blockIndent}
+			caretColumn={caretColumn}
+			composing={composing}
+		/>,
+	);
 	return line();
 }
 
-/** 本文の行を、カーソルのある状態で描画する。 */
-function renderEditing(text: string, caretColumn = 0, composing: string | null = null) {
-	render(<EditorLine index={1} text={text} caretColumn={caretColumn} composing={composing} />);
-	return line();
-}
+/** カーソルのない状態で描画する。役割を省略すると本文の行。 */
+const renderShown = (text: string, role: Role = TEXT) => renderLine(text, role, null, null);
+
+/** カーソルのある状態で描画する。 */
+const renderEditing = (
+	text: string,
+	caretColumn = 0,
+	composing: string | null = null,
+	role = TEXT,
+) => renderLine(text, role, caretColumn, composing);
 
 /** 行の中で、指定した要素より前にある文字列。 */
 function textBefore(element: Element): string {
@@ -97,9 +119,7 @@ describe("EditorLine", () => {
 			(_name, caretColumn) => {
 				const text = "[\uD800] [/\uD800/a]";
 
-				render(<EditorLine index={1} text={text} caretColumn={caretColumn} composing={null} />);
-
-				expect(line().getAttribute("data-text")).toBe(text);
+				expect(renderLine(text, TEXT, caretColumn, null).getAttribute("data-text")).toBe(text);
 			},
 		);
 	});
@@ -302,17 +322,144 @@ describe("EditorLine", () => {
 		});
 	});
 
-	describe("タイトル行(1行目)", () => {
-		it("記法を解釈せず、書いたとおりに表示する", () => {
-			render(<EditorLine index={0} text="[a] #b" caretColumn={null} composing={null} />);
+	describe("タイトル行", () => {
+		const TITLE: Role = { kind: "title", blockIndent: 0 };
 
-			expect(line().textContent).toBe("[a] #b");
-			expect(line().querySelector("a")).toBeNull();
-			expect(line().classList.contains("title")).toBe(true);
+		it("記法を解釈せず、書いたとおりに表示する", () => {
+			const element = renderShown("[a] #b", TITLE);
+
+			expect(element.textContent).toBe("[a] #b");
+			expect(element.querySelector("a")).toBeNull();
+			expect(element.getAttribute("data-kind")).toBe("title");
 		});
 
-		it("2行目以降はタイトルの見た目にしない", () => {
-			expect(renderShown("abc").classList.contains("title")).toBe(false);
+		it("本文の行はタイトルの見た目にしない", () => {
+			expect(renderShown("abc").getAttribute("data-kind")).toBe("text");
+		});
+	});
+
+	describe("コマンド行とヘルプ行", () => {
+		it("$ で始まる行は、記号ごとコマンドとして表示し、中の記法は解釈しない", () => {
+			const element = renderShown("$ echo [a]");
+
+			expect(element.querySelector("code.command-line")?.textContent).toBe("$ echo [a]");
+			expect(element.querySelector("a")).toBeNull();
+		});
+
+		it("? で始まる行は、ヘルプ行として表示する", () => {
+			expect(renderShown("? 使い方").querySelector("code.helpfeel")?.textContent).toBe("? 使い方");
+		});
+	});
+
+	describe("コードブロック", () => {
+		const HEAD: Role = { kind: "code-head", blockIndent: 0 };
+		const BODY: Role = { kind: "code-body", blockIndent: 0 };
+
+		it("始まりの行は、code: を隠して名前を見出しとして表示する", () => {
+			const element = renderShown("code:hello.js", HEAD);
+
+			expect(element.querySelector(".block-label")?.textContent).toBe("hello.js");
+			expect(element.getAttribute("data-kind")).toBe("code-head");
+		});
+
+		it("始まりの行を編集中は、code: も見せる", () => {
+			const element = renderEditing("code:hello.js", 0, null, HEAD);
+
+			expect(element.textContent).toBe("code:hello.js");
+			expect([...element.querySelectorAll(".notation")].map((el) => el.textContent).join("")).toBe(
+				"code:",
+			);
+		});
+
+		it("中身の行は記法を解釈せず、書いたとおりに表示する", () => {
+			const element = renderShown(" const a = [b]; `c` #d", BODY);
+
+			expect(element.querySelector(".code-text")?.textContent).toBe("const a = [b]; `c` #d");
+			expect(element.querySelector("a")).toBeNull();
+			expect(element.querySelector("code")).toBeNull();
+			expect(element.getAttribute("data-kind")).toBe("code-body");
+		});
+
+		it("中身の行のインデントは1段ぶんだけで、それより後ろの空白はコードの字下げとして残す", () => {
+			const element = renderShown("   x", BODY);
+
+			expect(element.getAttribute("data-indent")).toBe("1");
+			expect(element.querySelectorAll(".indent")).toHaveLength(1);
+			expect(element.querySelector(".code-text")?.textContent).toBe("  x");
+		});
+
+		it("中身の行には箇条書きの印を付けない", () => {
+			expect(renderShown(" x", BODY).querySelector("[data-bullet]")).toBeNull();
+		});
+
+		it("中身の行でも、カーソルは行末に描画できる", () => {
+			renderEditing(" ab", 3, null, BODY);
+
+			expect(textBefore(screen.getByTestId("caret"))).toBe("ab");
+		});
+	});
+
+	describe("テーブル", () => {
+		const HEAD: Role = { kind: "table-head", blockIndent: 0 };
+		const ROW: Role = { kind: "table-row", blockIndent: 0 };
+		const cellTexts = (element: Element) =>
+			[...element.querySelectorAll(".cell-text")].map((cell) => cell.textContent);
+
+		it("始まりの行は、table: を隠して名前を見出しとして表示する", () => {
+			expect(renderShown("table:予定", HEAD).querySelector(".block-label")?.textContent).toBe(
+				"予定",
+			);
+		});
+
+		it("行は、タブで区切ったセルとして表示する", () => {
+			const element = renderShown(" a\tbc\t", ROW);
+
+			expect(cellTexts(element)).toEqual(["a", "bc", ""]);
+			expect(element.getAttribute("data-kind")).toBe("table-row");
+		});
+
+		it("インデントはセルとは別の枠に入れ、箇条書きの印を付けない", () => {
+			const element = renderShown("  a", ROW);
+
+			expect(element.querySelectorAll(".indent-cell .indent")).toHaveLength(2);
+			expect(element.querySelector("[data-bullet]")).toBeNull();
+		});
+
+		it("セルの中では記法を解釈する", () => {
+			renderShown(" [a]\tb", ROW);
+
+			expect(screen.getByRole("link", { name: "a" }).closest(".cell-text")).not.toBeNull();
+		});
+
+		it("セルの余白は、そのセルの末尾の位置を持つ(余白を押すとセルの末尾にカーソルが入る)", () => {
+			const fills = [...renderShown(" a\tbc\t", ROW).querySelectorAll(".cell-fill")];
+
+			expect(fills.map((fill) => fill.getAttribute("data-column"))).toEqual(["2", "5", "6"]);
+			expect(fills.map((fill) => fill.getAttribute("data-end"))).toEqual(["2", "5", "6"]);
+		});
+
+		it.each([
+			["セルの末尾(タブの手前)", 2, 0, "a"],
+			["次のセルの先頭(タブの後ろ)", 3, 1, ""],
+			["セルの途中", 4, 1, "b"],
+			["空のセル", 6, 2, ""],
+		])("カーソルを%sに描画する", (_name, caretColumn, cellIndex, before) => {
+			const element = renderEditing(" a\tbc\t", caretColumn, null, ROW);
+
+			const carets = element.querySelectorAll("[data-testid='caret']");
+			expect(carets).toHaveLength(1);
+			const cell = element.querySelectorAll(".cell-text")[cellIndex];
+			expect(cell?.contains(carets[0] ?? null)).toBe(true);
+			const range = document.createRange();
+			range.setStart(cell as Element, 0);
+			range.setEndBefore(carets[0] as Element);
+			expect(range.toString()).toBe(before);
+		});
+
+		it("カーソルはインデントの中にも描画できる", () => {
+			const element = renderEditing("  a", 1, null, ROW);
+
+			expect(element.querySelector(".indent-cell [data-testid='caret']")).not.toBeNull();
 		});
 	});
 });

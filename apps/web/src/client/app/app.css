@@ -6,6 +6,10 @@
 	--color-link: #1f6f8b;
 	--color-code-bg: #efeae0;
 	--color-quote-bg: #f1eee6;
+	--color-label-bg: #57534a;
+	--color-label-text: #fffdf8;
+	--color-border: #d9d3c5;
+	--font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 	--indent-width: 1.5em;
 	color-scheme: light;
 	font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;

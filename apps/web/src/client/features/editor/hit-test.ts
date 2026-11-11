@@ -21,6 +21,14 @@ export function columnFromPoint(char: CharBox, clientX: number): number {
 const verticalDistance = (char: CharBox, clientY: number): number =>
 	Math.max(char.top - clientY, clientY - (char.top + char.height), 0);
 
+/**
+ * テーブルのセルの中で、文字以外のところを押したときの列を求める。
+ * セルの最初の文字より左(左の余白)ならセルの先頭、それ以外(文字の下や右の余白)ならセルの末尾。
+ */
+export function columnInCell(first: CharBox, cellEnd: number, clientX: number): number {
+	return clientX < first.left ? first.start : cellEnd;
+}
+
 /** 「行末」を表す文字位置。setCursor が実際の行の長さに収める。 */
 export const LINE_END = Number.MAX_SAFE_INTEGER;
 
@@ -85,6 +93,14 @@ export function cursorFromPoint(target: Element, clientX: number, clientY: numbe
 
 	const char = target.closest("[data-column]");
 	if (char) return { line: lineIndex, column: columnFromPoint(measure(char), clientX) };
+
+	// テーブルのセルの余白。行全体ではなく、押したセルの中で位置を決める。
+	const cell = target.closest("[data-cell-end]");
+	const firstInCell = cell?.querySelector("[data-column]");
+	if (cell && firstInCell) {
+		const cellEnd = Number(cell.getAttribute("data-cell-end"));
+		return { line: lineIndex, column: columnInCell(measure(firstInCell), cellEnd, clientX) };
+	}
 
 	const chars = Array.from(line.querySelectorAll("[data-column]"), measure);
 	return { line: lineIndex, column: columnOnRow(chars, clientX, clientY) };

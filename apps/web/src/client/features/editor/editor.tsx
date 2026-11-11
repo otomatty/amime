@@ -5,17 +5,20 @@ import {
 	insertText,
 	setCursor,
 } from "@amime/editor-core";
+import { classifyLines } from "@amime/parser";
 import {
 	type CompositionEvent,
 	type KeyboardEvent,
 	type MouseEvent,
 	useLayoutEffect,
+	useMemo,
 	useReducer,
 	useRef,
 	useState,
 } from "react";
 import { EditorLine } from "./editor-line.tsx";
 import { cursorFromPoint } from "./hit-test.ts";
+import { groupLines } from "./line-groups.ts";
 import "./editor.css";
 
 type EditorProps = {
@@ -44,6 +47,9 @@ export function Editor({ initialLines }: EditorProps) {
 	const [state, dispatch] = useReducer(applyCommand, initialLines, initialState);
 	const [composing, setComposing] = useState<string | null>(null);
 	const [focused, setFocused] = useState(false);
+	// 行の役割(タイトル、コードブロックの中身など)は、ページ全体の行の並びから決まる。
+	const roles = useMemo(() => classifyLines(state.lines), [state.lines]);
+	const groups = useMemo(() => groupLines(roles.map((role) => role.kind)), [roles]);
 	const rootRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	// 再描画を待たずに参照するため、変換中かどうかは ref にも持つ。
@@ -105,13 +111,16 @@ export function Editor({ initialLines }: EditorProps) {
 		const composingNow =
 			isComposing.current || event.nativeEvent.isComposing || event.keyCode === KEY_CODE_COMPOSING;
 		if (composingNow) return;
-		const command = commandForKey({
-			key: event.key,
-			shift: event.shiftKey,
-			ctrl: event.ctrlKey,
-			alt: event.altKey,
-			meta: event.metaKey,
-		});
+		const command = commandForKey(
+			{
+				key: event.key,
+				shift: event.shiftKey,
+				ctrl: event.ctrlKey,
+				alt: event.altKey,
+				meta: event.metaKey,
+			},
+			{ inTableRow: roles[state.cursor.line]?.kind === "table-row" },
+		);
 		if (!command) return;
 		event.preventDefault();
 		dispatch(command);
@@ -156,17 +165,33 @@ export function Editor({ initialLines }: EditorProps) {
 				onFocus={() => setFocused(true)}
 				onBlur={() => setFocused(false)}
 			/>
-			{state.lines.map((text, index) => (
-				<EditorLine
-					// biome-ignore lint/suspicious/noArrayIndexKey: 行IDは同期を実装するP2で導入する。それまでは行番号で識別する。
-					key={index}
-					index={index}
-					text={text}
-					// 編集中の行は、フォーカスがあるときのカーソル行だけ。それ以外の行は記法を装飾して見せる。
-					caretColumn={focused && state.cursor.line === index ? state.cursor.column : null}
-					composing={focused && state.cursor.line === index ? composing : null}
-				/>
-			))}
+			{groups.map((group) => {
+				const lines = state.lines.slice(group.start, group.end).map((text, offset) => {
+					const index = group.start + offset;
+					const role = roles[index];
+					const isCursorLine = focused && state.cursor.line === index;
+					return (
+						<EditorLine
+							// 行IDは同期を実装するP2で導入する。それまでは行番号で識別する。
+							key={index}
+							index={index}
+							text={text}
+							kind={role?.kind ?? "text"}
+							blockIndent={role?.blockIndent ?? 0}
+							// 編集中の行は、フォーカスがあるときのカーソル行だけ。それ以外の行は記法を装飾して見せる。
+							caretColumn={isCursorLine ? state.cursor.column : null}
+							composing={isCursorLine ? composing : null}
+						/>
+					);
+				});
+				if (!group.table) return lines;
+				// テーブルの行は1つの枠で囲み、列の幅をそろえる。
+				return (
+					<div className="table-block" key={`table-${group.start}`}>
+						{lines}
+					</div>
+				);
+			})}
 		</div>
 	);
 }

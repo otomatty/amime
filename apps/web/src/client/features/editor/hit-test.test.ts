@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type CharBox, columnFromPoint, columnOnRow, LINE_END } from "./hit-test.ts";
+import { type CharBox, columnFromPoint, columnInCell, columnOnRow, LINE_END } from "./hit-test.ts";
 
 describe("columnFromPoint", () => {
 	const char = { start: 3, end: 5, left: 100, width: 20, top: 0, height: 20 };
@@ -16,6 +16,20 @@ describe("columnFromPoint", () => {
 
 	it("幅を測れない環境では、その文字の前", () => {
 		expect(columnFromPoint({ ...char, left: 0, width: 0 }, 50)).toBe(3);
+	});
+});
+
+describe("columnInCell", () => {
+	// セルの最初の文字。セルの範囲は 3〜7。
+	const first = { start: 3, end: 4, left: 100, width: 10, top: 0, height: 20 };
+
+	it("最初の文字より左(セルの左の余白)を押したら、セルの先頭", () => {
+		expect(columnInCell(first, 7, 95)).toBe(3);
+	});
+
+	it("それ以外の余白(文字の下や右)を押したら、セルの末尾", () => {
+		expect(columnInCell(first, 7, 100)).toBe(7);
+		expect(columnInCell(first, 7, 300)).toBe(7);
 	});
 });
 
