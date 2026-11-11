@@ -1,0 +1,44 @@
+:root {
+	--color-bg: #f4f1ea;
+	--color-paper: #fffdf8;
+	--color-text: #2b2a27;
+	--color-muted: #8a857a;
+	--indent-width: 1.5em;
+	color-scheme: light;
+	font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+}
+
+body {
+	margin: 0;
+	background: var(--color-bg);
+	color: var(--color-text);
+}
+
+.app {
+	max-width: 48rem;
+	margin: 0 auto;
+	padding: 2rem 1rem;
+}
+
+.page {
+	background: var(--color-paper);
+	border-radius: 0.5rem;
+	padding: 1.5rem 2rem;
+	line-height: 1.8;
+}
+
+.line {
+	position: relative;
+	min-height: 1.8em;
+	padding-left: calc(var(--indent) * var(--indent-width));
+}
+
+.bullet {
+	position: absolute;
+	left: calc((var(--indent) - 1) * var(--indent-width) + 0.5em);
+	top: 0.75em;
+	width: 0.35em;
+	height: 0.35em;
+	border-radius: 50%;
+	background: var(--color-muted);
+}

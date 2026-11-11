@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CF_SEND_TELEMETRY: "false"
+
+jobs:
+  static:
+    name: 規約(lint / 型 / 未使用コード / テスト先行)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # テスト先行の検査でベースブランチとの差分を取るため、履歴をすべて取得する。
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - name: Lint と整形
+        run: pnpm lint
+      - name: 型検査
+        run: pnpm typecheck
+      - name: 未使用のコードと依存
+        run: pnpm check:unused
+      - name: PRタイトルの規約
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | pnpm exec commitlint
+      - name: テスト先行の規約
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+          COMMIT_HEADER: ${{ github.event.pull_request.title }}
+        run: pnpm check:tdd
+
+  unit:
+    name: 単体テストとカバレッジ
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - run: pnpm test:coverage
+
+  server:
+    name: サーバーのテスト(Workers ランタイム)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - run: pnpm test:server
+
+  build:
+    name: ビルドとデプロイ検証(dry-run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - run: pnpm build
+      - name: アップロードせずにデプロイ内容を検証
+        run: pnpm --filter @amime/web exec cf deploy --prebuilt --mode production --dry-run
+
+  e2e:
+    name: E2Eテスト
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - run: pnpm build
+      - name: ブラウザをインストール
+        run: pnpm --filter @amime/e2e exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+
+  # 以下の2つは、リポジトリ変数 DEPLOY_ENABLED が "true" のときだけ動く。
+  # 有効にする手順は docs/deploy.md を参照。
+  preview:
+    name: プレビュー環境へデプロイ
+    if: >-
+      github.event_name == 'pull_request' &&
+      vars.DEPLOY_ENABLED == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    needs: [static, unit, server, build, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - run: pnpm --filter @amime/web exec cf previews deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy:
+    name: 本番へデプロイ
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      vars.DEPLOY_ENABLED == 'true'
+    needs: [static, unit, server, build, e2e]
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - run: pnpm build
+      - run: pnpm --filter @amime/web exec cf deploy --prebuilt --mode production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

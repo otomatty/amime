@@ -1,0 +1,13 @@
+name: Setup
+description: Node.js と pnpm を用意し、依存をロックファイルどおりにインストールする
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v6
+      with:
+        node-version-file: .nvmrc
+        cache: pnpm
+    - run: pnpm install --frozen-lockfile
+      shell: bash

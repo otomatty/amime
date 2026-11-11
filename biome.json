@@ -1,0 +1,142 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"includes": ["**", "!**/pnpm-lock.yaml"]
+	},
+	"formatter": {
+		"indentStyle": "tab",
+		"lineWidth": 100
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"linter": {
+		"rules": {
+			"preset": "recommended",
+			"complexity": {
+				"noExcessiveCognitiveComplexity": {
+					"level": "error",
+					"options": { "maxAllowedComplexity": 15 }
+				},
+				"noForEach": "off",
+				"useLiteralKeys": "off"
+			},
+			"correctness": {
+				"noUnusedImports": "error",
+				"noUnusedVariables": "error",
+				"noUnusedFunctionParameters": "error",
+				"useExhaustiveDependencies": "error",
+				"useHookAtTopLevel": "error"
+			},
+			"style": {
+				"noDefaultExport": "error",
+				"noEnum": "error",
+				"noNamespace": "error",
+				"noNonNullAssertion": "error",
+				"noParameterAssign": "error",
+				"useConst": "error",
+				"useImportType": "error",
+				"useExportType": "error",
+				"useNodejsImportProtocol": "error",
+				"useFilenamingConvention": {
+					"level": "error",
+					"options": { "filenameCases": ["kebab-case"], "requireAscii": true }
+				}
+			},
+			"suspicious": {
+				"noConsole": "error",
+				"noExplicitAny": "error",
+				"noDebugger": "error",
+				"noFocusedTests": "error",
+				"noSkippedTests": "error"
+			}
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**/*.config.ts", "**/*.config.js", "apps/web/src/server/index.ts"],
+			"linter": {
+				"rules": {
+					"style": { "noDefaultExport": "off" }
+				}
+			}
+		},
+		{
+			"includes": ["packages/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedImports": {
+							"level": "error",
+							"options": {
+								"patterns": [
+									{
+										"group": ["react", "react-dom", "react/*", "react-dom/*", "hono", "hono/*"],
+										"message": "packages/* はフレームワークに依存しない純粋なロジックです(docs/conventions.md「依存の向き」)。"
+									},
+									{
+										"group": ["cloudflare:*", "node:*"],
+										"message": "packages/* はブラウザと Workers の両方で動く必要があります。実行環境のAPIは apps/ で扱ってください。"
+									},
+									{
+										"group": ["@amime/web", "@amime/web/*"],
+										"message": "packages/* から apps/* へは依存できません。"
+									}
+								]
+							}
+						}
+					}
+				}
+			}
+		},
+		{
+			"includes": ["apps/web/src/client/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedImports": {
+							"level": "error",
+							"options": {
+								"patterns": [
+									{
+										"group": ["**/server/**", "cloudflare:*", "node:*"],
+										"message": "クライアントからサーバーの実装や実行環境のAPIは読み込めません。共有したい型やロジックは packages/ に置いてください。"
+									}
+								]
+							}
+						}
+					}
+				}
+			}
+		},
+		{
+			"includes": ["apps/web/src/server/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedImports": {
+							"level": "error",
+							"options": {
+								"patterns": [
+									{
+										"group": ["**/client/**", "react", "react-dom", "react/*", "react-dom/*"],
+										"message": "サーバーからクライアントの実装は読み込めません。共有したい型やロジックは packages/ に置いてください。"
+									}
+								]
+							}
+						}
+					}
+				}
+			}
+		}
+	]
+}

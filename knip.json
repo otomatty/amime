@@ -1,0 +1,19 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"workspaces": {
+		".": {
+			"entry": ["scripts/*.ts"],
+			"project": ["scripts/**/*.ts"]
+		},
+		"apps/web": {
+			"entry": ["cloudflare.config.ts", "src/server/index.ts"],
+			"project": ["src/**/*.{ts,tsx}"]
+		},
+		"packages/*": {
+			"project": ["src/**/*.ts"]
+		},
+		"e2e": {
+			"project": ["**/*.ts"]
+		}
+	}
+}
