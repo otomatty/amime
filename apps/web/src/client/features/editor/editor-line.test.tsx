@@ -62,6 +62,48 @@ describe("EditorLine", () => {
 		});
 	});
 
+	describe("記法の境界をまたいで結合する文字", () => {
+		const ACUTE = "\u0301"; // 直前の文字に重なるアクセント記号
+
+		it("閉じ括弧の直後の結合文字は、括弧を隠しても表示する", () => {
+			expect(renderShown(`[a]${ACUTE}`).textContent).toBe(`a${ACUTE}`);
+		});
+
+		it("開き括弧の直後の結合文字は、括弧を隠しても表示する", () => {
+			expect(renderShown(`[${ACUTE}a]`).textContent).toBe(`${ACUTE}a`);
+		});
+
+		it("インデントの直後の結合文字も表示する", () => {
+			const element = renderShown(` ${ACUTE}a`);
+
+			expect(element.textContent).toBe(`${ACUTE}a`);
+			expect(element.querySelectorAll(".indent")).toHaveLength(1);
+		});
+
+		it("編集中は、結合文字の手前の記号の前にカーソルを描画できる", () => {
+			// 「]」と結合文字は1文字として扱われるので、カーソルの位置は「]」の前(2)になる。
+			renderEditing(`[a]${ACUTE}`, 2);
+
+			expect(textBefore(screen.getByTestId("caret"))).toBe("[a");
+		});
+	});
+
+	describe("壊れた文字", () => {
+		it.each([
+			["装飾して表示する行", null],
+			["編集中の行", 0],
+		])(
+			"対になっていないサロゲートを含むリンクがあっても、%sの描画を続ける",
+			(_name, caretColumn) => {
+				const text = "[\uD800] [/\uD800/a]";
+
+				render(<EditorLine index={1} text={text} caretColumn={caretColumn} composing={null} />);
+
+				expect(line().getAttribute("data-text")).toBe(text);
+			},
+		);
+	});
+
 	describe("カーソルと変換中の文字列", () => {
 		it("カーソルのない行にはカーソルを描画しない", () => {
 			renderShown("abc");

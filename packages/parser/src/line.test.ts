@@ -375,11 +375,42 @@ describe("parseLine", () => {
 			expect(parse(raw)).toEqual([text(raw)]);
 		});
 
-		it("装飾の中のコードは、装飾の外にあるバッククォートとは対にならない", () => {
-			expect(parse("[* a`b] c`")).toEqual([
-				expect.objectContaining({ type: "decoration", children: [text("a`b")] }),
-				text(" c`"),
+		it("コードの中の括弧は、外側の記法の括弧として数えない", () => {
+			expect(parse("[* a`]`b]")).toEqual([
+				expect.objectContaining({
+					type: "decoration",
+					raw: "[* a`]`b]",
+					children: [text("a"), { type: "code", raw: "`]`", content: "]" }, text("b")],
+				}),
 			]);
+			expect(parse("[[`[`]]")).toEqual([
+				expect.objectContaining({
+					type: "strong",
+					children: [{ type: "code", raw: "`[`", content: "[" }],
+				}),
+			]);
+		});
+
+		it("バッククォートの対は括弧より優先する(行の左から順に対にする)", () => {
+			expect(parse("[* a`b] c`")).toEqual([
+				text("[* a"),
+				{ type: "code", raw: "`b] c`", content: "b] c" },
+			]);
+		});
+
+		it("タグやURLは、バッククォートの手前で終わる", () => {
+			expect(parse("#a`b`")).toEqual([
+				expect.objectContaining({ type: "hashtag", title: "a" }),
+				{ type: "code", raw: "`b`", content: "b" },
+			]);
+			expect(parse("https://e.com/`b`")).toEqual([
+				expect.objectContaining({ type: "external-link", url: "https://e.com/" }),
+				{ type: "code", raw: "`b`", content: "b" },
+			]);
+		});
+
+		it("空のバッククォートの対は飛ばし、その次から対を探す", () => {
+			expect(parse("``a`")).toEqual([text("`"), { type: "code", raw: "`a`", content: "a" }]);
 		});
 	});
 

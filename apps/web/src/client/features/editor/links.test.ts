@@ -22,6 +22,15 @@ describe("pageHref", () => {
 	});
 });
 
+describe("壊れた文字(対になっていないサロゲート)", () => {
+	const LONE_SURROGATE = "\uD800";
+
+	it("タイトルやプロジェクト名に含まれていても例外を出さない", () => {
+		expect(pageHref(`a${LONE_SURROGATE}`)).toBe("./a%EF%BF%BD");
+		expect(projectHref(LONE_SURROGATE, LONE_SURROGATE)).toBe("/%EF%BF%BD/%EF%BF%BD");
+	});
+});
+
 describe("projectHref", () => {
 	it("プロジェクトとページを指す絶対パスにする", () => {
 		expect(projectHref("help-jp", "文字 装飾")).toBe(

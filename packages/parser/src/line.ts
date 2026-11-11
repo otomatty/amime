@@ -15,8 +15,9 @@ const WHITESPACE = /\s/;
 const FORMULA_HEAD = /\$ (?=\s*[^\s\]])/y;
 /** [記号 文字] の先頭。記号の種類は公開ヘルプ「文字装飾記法」に挙げられているもの。 */
 const DECORATION_HEAD = /[!"#%&'()*+,\-./{|}<>_~]+ +(?=[^\s\]])/y;
-const HASHTAG = /#[^\s[\]]+/y;
-const BARE_URL = /https?:\/\/[^\s\]]+/y;
+// タグと本文中のURLは、空白・括弧・バッククォートの手前で終わる。
+const HASHTAG = /#[^\s[\]`]+/y;
+const BARE_URL = /https?:\/\/[^\s\]`]+/y;
 const ICON_SUFFIX = /\.icon(?:\*[1-9]\d*)?$/;
 const URL_FIRST = /^https?:\/\/\S+/;
 const URL_LAST = /\shttps?:\/\/\S+$/;
@@ -26,15 +27,46 @@ const PROJECT_LINK = /^\/[^\s/]+(?:\/.*)?$/;
 
 type Context = {
 	readonly raw: string;
+	/** コードの開きバッククォートの位置 → 閉じバッククォートの位置。 */
+	readonly codeSpans: ReadonlyMap<number, number>;
 	/** 開き括弧の位置 → 対になる閉じ括弧の位置。対のない括弧は含まない。 */
 	readonly closing: ReadonlyMap<number, number>;
 };
 
-/** 括弧の対応を、行全体について一度だけ求める。 */
-function findClosingBrackets(raw: string): Map<number, number> {
+/**
+ * `コード` の範囲を、行の左から順にバッククォートを対にして求める。
+ * コードは他のどの記法よりも優先する(中身は記法として解釈しない)。
+ */
+function findCodeSpans(raw: string): Map<number, number> {
+	const spans = new Map<number, number>();
+	let open = raw.indexOf("`");
+	while (open !== -1) {
+		const close = raw.indexOf("`", open + 1);
+		if (close === -1) break;
+		if (close === open + 1) {
+			// 中身が空の対はコードにしない。2つ目のバッククォートから対を探し直す。
+			open = close;
+			continue;
+		}
+		spans.set(open, close);
+		open = raw.indexOf("`", close + 1);
+	}
+	return spans;
+}
+
+/** 括弧の対応を、行全体について一度だけ求める。コードの中の括弧は数えない。 */
+function findClosingBrackets(
+	raw: string,
+	codeSpans: ReadonlyMap<number, number>,
+): Map<number, number> {
 	const closing = new Map<number, number>();
 	const unclosed: number[] = [];
 	for (let position = 0; position < raw.length; position += 1) {
+		const codeClose = codeSpans.get(position);
+		if (codeClose !== undefined) {
+			position = codeClose;
+			continue;
+		}
 		const code = raw.charCodeAt(position);
 		if (code === OPEN_BRACKET) {
 			unclosed.push(position);
@@ -52,9 +84,9 @@ function matchAt(pattern: RegExp, raw: string, position: number): string | undef
 	return pattern.exec(raw)?.[0];
 }
 
-function code(ctx: Context, open: number, end: number): InlineNode | null {
-	const close = ctx.raw.indexOf("`", open + 1);
-	if (close === -1 || close >= end || close === open + 1) return null;
+function code(ctx: Context, open: number): InlineNode | null {
+	const close = ctx.codeSpans.get(open);
+	if (close === undefined) return null;
 	return { type: "code", start: open, end: close + 1, content: { start: open + 1, end: close } };
 }
 
@@ -210,10 +242,10 @@ function bracket(ctx: Context, open: number, depth: number): InlineNode | null {
 }
 
 /** position から始まる記法があれば、そのノードを返す。 */
-function nodeAt(ctx: Context, position: number, end: number, depth: number): InlineNode | null {
+function nodeAt(ctx: Context, position: number, depth: number): InlineNode | null {
 	switch (ctx.raw.charAt(position)) {
 		case "`":
-			return code(ctx, position, end);
+			return code(ctx, position);
 		case "[":
 			return bracket(ctx, position, depth);
 		case "#":
@@ -235,7 +267,7 @@ function parseRange(ctx: Context, range: Span, depth: number): InlineNode[] {
 	};
 
 	while (position < range.end) {
-		const node = nodeAt(ctx, position, range.end, depth);
+		const node = nodeAt(ctx, position, depth);
 		if (node === null) {
 			position += 1;
 			continue;
@@ -256,7 +288,8 @@ function parseRange(ctx: Context, range: Span, depth: number): InlineNode[] {
  */
 export function parseLine(raw: string): ParsedLine {
 	const { indent } = parseIndent(raw);
-	const ctx = { raw, closing: findClosingBrackets(raw) };
+	const codeSpans = findCodeSpans(raw);
+	const ctx = { raw, codeSpans, closing: findClosingBrackets(raw, codeSpans) };
 	const rest = { start: indent, end: raw.length };
 	if (raw.charAt(indent) !== ">") return { indent, nodes: parseRange(ctx, rest, 0) };
 

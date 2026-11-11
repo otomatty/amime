@@ -1,4 +1,4 @@
-import { type Grapheme, segmentGraphemes } from "@amime/editor-core";
+import { segmentGraphemes } from "@amime/editor-core";
 import { type InlineNode, type ParsedLine, parseIndent, parseLine, type Span } from "@amime/parser";
 import { type CSSProperties, Fragment, memo, type ReactNode } from "react";
 import { pageHref, projectHref } from "./links.ts";
@@ -24,7 +24,8 @@ type ContainerNode = Extract<InlineNode, { readonly children: readonly InlineNod
 type ContentNode = Extract<InlineNode, { readonly content: Span }>;
 
 type RenderContext = {
-	readonly graphemes: readonly Grapheme[];
+	/** 行の生のテキスト。 */
+	readonly text: string;
 	readonly caretColumn: number | null;
 	/** カーソル(と、変換中の文字列)の要素。 */
 	readonly caret: ReactNode;
@@ -32,24 +33,23 @@ type RenderContext = {
 	readonly editing: boolean;
 };
 
-/** 開始位置が column 以上である最初の文字の番号。graphemes は位置の昇順なので、二分探索で求める。 */
-function firstIndexFrom(graphemes: readonly Grapheme[], column: number): number {
-	let low = 0;
-	let high = graphemes.length;
-	while (low < high) {
-		const middle = (low + high) >>> 1;
-		if ((graphemes[middle]?.column ?? column) < column) low = middle + 1;
-		else high = middle;
-	}
-	return low;
-}
+/** 画面に並べる1文字ぶんの要素。位置は、行の生のテキストでの位置。 */
+type Piece = { readonly text: string; readonly start: number; readonly end: number };
 
-/** 開始位置が span の中にある文字。記法が多い長い行でも、行の長さに比例する手間で済ませる。 */
-function graphemesIn(ctx: RenderContext, span: Span): readonly Grapheme[] {
-	return ctx.graphemes.slice(
-		firstIndexFrom(ctx.graphemes, span.start),
-		firstIndexFrom(ctx.graphemes, span.end),
-	);
+/**
+ * span の範囲を、利用者から見た1文字ずつに分ける。
+ *
+ * 行全体ではなく範囲ごとに分けるので、記法の境界をまたいで結合する文字
+ * (「]」の直後の結合文字など)も境界で切れる。記号を隠しても、範囲の中の文字は必ず表示される。
+ * 分けた位置は、行全体で見た文字の境界をすべて含む。そのため、カーソルを置ける位置には
+ * 必ず要素の先頭がある。
+ */
+function pieces(ctx: RenderContext, span: Span): Piece[] {
+	return segmentGraphemes(ctx.text.slice(span.start, span.end)).map((grapheme) => ({
+		text: grapheme.text,
+		start: span.start + grapheme.column,
+		end: span.start + grapheme.column + grapheme.text.length,
+	}));
 }
 
 /**
@@ -57,15 +57,11 @@ function graphemesIn(ctx: RenderContext, span: Span): readonly Grapheme[] {
  * 各要素が生のテキストでの位置を持つので、押された要素からカーソル位置を求められる。
  */
 function chars(ctx: RenderContext, span: Span, className = "char"): ReactNode[] {
-	return graphemesIn(ctx, span).map((grapheme) => (
-		<Fragment key={grapheme.column}>
-			{grapheme.column === ctx.caretColumn && ctx.caret}
-			<span
-				className={className}
-				data-column={grapheme.column}
-				data-end={grapheme.column + grapheme.text.length}
-			>
-				{grapheme.text}
+	return pieces(ctx, span).map((piece) => (
+		<Fragment key={piece.start}>
+			{piece.start === ctx.caretColumn && ctx.caret}
+			<span className={className} data-column={piece.start} data-end={piece.end}>
+				{piece.text}
 			</span>
 		</Fragment>
 	));
@@ -73,14 +69,14 @@ function chars(ctx: RenderContext, span: Span, className = "char"): ReactNode[] 
 
 /** 行頭の空白。文字としては見せず、1段ぶんの幅を持つ要素にする。 */
 function indents(ctx: RenderContext, indent: number): ReactNode[] {
-	return graphemesIn(ctx, { start: 0, end: indent }).map((grapheme) => (
-		<Fragment key={grapheme.column}>
-			{grapheme.column === ctx.caretColumn && ctx.caret}
+	return pieces(ctx, { start: 0, end: indent }).map((piece) => (
+		<Fragment key={piece.start}>
+			{piece.start === ctx.caretColumn && ctx.caret}
 			<span
 				className="indent"
-				data-bullet={grapheme.column === indent - 1 ? "" : undefined}
-				data-column={grapheme.column}
-				data-end={grapheme.column + grapheme.text.length}
+				data-bullet={piece.end === indent ? "" : undefined}
+				data-column={piece.start}
+				data-end={piece.end}
 			/>
 		</Fragment>
 	));
@@ -236,7 +232,7 @@ export const EditorLine = memo(function EditorLine({
 		</>
 	);
 	const ctx: RenderContext = {
-		graphemes: segmentGraphemes(text),
+		text,
 		caretColumn,
 		caret,
 		editing: caretColumn !== null,
