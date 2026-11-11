@@ -6,7 +6,9 @@ export default defineConfig({
 	plugins: [react()],
 	test: {
 		name: "@amime/web:client",
-		environment: "happy-dom",
+		environment: "jsdom",
+		setupFiles: ["./vitest.client.setup.ts"],
+		restoreMocks: true,
 		include: ["src/client/**/*.test.{ts,tsx}"],
 	},
 });

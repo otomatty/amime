@@ -1,0 +1,291 @@
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Editor } from "./editor.tsx";
+
+afterEach(cleanup);
+
+const input = () => screen.getByLabelText<HTMLTextAreaElement>("ページの本文");
+const lines = () => screen.getAllByTestId("line").map((line) => line.getAttribute("data-text"));
+
+/** カーソルのある行番号と、行内でカーソルより前にある生のテキストの長さ。 */
+function caret(): { line: number; column: number } {
+	const element = screen.getByTestId("caret");
+	const line = element.closest("[data-line]");
+	const next = element.nextElementSibling;
+	const text = line?.getAttribute("data-text") ?? "";
+	return {
+		line: Number(line?.getAttribute("data-line")),
+		column: next?.hasAttribute("data-column")
+			? Number(next.getAttribute("data-column"))
+			: text.length,
+	};
+}
+
+/** 利用者が文字を打ったときにブラウザが行うこと(textarea に値が入り、input が発火する)を再現する。 */
+function type(text: string) {
+	fireEvent.input(input(), { target: { value: text } });
+}
+
+function press(key: string, init: KeyboardEventInit = {}) {
+	return fireEvent.keyDown(input(), { key, ...init });
+}
+
+function clickChar(lineIndex: number, column: number) {
+	const line = screen.getAllByTestId("line")[lineIndex];
+	const char = line?.querySelector(`[data-column="${column}"]`);
+	if (!char) throw new Error(`no char at line ${lineIndex}, column ${column}`);
+	fireEvent.mouseDown(char);
+}
+
+describe("Editor", () => {
+	describe("表示", () => {
+		it("渡された行を表示し、カーソルを先頭に置く", () => {
+			render(<Editor initialLines={["タイトル", " 本文"]} />);
+
+			expect(lines()).toEqual(["タイトル", " 本文"]);
+			expect(caret()).toEqual({ line: 0, column: 0 });
+		});
+
+		it("行が1つもなければ、空の1行から始める", () => {
+			render(<Editor initialLines={[]} />);
+
+			expect(lines()).toEqual([""]);
+		});
+	});
+
+	describe("クリック", () => {
+		it("文字を押すと、その位置にカーソルが移り、入力を受け付ける状態になる", () => {
+			render(<Editor initialLines={["abc", "def"]} />);
+
+			clickChar(1, 2);
+
+			expect(caret()).toEqual({ line: 1, column: 2 });
+			expect(document.activeElement).toBe(input());
+		});
+
+		it("行の余白を押すと、その行の末尾にカーソルが移る", () => {
+			render(<Editor initialLines={["abc", "def"]} />);
+
+			fireEvent.mouseDown(screen.getAllByTestId("line")[1] as HTMLElement);
+
+			expect(caret()).toEqual({ line: 1, column: 3 });
+		});
+
+		it("行の外を押すと、最後の行の末尾にカーソルが移る", () => {
+			render(<Editor initialLines={["abc", "def"]} />);
+
+			fireEvent.mouseDown(screen.getByTestId("editor"));
+
+			expect(caret()).toEqual({ line: 1, column: 3 });
+		});
+
+		it("フォーカスの有無を属性に反映する(カーソルの表示切り替えに使う)", () => {
+			render(<Editor initialLines={["abc"]} />);
+			expect(screen.getByTestId("editor").getAttribute("data-focused")).toBe("false");
+
+			clickChar(0, 0);
+			expect(screen.getByTestId("editor").getAttribute("data-focused")).toBe("true");
+
+			fireEvent.blur(input());
+			expect(screen.getByTestId("editor").getAttribute("data-focused")).toBe("false");
+		});
+	});
+
+	describe("文字入力", () => {
+		it("打った文字がカーソル位置に入り、入力欄は空に戻る", () => {
+			render(<Editor initialLines={["ac"]} />);
+			clickChar(0, 1);
+
+			type("b");
+
+			expect(lines()).toEqual(["abc"]);
+			expect(caret()).toEqual({ line: 0, column: 2 });
+			expect(input().value).toBe("");
+		});
+
+		it("複数行の文字列を貼り付けると、行に分かれて入る", () => {
+			render(<Editor initialLines={[""]} />);
+
+			type("1行目\n 2行目");
+
+			expect(lines()).toEqual(["1行目", " 2行目"]);
+			expect(caret()).toEqual({ line: 1, column: 4 });
+		});
+	});
+
+	describe("キー操作", () => {
+		it("Enter で改行し、インデントを引き継ぐ", () => {
+			render(<Editor initialLines={[" item"]} />);
+			fireEvent.mouseDown(screen.getByTestId("line"));
+
+			press("Enter");
+
+			expect(lines()).toEqual([" item", " "]);
+			expect(caret()).toEqual({ line: 1, column: 1 });
+		});
+
+		it("Backspace で直前の文字を消す", () => {
+			render(<Editor initialLines={["abc"]} />);
+			fireEvent.mouseDown(screen.getByTestId("line"));
+
+			press("Backspace");
+
+			expect(lines()).toEqual(["ab"]);
+		});
+
+		it("扱ったキーは、ブラウザの既定の動作を止める", () => {
+			render(<Editor initialLines={["abc"]} />);
+
+			const notPrevented = press("Tab");
+
+			expect(notPrevented).toBe(false);
+			expect(lines()).toEqual([" abc"]);
+		});
+
+		it("キー操作のあと、カーソルが見える位置までスクロールする", () => {
+			const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+			render(<Editor initialLines={["abc"]} />);
+			clickChar(0, 0);
+			scrollIntoView.mockClear();
+
+			press("Enter");
+
+			expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+			expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getByTestId("caret"));
+		});
+
+		it("フォーカスがないときはスクロールしない", () => {
+			const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+
+			render(<Editor initialLines={["abc"]} />);
+
+			expect(scrollIntoView).not.toHaveBeenCalled();
+		});
+
+		it("Esc の直後の Tab はインデントにせず、ブラウザに任せる(キーボードだけで編集欄から抜けられる)", () => {
+			render(<Editor initialLines={["abc"]} />);
+			clickChar(0, 0);
+
+			press("Escape");
+			const tabNotPrevented = press("Tab");
+			press("Escape");
+			const shiftTabNotPrevented = press("Tab", { shiftKey: true });
+
+			expect(tabNotPrevented).toBe(true);
+			expect(shiftTabNotPrevented).toBe(true);
+			expect(lines()).toEqual(["abc"]);
+		});
+
+		it("Esc のあと Shift を押してから Tab を押しても、編集欄から抜けられる(実際のキー入力の順序)", () => {
+			render(<Editor initialLines={["abc"]} />);
+			clickChar(0, 0);
+
+			press("Escape");
+			press("Shift", { shiftKey: true });
+			const notPrevented = press("Tab", { shiftKey: true });
+
+			expect(notPrevented).toBe(true);
+			expect(lines()).toEqual(["abc"]);
+		});
+
+		it("Esc のあとに別のキーを押したら、Tab は再びインデントになる", () => {
+			render(<Editor initialLines={["abc"]} />);
+			clickChar(0, 0);
+
+			press("Escape");
+			press("ArrowRight");
+			const notPrevented = press("Tab");
+
+			expect(notPrevented).toBe(false);
+			expect(lines()).toEqual([" abc"]);
+		});
+
+		it("扱わないキーは、ブラウザの既定の動作に任せる", () => {
+			render(<Editor initialLines={["abc"]} />);
+
+			const notPrevented = press("a");
+
+			expect(notPrevented).toBe(true);
+			expect(lines()).toEqual(["abc"]);
+		});
+	});
+
+	describe("日本語入力(IME)", () => {
+		it("変換中の文字列はカーソル位置に表示されるが、行にはまだ入らない", () => {
+			render(<Editor initialLines={["ab"]} />);
+			clickChar(0, 1);
+
+			fireEvent.compositionStart(input());
+			fireEvent.compositionUpdate(input(), { data: "にほ" });
+
+			expect(screen.getByTestId("composing").textContent).toBe("にほ");
+			expect(lines()).toEqual(["ab"]);
+		});
+
+		it("変換中に発火する input では、文字を確定しない", () => {
+			render(<Editor initialLines={[""]} />);
+
+			fireEvent.compositionStart(input());
+			type("にほ");
+
+			expect(lines()).toEqual([""]);
+			expect(input().value).toBe("にほ");
+		});
+
+		it("確定すると、確定した文字列が1回だけ入る(input が compositionend より前に来る順序)", () => {
+			render(<Editor initialLines={["ab"]} />);
+			clickChar(0, 1);
+
+			fireEvent.compositionStart(input());
+			fireEvent.compositionUpdate(input(), { data: "にほん" });
+			type("日本");
+			fireEvent.compositionEnd(input(), { data: "日本" });
+
+			expect(lines()).toEqual(["a日本b"]);
+			expect(caret()).toEqual({ line: 0, column: 3 });
+			expect(screen.queryByTestId("composing")).toBeNull();
+			expect(input().value).toBe("");
+		});
+
+		it("確定すると、確定した文字列が1回だけ入る(input が compositionend より後に来る順序)", () => {
+			render(<Editor initialLines={[""]} />);
+
+			fireEvent.compositionStart(input());
+			input().value = "日本";
+			fireEvent.compositionEnd(input(), { data: "日本" });
+			fireEvent.input(input());
+
+			expect(lines()).toEqual(["日本"]);
+		});
+
+		it("変換を取り消すと、何も入らない", () => {
+			render(<Editor initialLines={["ab"]} />);
+
+			fireEvent.compositionStart(input());
+			fireEvent.compositionUpdate(input(), { data: "にほ" });
+			fireEvent.compositionEnd(input(), { data: "" });
+
+			expect(lines()).toEqual(["ab"]);
+			expect(screen.queryByTestId("composing")).toBeNull();
+		});
+
+		it("変換中のキー操作は扱わない(変換の確定に使う Enter で改行しない)", () => {
+			render(<Editor initialLines={["ab"]} />);
+
+			fireEvent.compositionStart(input());
+			const notPrevented = press("Enter", { isComposing: true });
+
+			expect(notPrevented).toBe(true);
+			expect(lines()).toEqual(["ab"]);
+		});
+
+		it("確定直後に届く keyCode 229 の Enter でも改行しない(Safari の順序)", () => {
+			render(<Editor initialLines={["ab"]} />);
+
+			const notPrevented = press("Enter", { keyCode: 229 });
+
+			expect(notPrevented).toBe(true);
+			expect(lines()).toEqual(["ab"]);
+		});
+	});
+});
