@@ -178,6 +178,13 @@ describe("parseLine", () => {
 			]);
 		});
 
+		it("本文中のURLは、開き括弧の手前で終わる(直後の記法を巻き込まない)", () => {
+			expect(parse("https://example.com[a]")).toEqual([
+				expect.objectContaining({ type: "external-link", url: "https://example.com" }),
+				expect.objectContaining({ type: "page-link", title: "a" }),
+			]);
+		});
+
 		it("http も対象にする", () => {
 			expect(parse("http://example.com")).toEqual([
 				expect.objectContaining({ type: "external-link", url: "http://example.com" }),

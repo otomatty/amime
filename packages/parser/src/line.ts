@@ -17,7 +17,7 @@ const FORMULA_HEAD = /\$ (?=\s*[^\s\]])/y;
 const DECORATION_HEAD = /[!"#%&'()*+,\-./{|}<>_~]+ +(?=[^\s\]])/y;
 // タグと本文中のURLは、空白・括弧・バッククォートの手前で終わる。
 const HASHTAG = /#[^\s[\]`]+/y;
-const BARE_URL = /https?:\/\/[^\s\]`]+/y;
+const BARE_URL = /https?:\/\/[^\s[\]`]+/y;
 const ICON_SUFFIX = /\.icon(?:\*[1-9]\d*)?$/;
 const URL_FIRST = /^https?:\/\/\S+/;
 const URL_LAST = /\shttps?:\/\/\S+$/;
