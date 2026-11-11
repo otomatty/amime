@@ -30,6 +30,11 @@ function press(key: string, init: KeyboardEventInit = {}) {
 	return fireEvent.keyDown(input(), { key, ...init });
 }
 
+/** キーボードで編集欄に入ったときのように、押す操作なしでフォーカスを当てる。 */
+function focusEditor() {
+	fireEvent.focus(input());
+}
+
 function clickChar(lineIndex: number, column: number) {
 	const line = screen.getAllByTestId("line")[lineIndex];
 	const char = line?.querySelector(`[data-column="${column}"]`);
@@ -39,10 +44,18 @@ function clickChar(lineIndex: number, column: number) {
 
 describe("Editor", () => {
 	describe("表示", () => {
-		it("渡された行を表示し、カーソルを先頭に置く", () => {
+		it("渡された行を表示する。フォーカスするまでカーソルは表示しない", () => {
 			render(<Editor initialLines={["タイトル", " 本文"]} />);
 
 			expect(lines()).toEqual(["タイトル", " 本文"]);
+			expect(screen.queryByTestId("caret")).toBeNull();
+		});
+
+		it("フォーカスすると、カーソルを先頭に表示する", () => {
+			render(<Editor initialLines={["タイトル", " 本文"]} />);
+
+			focusEditor();
+
 			expect(caret()).toEqual({ line: 0, column: 0 });
 		});
 
@@ -91,6 +104,49 @@ describe("Editor", () => {
 		});
 	});
 
+	describe("記法の表示", () => {
+		const link = () => screen.queryByRole("link", { name: "a" });
+
+		it("カーソルのない行は記法を装飾して表示し、カーソルのある行は記法をそのまま表示する", () => {
+			render(<Editor initialLines={["タイトル", "[a]"]} />);
+			expect(link()).not.toBeNull();
+
+			fireEvent.mouseDown(screen.getAllByTestId("line")[1] as HTMLElement);
+
+			expect(link()).toBeNull();
+			expect(screen.getAllByTestId("line")[1]?.textContent).toBe("[a]");
+		});
+
+		it("編集欄からフォーカスが外れると、すべての行を装飾して表示する", () => {
+			render(<Editor initialLines={["タイトル", "[a]"]} />);
+			fireEvent.mouseDown(screen.getAllByTestId("line")[1] as HTMLElement);
+
+			fireEvent.blur(input());
+
+			expect(link()).not.toBeNull();
+			expect(screen.queryByTestId("caret")).toBeNull();
+		});
+
+		it("装飾された文字を押すと、生のテキストでの位置にカーソルが入る", () => {
+			render(<Editor initialLines={["タイトル", "[* ab]"]} />);
+
+			clickChar(1, 4);
+
+			expect(caret()).toEqual({ line: 1, column: 4 });
+		});
+
+		it("リンクを押してもカーソルは動かさず、ブラウザの移動に任せる", () => {
+			render(<Editor initialLines={["タイトル", "[a]"]} />);
+			const char = link()?.querySelector("[data-column]") as HTMLElement;
+
+			const notPrevented = fireEvent.mouseDown(char);
+
+			expect(notPrevented).toBe(true);
+			expect(link()).not.toBeNull();
+			expect(document.activeElement).not.toBe(input());
+		});
+	});
+
 	describe("文字入力", () => {
 		it("打った文字がカーソル位置に入り、入力欄は空に戻る", () => {
 			render(<Editor initialLines={["ac"]} />);
@@ -105,6 +161,7 @@ describe("Editor", () => {
 
 		it("複数行の文字列を貼り付けると、行に分かれて入る", () => {
 			render(<Editor initialLines={[""]} />);
+			focusEditor();
 
 			type("1行目\n 2行目");
 

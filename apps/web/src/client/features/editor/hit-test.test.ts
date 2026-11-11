@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type CharBox, columnFromPoint, columnOnRow } from "./hit-test.ts";
+import { type CharBox, columnFromPoint, columnOnRow, LINE_END } from "./hit-test.ts";
 
 describe("columnFromPoint", () => {
 	const char = { start: 3, end: 5, left: 100, width: 20, top: 0, height: 20 };
@@ -42,8 +42,22 @@ describe("columnOnRow", () => {
 		expect(columnOnRow(wrapped, 200, 10)).toBe(3);
 	});
 
-	it("2段目の右の余白を押したら、2段目の末尾", () => {
-		expect(columnOnRow(wrapped, 200, 30)).toBe(6);
+	it("最後の段の右の余白を押したら、行末", () => {
+		expect(columnOnRow(wrapped, 200, 30)).toBe(LINE_END);
+	});
+
+	it("行が隠れた記法で終わっていても、最後の文字の右を押したら行末(記法の後ろ)", () => {
+		// 「[ab]」を装飾して表示している状態。見えている文字は a(1〜2) と b(2〜3) だけ。
+		const shown = [box(1, 0, 0), box(2, 0, 1)];
+		expect(columnOnRow(shown, 200, 10)).toBe(LINE_END);
+	});
+
+	it("行が隠れた記法で始まっていても、最初の文字の左を押したら行頭(記法の前)", () => {
+		const shown = [
+			{ ...box(1, 0, 0), left: 50 },
+			{ ...box(2, 0, 1), left: 60 },
+		];
+		expect(columnOnRow(shown, 10, 10)).toBe(0);
 	});
 
 	it("段の左の余白を押したら、その段の先頭", () => {
@@ -62,18 +76,18 @@ describe("columnOnRow", () => {
 			{ ...box(2, 1, 0), height: 14 },
 		];
 		expect(columnOnRow(gapped, 200, 15)).toBe(2); // 1段目(0〜14)のすぐ下
-		expect(columnOnRow(gapped, 200, 19)).toBe(3); // 2段目(20〜34)のすぐ上
+		expect(columnOnRow(gapped, 200, 19)).toBe(LINE_END); // 2段目(20〜34)のすぐ上。最後の段なので行末
 	});
 
 	it("最後の段より下の余白を押したら、最後の段で決める", () => {
-		expect(columnOnRow(wrapped, 200, 99)).toBe(6);
+		expect(columnOnRow(wrapped, 200, 99)).toBe(LINE_END);
 	});
 
-	it("文字がなければ null(呼び出し側で行末にする)", () => {
-		expect(columnOnRow([], 10, 10)).toBeNull();
+	it("文字がなければ行末", () => {
+		expect(columnOnRow([], 10, 10)).toBe(LINE_END);
 	});
 
-	it("大きさを測れない文字しかなければ null(呼び出し側で行末にする)", () => {
-		expect(columnOnRow([{ ...box(0, 0, 0), width: 0, height: 0 }], 0, 0)).toBeNull();
+	it("大きさを測れない文字しかなければ行末", () => {
+		expect(columnOnRow([{ ...box(0, 0, 0), width: 0, height: 0 }], 0, 0)).toBe(LINE_END);
 	});
 });

@@ -37,6 +37,85 @@
 	background: var(--color-muted);
 }
 
+/* タイトル行(1行目)。 */
+.line.title {
+	font-size: 1.6em;
+	font-weight: 700;
+	line-height: 1.5;
+	margin-bottom: 0.4em;
+}
+
+/* 記法の記号。編集中の行でだけ表示される。 */
+.notation {
+	color: var(--color-muted);
+}
+
+.link {
+	color: var(--color-link);
+	text-decoration: none;
+}
+
+a.link:hover {
+	text-decoration: underline;
+}
+
+/* 文字装飾 [記号 文字]。data-deco に使われた記号が入る。 */
+.deco[data-deco*="*"] {
+	font-weight: 700;
+	font-size: calc(1em + (var(--deco-level) - 1) * 0.2em);
+}
+
+.deco[data-deco*="/"] {
+	font-style: italic;
+}
+
+.deco[data-deco*="-"] {
+	text-decoration: line-through;
+}
+
+.deco[data-deco*="_"] {
+	text-decoration: underline;
+}
+
+.deco[data-deco*="-"][data-deco*="_"] {
+	text-decoration: line-through underline;
+}
+
+.code,
+.formula {
+	font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+	font-size: 0.92em;
+	background: var(--color-code-bg);
+	border-radius: 0.25em;
+	padding: 0.1em 0.3em;
+}
+
+.quote {
+	background: var(--color-quote-bg);
+	border-left: 3px solid var(--color-muted);
+	font-style: italic;
+	padding: 0.1em 0.5em;
+}
+
+.image {
+	max-width: 100%;
+	max-height: 16em;
+	vertical-align: top;
+	border-radius: 0.25em;
+}
+
+/* アイコン記法。プロフィール画像を表示できるようになるまでは、名前の入った印で表す。 */
+.icon {
+	display: inline-block;
+	text-indent: 0;
+	font-size: 0.8em;
+	line-height: 1.4;
+	padding: 0 0.5em;
+	border-radius: 1em;
+	background: var(--color-code-bg);
+	color: var(--color-muted);
+}
+
 .composing {
 	text-decoration: underline;
 	text-decoration-thickness: 2px;
