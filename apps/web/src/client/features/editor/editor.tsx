@@ -22,6 +22,9 @@ type EditorProps = {
 	readonly initialLines: readonly string[];
 };
 
+/** 単独で押されても、編集の操作としては扱わないキー。 */
+const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
+
 /** 変換中のキー操作に付く keyCode。Safari は確定直後の Enter にもこの値を付ける。 */
 const KEY_CODE_COMPOSING = 229;
 
@@ -93,6 +96,8 @@ export function Editor({ initialLines }: EditorProps) {
 
 	const handleKeyDown = (event: KeyboardEvent) => {
 		// Tab をインデントに使うため、Esc の直後の Tab だけはブラウザに任せ、編集欄から抜けられるようにする。
+		// Shift+Tab では Shift 単独の keydown が先に届くので、修飾キーだけの押下では状態を変えない。
+		if (MODIFIER_KEYS.has(event.key)) return;
 		const escaped = tabMovesFocus.current;
 		tabMovesFocus.current = event.key === "Escape" && !isComposing.current;
 		if (tabMovesFocus.current || (escaped && event.key === "Tab")) return;

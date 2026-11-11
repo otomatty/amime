@@ -176,6 +176,18 @@ describe("Editor", () => {
 			expect(lines()).toEqual(["abc"]);
 		});
 
+		it("Esc のあと Shift を押してから Tab を押しても、編集欄から抜けられる(実際のキー入力の順序)", () => {
+			render(<Editor initialLines={["abc"]} />);
+			clickChar(0, 0);
+
+			press("Escape");
+			press("Shift", { shiftKey: true });
+			const notPrevented = press("Tab", { shiftKey: true });
+
+			expect(notPrevented).toBe(true);
+			expect(lines()).toEqual(["abc"]);
+		});
+
 		it("Esc のあとに別のキーを押したら、Tab は再びインデントになる", () => {
 			render(<Editor initialLines={["abc"]} />);
 			clickChar(0, 0);

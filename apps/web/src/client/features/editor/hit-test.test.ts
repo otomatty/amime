@@ -55,8 +55,25 @@ describe("columnOnRow", () => {
 		expect(columnOnRow(wrapped, 18, 30)).toBe(5);
 	});
 
-	it("どの段にも当たらなければ null(呼び出し側で行末にする)", () => {
-		expect(columnOnRow(wrapped, 10, 99)).toBeNull();
+	it("段の間の隙間を押したら、縦に最も近い段で決める", () => {
+		const gapped = [
+			{ ...box(0, 0, 0), height: 14 },
+			{ ...box(1, 0, 1), height: 14 },
+			{ ...box(2, 1, 0), height: 14 },
+		];
+		expect(columnOnRow(gapped, 200, 15)).toBe(2); // 1段目(0〜14)のすぐ下
+		expect(columnOnRow(gapped, 200, 19)).toBe(3); // 2段目(20〜34)のすぐ上
+	});
+
+	it("最後の段より下の余白を押したら、最後の段で決める", () => {
+		expect(columnOnRow(wrapped, 200, 99)).toBe(6);
+	});
+
+	it("文字がなければ null(呼び出し側で行末にする)", () => {
 		expect(columnOnRow([], 10, 10)).toBeNull();
+	});
+
+	it("大きさを測れない文字しかなければ null(呼び出し側で行末にする)", () => {
+		expect(columnOnRow([{ ...box(0, 0, 0), width: 0, height: 0 }], 0, 0)).toBeNull();
 	});
 });

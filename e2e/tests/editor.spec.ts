@@ -154,6 +154,22 @@ test.describe("エディタ(画面の操作)", () => {
 		await expect(page.getByTestId("caret")).toBeInViewport();
 	});
 
+	test("Esc で編集欄から抜け、Shift+Tab で前の要素へフォーカスを移せる", async ({ page }) => {
+		// いまの画面には編集欄の前にフォーカスできる要素がないため、確認用のボタンを置く。
+		await page.evaluate(() => {
+			const button = document.createElement("button");
+			button.textContent = "前の要素";
+			document.querySelector("main")?.prepend(button);
+		});
+		await clickLineEnd(page, 0);
+
+		await page.keyboard.press("Escape");
+		await page.keyboard.press("Shift+Tab");
+
+		await expect(page.getByRole("button", { name: "前の要素" })).toBeFocused();
+		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
+	});
+
 	test("Esc で編集欄から抜け、Tab で次の要素へフォーカスを移せる", async ({ page }) => {
 		// いまの画面には編集欄の後ろにフォーカスできる要素がないため、確認用のボタンを置く。
 		await page.evaluate(() => {

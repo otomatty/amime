@@ -38,13 +38,21 @@ export function splitLine(state: EditorState): EditorState {
 }
 
 /**
- * 2つの行をつなげる。つなぎ目の両側が1文字に結合することがあるため(国旗の絵文字など)、
- * カーソルはつなぎ目を含む文字の手前に置く。
+ * 文字や改行を消したあとの行を組み立てる。
+ * lines[first] から count 行を、head + tail の1行に置き換え、カーソルを継ぎ目に置く。
+ * 継ぎ目の両側が1文字に結合することがあるため(🇯 と 🇵 が国旗になるなど)、
+ * その場合はカーソルを結合した文字の手前に寄せる。
  */
-function joinLines(state: EditorState, first: number, head: string, tail: string): EditorState {
+function removeBetween(
+	state: EditorState,
+	first: number,
+	count: number,
+	head: string,
+	tail: string,
+): EditorState {
 	const joined = head + tail;
 	return {
-		lines: state.lines.toSpliced(first, 2, joined),
+		lines: state.lines.toSpliced(first, count, joined),
 		cursor: { line: first, column: snapToBoundary(joined, head.length) },
 	};
 }
@@ -55,15 +63,12 @@ export function deleteBackward(state: EditorState): EditorState {
 	const current = lineAtCursor(state);
 	if (column > 0) {
 		const start = previousBoundary(current, column);
-		return {
-			lines: state.lines.with(line, current.slice(0, start) + current.slice(column)),
-			cursor: { line, column: start },
-		};
+		return removeBetween(state, line, 1, current.slice(0, start), current.slice(column));
 	}
 
 	const previous = state.lines[line - 1];
 	if (previous === undefined) return state;
-	return joinLines(state, line - 1, previous, current);
+	return removeBetween(state, line - 1, 2, previous, current);
 }
 
 /** カーソルの直後の1文字を消す。行末では次の行とつなげる。 */
@@ -72,15 +77,12 @@ export function deleteForward(state: EditorState): EditorState {
 	const current = lineAtCursor(state);
 	if (column < current.length) {
 		const end = nextBoundary(current, column);
-		return {
-			lines: state.lines.with(line, current.slice(0, column) + current.slice(end)),
-			cursor: state.cursor,
-		};
+		return removeBetween(state, line, 1, current.slice(0, column), current.slice(end));
 	}
 
 	const next = state.lines[line + 1];
 	if (next === undefined) return state;
-	return joinLines(state, line, current, next);
+	return removeBetween(state, line, 2, current, next);
 }
 
 /** カーソルのある行を1段深くする。 */

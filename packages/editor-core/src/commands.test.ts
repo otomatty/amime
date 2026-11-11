@@ -108,6 +108,12 @@ describe("deleteBackward", () => {
 		expect(deleteBackward(state([`a${THUMBS_UP}b`], 0, 3))).toEqual(state(["ab"], 0, 1));
 	});
 
+	it("消した結果、両隣が1文字に結合したら、カーソルはその文字の手前に置く", () => {
+		expect(deleteBackward(state([`${REGIONAL_J}x${REGIONAL_P}`], 0, 3))).toEqual(
+			state([`${REGIONAL_J}${REGIONAL_P}`], 0, 0),
+		);
+	});
+
 	it("インデントの空白も1文字として消せる(1段浅くなる)", () => {
 		expect(deleteBackward(state(["  item"], 0, 2))).toEqual(state([" item"], 0, 1));
 	});
@@ -135,6 +141,12 @@ describe("deleteForward", () => {
 
 	it("絵文字は1回で丸ごと消す", () => {
 		expect(deleteForward(state([`a${THUMBS_UP}b`], 0, 1))).toEqual(state(["ab"], 0, 1));
+	});
+
+	it("消した結果、両隣が1文字に結合したら、カーソルはその文字の手前に置く", () => {
+		expect(deleteForward(state([`${REGIONAL_J}x${REGIONAL_P}`], 0, 2))).toEqual(
+			state([`${REGIONAL_J}${REGIONAL_P}`], 0, 0),
+		);
 	});
 
 	it("行末では次の行とつなげ、カーソルは動かさない", () => {
