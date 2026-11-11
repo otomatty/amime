@@ -19,6 +19,7 @@ jobs:
   static:
     name: 規約(lint / 型 / 未使用コード / テスト先行)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
@@ -46,6 +47,7 @@ jobs:
   unit:
     name: 単体テストとカバレッジ
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
@@ -54,6 +56,7 @@ jobs:
   server:
     name: サーバーのテスト(Workers ランタイム)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
@@ -62,6 +65,7 @@ jobs:
   build:
     name: ビルドとデプロイ検証(dry-run)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
@@ -72,12 +76,15 @@ jobs:
   e2e:
     name: E2Eテスト
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
       - run: pnpm build
+      # --with-deps は付けない。apt の更新が必要になり、ランナーの状態によっては長時間待たされる。
+      # ブラウザの実行に必要なライブラリは、ランナーのイメージに入っている。
       - name: ブラウザをインストール
-        run: pnpm --filter @amime/e2e exec playwright install --with-deps chromium
+        run: pnpm --filter @amime/e2e exec playwright install chromium
       - run: pnpm test:e2e
 
   # 以下の2つは、リポジトリ変数 DEPLOY_ENABLED が "true" のときだけ動く。
@@ -90,6 +97,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     needs: [static, unit, server, build, e2e]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
@@ -106,6 +114,7 @@ jobs:
       vars.DEPLOY_ENABLED == 'true'
     needs: [static, unit, server, build, e2e]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: production
     concurrency:
       group: deploy-production

@@ -24,21 +24,4 @@ body {
 	background: var(--color-paper);
 	border-radius: 0.5rem;
 	padding: 1.5rem 2rem;
-	line-height: 1.8;
-}
-
-.line {
-	position: relative;
-	min-height: 1.8em;
-	padding-left: calc(var(--indent) * var(--indent-width));
-}
-
-.bullet {
-	position: absolute;
-	left: calc((var(--indent) - 1) * var(--indent-width) + 0.5em);
-	top: 0.75em;
-	width: 0.35em;
-	height: 0.35em;
-	border-radius: 50%;
-	background: var(--color-muted);
 }

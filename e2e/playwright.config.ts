@@ -2,6 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 
 const PORT = 4173;
 const isCI = Boolean(process.env["CI"]);
+/** ブラウザをダウンロードできない環境で、手元の Chromium を使うための指定。 */
+const chromiumPath = process.env["E2E_CHROMIUM_PATH"];
 
 /** 本番ビルド(SPA + Worker)をローカルの Workers ランタイムで起動し、ブラウザから検証する。 */
 export default defineConfig({
@@ -14,7 +16,15 @@ export default defineConfig({
 		locale: "ja-JP",
 		trace: "on-first-retry",
 	},
-	projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+	projects: [
+		{
+			name: "chromium",
+			use: {
+				...devices["Desktop Chrome"],
+				...(chromiumPath ? { launchOptions: { executablePath: chromiumPath } } : {}),
+			},
+		},
+	],
 	webServer: {
 		// 事前に `pnpm build` が必要。CI ではビルド成果物を受け取ってから起動する。
 		command: `pnpm --filter @amime/web preview --port ${PORT} --strictPort`,
