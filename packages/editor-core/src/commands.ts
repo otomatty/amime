@@ -88,9 +88,11 @@ export function deleteForward(state: EditorState): EditorState {
 /** カーソルのある行を1段深くする。 */
 export function indentLine(state: EditorState): EditorState {
 	const { line, column } = state.cursor;
+	const indented = ` ${lineAtCursor(state)}`;
 	return {
-		lines: state.lines.with(line, ` ${lineAtCursor(state)}`),
-		cursor: { line, column: column + 1 },
+		lines: state.lines.with(line, indented),
+		// 行頭が結合文字だと、足した空白と1文字に結合する。その場合は結合した文字の後ろに置く。
+		cursor: { line, column: ceilToBoundary(indented, column + 1) },
 	};
 }
 

@@ -171,6 +171,14 @@ describe("indentLine", () => {
 	});
 });
 
+describe("indentLine(結合文字)", () => {
+	it("行頭が結合文字で、足した空白と1文字に結合したら、カーソルはその文字の後ろに置く", () => {
+		expect(indentLine(state([`${COMBINING_ACUTE}x`], 0, 0))).toEqual(
+			state([` ${COMBINING_ACUTE}x`], 0, 2),
+		);
+	});
+});
+
 describe("outdentLine", () => {
 	it("カーソルのある行を1段浅くし、カーソルは同じ文字の位置に留まる", () => {
 		expect(outdentLine(state(["\t item"], 0, 4))).toEqual(state([" item"], 0, 3));
