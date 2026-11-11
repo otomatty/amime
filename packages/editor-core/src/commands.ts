@@ -1,5 +1,5 @@
 import { parseIndent } from "@amime/parser";
-import { nextBoundary, previousBoundary } from "./graphemes.ts";
+import { ceilToBoundary, nextBoundary, previousBoundary, snapToBoundary } from "./graphemes.ts";
 import { lineAtCursor } from "./state.ts";
 import type { EditorState } from "./types.ts";
 
@@ -16,10 +16,12 @@ export function insertText(state: EditorState, text: string): EditorState {
 
 	const head = current.slice(0, column) + text.replace(LINE_BREAK, "\n");
 	const inserted = (head + current.slice(column)).split("\n");
-	const lastLineStart = head.lastIndexOf("\n") + 1;
+	const lastLineHead = head.slice(head.lastIndexOf("\n") + 1);
+	// 挿入した文字が後ろの文字と結合することがある(結合文字など)。その場合は結合した文字の後ろに置く。
+	const lastColumn = ceilToBoundary(lastLineHead + current.slice(column), lastLineHead.length);
 	return {
 		lines: state.lines.toSpliced(line, 1, ...inserted),
-		cursor: { line: line + inserted.length - 1, column: head.length - lastLineStart },
+		cursor: { line: line + inserted.length - 1, column: lastColumn },
 	};
 }
 
@@ -32,6 +34,18 @@ export function splitLine(state: EditorState): EditorState {
 	return {
 		lines: state.lines.toSpliced(line, 1, head, inherited + current.slice(column)),
 		cursor: { line: line + 1, column: inherited.length },
+	};
+}
+
+/**
+ * 2つの行をつなげる。つなぎ目の両側が1文字に結合することがあるため(国旗の絵文字など)、
+ * カーソルはつなぎ目を含む文字の手前に置く。
+ */
+function joinLines(state: EditorState, first: number, head: string, tail: string): EditorState {
+	const joined = head + tail;
+	return {
+		lines: state.lines.toSpliced(first, 2, joined),
+		cursor: { line: first, column: snapToBoundary(joined, head.length) },
 	};
 }
 
@@ -49,10 +63,7 @@ export function deleteBackward(state: EditorState): EditorState {
 
 	const previous = state.lines[line - 1];
 	if (previous === undefined) return state;
-	return {
-		lines: state.lines.toSpliced(line - 1, 2, previous + current),
-		cursor: { line: line - 1, column: previous.length },
-	};
+	return joinLines(state, line - 1, previous, current);
 }
 
 /** カーソルの直後の1文字を消す。行末では次の行とつなげる。 */
@@ -69,10 +80,7 @@ export function deleteForward(state: EditorState): EditorState {
 
 	const next = state.lines[line + 1];
 	if (next === undefined) return state;
-	return {
-		lines: state.lines.toSpliced(line, 2, current + next),
-		cursor: state.cursor,
-	};
+	return joinLines(state, line, current, next);
 }
 
 /** カーソルのある行を1段深くする。 */

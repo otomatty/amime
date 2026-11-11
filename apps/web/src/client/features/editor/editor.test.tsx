@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "./editor.tsx";
 
 afterEach(cleanup);
@@ -136,6 +136,52 @@ describe("Editor", () => {
 		it("扱ったキーは、ブラウザの既定の動作を止める", () => {
 			render(<Editor initialLines={["abc"]} />);
 
+			const notPrevented = press("Tab");
+
+			expect(notPrevented).toBe(false);
+			expect(lines()).toEqual([" abc"]);
+		});
+
+		it("キー操作のあと、カーソルが見える位置までスクロールする", () => {
+			const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+			render(<Editor initialLines={["abc"]} />);
+			clickChar(0, 0);
+			scrollIntoView.mockClear();
+
+			press("Enter");
+
+			expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+			expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getByTestId("caret"));
+		});
+
+		it("フォーカスがないときはスクロールしない", () => {
+			const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+
+			render(<Editor initialLines={["abc"]} />);
+
+			expect(scrollIntoView).not.toHaveBeenCalled();
+		});
+
+		it("Esc の直後の Tab はインデントにせず、ブラウザに任せる(キーボードだけで編集欄から抜けられる)", () => {
+			render(<Editor initialLines={["abc"]} />);
+			clickChar(0, 0);
+
+			press("Escape");
+			const tabNotPrevented = press("Tab");
+			press("Escape");
+			const shiftTabNotPrevented = press("Tab", { shiftKey: true });
+
+			expect(tabNotPrevented).toBe(true);
+			expect(shiftTabNotPrevented).toBe(true);
+			expect(lines()).toEqual(["abc"]);
+		});
+
+		it("Esc のあとに別のキーを押したら、Tab は再びインデントになる", () => {
+			render(<Editor initialLines={["abc"]} />);
+			clickChar(0, 0);
+
+			press("Escape");
+			press("ArrowRight");
 			const notPrevented = press("Tab");
 
 			expect(notPrevented).toBe(false);

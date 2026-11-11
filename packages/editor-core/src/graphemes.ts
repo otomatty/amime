@@ -46,3 +46,11 @@ export function snapToBoundary(text: string, column: number): number {
 	if (column >= text.length) return text.length;
 	return graphemeAt(text, column).index;
 }
+
+/** column を行の範囲に収め、文字の途中であればその文字の終了位置に寄せる。 */
+export function ceilToBoundary(text: string, column: number): number {
+	if (column <= 0) return 0;
+	if (column >= text.length) return text.length;
+	const start = graphemeAt(text, column).index;
+	return start === column ? column : nextBoundary(text, start);
+}

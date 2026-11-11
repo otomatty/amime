@@ -45,15 +45,18 @@ export function Editor({ initialLines }: EditorProps) {
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	// 再描画を待たずに参照するため、変換中かどうかは ref にも持つ。
 	const isComposing = useRef(false);
+	// Esc の直後の Tab だけはインデントにせず、フォーカスの移動に使う。
+	const tabMovesFocus = useRef(false);
 
-	// 変換候補のウィンドウがカーソルの近くに出るよう、textarea をカーソルの位置に重ねる。
 	useLayoutEffect(() => {
 		const input = inputRef.current;
 		const caret = rootRef.current?.querySelector<HTMLElement>(".caret");
-		if (input && caret) {
-			input.style.top = `${caret.offsetTop}px`;
-			input.style.left = `${caret.offsetLeft}px`;
-		}
+		if (!input || !caret) return;
+		// 変換候補のウィンドウがカーソルの近くに出るよう、textarea をカーソルの位置に重ねる。
+		input.style.top = `${caret.offsetTop}px`;
+		input.style.left = `${caret.offsetLeft}px`;
+		// キー操作は既定の動作を止めているため、ブラウザは自動でスクロールしない。代わりに行う。
+		if (focused) caret.scrollIntoView({ block: "nearest", inline: "nearest" });
 	});
 
 	/**
@@ -89,6 +92,11 @@ export function Editor({ initialLines }: EditorProps) {
 	};
 
 	const handleKeyDown = (event: KeyboardEvent) => {
+		// Tab をインデントに使うため、Esc の直後の Tab だけはブラウザに任せ、編集欄から抜けられるようにする。
+		const escaped = tabMovesFocus.current;
+		tabMovesFocus.current = event.key === "Escape" && !isComposing.current;
+		if (tabMovesFocus.current || (escaped && event.key === "Tab")) return;
+
 		const composingNow =
 			isComposing.current || event.nativeEvent.isComposing || event.keyCode === KEY_CODE_COMPOSING;
 		if (composingNow) return;
@@ -109,7 +117,7 @@ export function Editor({ initialLines }: EditorProps) {
 		event.preventDefault();
 		inputRef.current?.focus();
 		if (event.target instanceof Element) {
-			const target = cursorFromPoint(event.target, event.clientX);
+			const target = cursorFromPoint(event.target, event.clientX, event.clientY);
 			dispatch((current) => setCursor(current, target));
 		}
 	};

@@ -16,6 +16,10 @@ const state = (lines: string[], line: number, column: number): EditorState => ({
 });
 
 const THUMBS_UP = "👍";
+/** 地域指示記号。2つ並ぶと国旗(🇯🇵)になり、1文字として扱われる。 */
+const REGIONAL_J = "\u{1F1EF}";
+const REGIONAL_P = "\u{1F1F5}";
+const COMBINING_ACUTE = "\u0301";
 
 describe("insertText", () => {
 	it("カーソル位置に文字を挿入し、カーソルを挿入した文字数だけ進める", () => {
@@ -44,6 +48,18 @@ describe("insertText", () => {
 	it("貼り付けた行のインデントはそのまま保ち、挿入先のインデントを足さない", () => {
 		expect(insertText(state([" item"], 0, 5), "\n  child")).toEqual(
 			state([" item", "  child"], 1, 7),
+		);
+	});
+
+	it("挿入した文字が後ろの文字と結合したら、カーソルは結合した文字の後ろに置く", () => {
+		expect(insertText(state([`${COMBINING_ACUTE}x`], 0, 0), "e")).toEqual(
+			state([`e${COMBINING_ACUTE}x`], 0, 2),
+		);
+	});
+
+	it("複数行の挿入でも、最後の行で結合したらカーソルは結合した文字の後ろに置く", () => {
+		expect(insertText(state([COMBINING_ACUTE], 0, 0), "a\ne")).toEqual(
+			state(["a", `e${COMBINING_ACUTE}`], 1, 2),
 		);
 	});
 
@@ -100,6 +116,12 @@ describe("deleteBackward", () => {
 		expect(deleteBackward(state(["ab", "cd", "ef"], 1, 0))).toEqual(state(["abcd", "ef"], 0, 2));
 	});
 
+	it("つないだ結果、つなぎ目の両側が1文字に結合したら、カーソルはその文字の手前に置く", () => {
+		expect(deleteBackward(state([`a${REGIONAL_J}`, REGIONAL_P], 1, 0))).toEqual(
+			state([`a${REGIONAL_J}${REGIONAL_P}`], 0, 1),
+		);
+	});
+
 	it("ページの先頭では何も変えない", () => {
 		const before = state(["ab"], 0, 0);
 		expect(deleteBackward(before)).toBe(before);
@@ -117,6 +139,12 @@ describe("deleteForward", () => {
 
 	it("行末では次の行とつなげ、カーソルは動かさない", () => {
 		expect(deleteForward(state(["ab", "cd", "ef"], 0, 2))).toEqual(state(["abcd", "ef"], 0, 2));
+	});
+
+	it("つないだ結果、つなぎ目の両側が1文字に結合したら、カーソルはその文字の手前に置く", () => {
+		expect(deleteForward(state([`a${REGIONAL_J}`, REGIONAL_P], 0, 3))).toEqual(
+			state([`a${REGIONAL_J}${REGIONAL_P}`], 0, 1),
+		);
 	});
 
 	it("ページの末尾では何も変えない", () => {

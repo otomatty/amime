@@ -114,6 +114,63 @@ test.describe("エディタ", () => {
 	});
 });
 
+test.describe("エディタ(画面の操作)", () => {
+	test.beforeEach(async ({ page }) => {
+		await page.goto("/");
+	});
+
+	test("折り返した行の1段目の右の余白を押すと、1段目の末尾にカーソルが入る", async ({ page }) => {
+		await page.setViewportSize({ width: 420, height: 800 });
+		await clickLineEnd(page, 2); // 「 1段目」
+		await page.keyboard.type("あ".repeat(60));
+		await page.keyboard.press("Escape");
+
+		const chars = lines(page).nth(2).locator(".char");
+		const first = await chars.first().boundingBox();
+		const line = await lines(page).nth(2).boundingBox();
+		if (!first || !line) throw new Error("line is not visible");
+		const firstRow = await chars.evaluateAll(
+			(els, top) => els.filter((el) => el.getBoundingClientRect().top === top).length,
+			first.y,
+		);
+
+		await page.mouse.click(line.x + line.width - 2, first.y + first.height / 2);
+		await page.keyboard.type("|");
+
+		const text = await lines(page).nth(2).getAttribute("data-text");
+		// 「 」(インデント)+ 1段目の文字数 の位置に入る。行全体の末尾ではない。
+		expect(text?.indexOf("|")).toBe(1 + firstRow);
+		expect(text?.endsWith("|")).toBe(false);
+	});
+
+	test("Enter を続けて押して画面の下に達しても、カーソルが見える位置までスクロールする", async ({
+		page,
+	}) => {
+		await page.setViewportSize({ width: 800, height: 400 });
+		await clickLineEnd(page, 0);
+
+		for (let i = 0; i < 30; i++) await page.keyboard.press("Enter");
+
+		await expect(page.getByTestId("caret")).toBeInViewport();
+	});
+
+	test("Esc で編集欄から抜け、Tab で次の要素へフォーカスを移せる", async ({ page }) => {
+		// いまの画面には編集欄の後ろにフォーカスできる要素がないため、確認用のボタンを置く。
+		await page.evaluate(() => {
+			const button = document.createElement("button");
+			button.textContent = "次の要素";
+			document.querySelector("main")?.append(button);
+		});
+		await clickLineEnd(page, 0);
+
+		await page.keyboard.press("Escape");
+		await page.keyboard.press("Tab");
+
+		await expect(page.getByRole("button", { name: "次の要素" })).toBeFocused();
+		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
+	});
+});
+
 test.describe("日本語入力(IME)", () => {
 	// 実際のIMEと同じイベント列を、Chromium の開発者ツール用の通信(CDP)で発生させる。
 	// CDP は Chromium でしか使えない。他のブラウザを対象に加えるときは、このブロックを Chromium 限定にすること。

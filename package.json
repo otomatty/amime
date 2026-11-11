@@ -9,7 +9,7 @@
 	"scripts": {
 		"dev": "pnpm --filter @amime/web dev",
 		"build": "pnpm --filter @amime/web build",
-		"lint": "biome ci .",
+		"lint": "biome ci --error-on-warnings .",
 		"lint:fix": "biome check --write .",
 		"typecheck": "pnpm -r --parallel typecheck && tsc -p scripts",
 		"test": "vitest run",

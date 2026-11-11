@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { nextBoundary, previousBoundary, segmentGraphemes, snapToBoundary } from "./graphemes.ts";
+import {
+	ceilToBoundary,
+	nextBoundary,
+	previousBoundary,
+	segmentGraphemes,
+	snapToBoundary,
+} from "./graphemes.ts";
 
 const THUMBS_UP = "👍"; // UTF-16 で2単位
 const FAMILY = "👨‍👩‍👧"; // 結合された絵文字。UTF-16 で8単位
@@ -69,5 +75,22 @@ describe("snapToBoundary", () => {
 	it("範囲外の位置は行の範囲に収める", () => {
 		expect(snapToBoundary("abc", -1)).toBe(0);
 		expect(snapToBoundary("abc", 99)).toBe(3);
+	});
+});
+
+describe("ceilToBoundary", () => {
+	it("文字の境界にある位置はそのまま返す", () => {
+		expect(ceilToBoundary(`a${THUMBS_UP}`, 1)).toBe(1);
+		expect(ceilToBoundary(`a${THUMBS_UP}`, 3)).toBe(3);
+	});
+
+	it("文字の途中にある位置は、その文字の終了位置に寄せる", () => {
+		expect(ceilToBoundary(`a${THUMBS_UP}`, 2)).toBe(3);
+		expect(ceilToBoundary(E_ACUTE, 1)).toBe(2);
+	});
+
+	it("範囲外の位置は行の範囲に収める", () => {
+		expect(ceilToBoundary("abc", -1)).toBe(0);
+		expect(ceilToBoundary("abc", 99)).toBe(3);
 	});
 });

@@ -7,6 +7,8 @@ export default defineConfig({
 	test: {
 		name: "@amime/web:client",
 		environment: "jsdom",
+		setupFiles: ["./vitest.client.setup.ts"],
+		restoreMocks: true,
 		include: ["src/client/**/*.test.{ts,tsx}"],
 	},
 });

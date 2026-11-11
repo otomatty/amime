@@ -1,6 +1,6 @@
 # ADR-0007: 開発ツールの選定
 
-- 状態: 採用
+- 状態: 採用(コンポーネントテストの実行環境は [ADR-0010](0010-editor-input.md) で jsdom に変更)
 - 日付: 2026-11-11
 
 ## 決定
@@ -19,8 +19,6 @@
 | Gitフック            | lefthook                    | コミット前に整形、プッシュ前に型検査とテストを実行する                 |
 | コミット規約         | commitlint                  | Conventional Commits を検査する                                        |
 | 依存の更新           | Dependabot                  | npm と GitHub Actions の更新をPRで受ける                               |
-
-> 更新(2026-11-12): コンポーネントテストの実行環境は、[ADR-0010](0010-editor-input.md) で happy-dom から jsdom に変更した。
 
 ## 検討した他の案
 
