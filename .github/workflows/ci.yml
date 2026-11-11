@@ -20,7 +20,7 @@ jobs:
     name: 規約(lint / 型 / 未使用コード / テスト先行)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # テスト先行の検査でベースブランチとの差分を取るため、履歴をすべて取得する。
           fetch-depth: 0
@@ -47,7 +47,7 @@ jobs:
     name: 単体テストとカバレッジ
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: pnpm test:coverage
 
@@ -55,7 +55,7 @@ jobs:
     name: サーバーのテスト(Workers ランタイム)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: pnpm test:server
 
@@ -63,7 +63,7 @@ jobs:
     name: ビルドとデプロイ検証(dry-run)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: pnpm build
       - name: アップロードせずにデプロイ内容を検証
@@ -73,7 +73,7 @@ jobs:
     name: E2Eテスト
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: pnpm build
       - name: ブラウザをインストール
@@ -91,7 +91,7 @@ jobs:
     needs: [static, unit, server, build, e2e]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: pnpm --filter @amime/web exec cf previews deploy
         env:
@@ -111,7 +111,7 @@ jobs:
       group: deploy-production
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: pnpm build
       - run: pnpm --filter @amime/web exec cf deploy --prebuilt --mode production
