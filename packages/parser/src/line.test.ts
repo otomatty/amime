@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { parseLine } from "./line.ts";
-import type { InlineNode, Span } from "./types.ts";
+import type { InlineNode, LineRole, Span } from "./types.ts";
 
 /**
  * 解析結果を、位置の代わりに「その範囲の文字列」で表した形にする。
@@ -25,17 +25,19 @@ describe("parseLine", () => {
 	describe("ただの文字列とインデント", () => {
 		it("記法のない行は1つのテキストになる", () => {
 			expect(parseLine("こんにちは")).toEqual({
+				kind: "text",
 				indent: 0,
 				nodes: [{ type: "text", start: 0, end: 5 }],
 			});
 		});
 
 		it("空行はノードを持たない", () => {
-			expect(parseLine("")).toEqual({ indent: 0, nodes: [] });
+			expect(parseLine("")).toEqual({ kind: "text", indent: 0, nodes: [] });
 		});
 
 		it("インデントは深さとして返し、ノードには含めない", () => {
 			expect(parseLine(" \t本文")).toEqual({
+				kind: "text",
 				indent: 2,
 				nodes: [{ type: "text", start: 2, end: 4 }],
 			});
@@ -453,6 +455,7 @@ describe("parseLine", () => {
 
 		it("インデントのあとでも引用になる", () => {
 			expect(parseLine(" >a")).toEqual({
+				kind: "text",
 				indent: 1,
 				nodes: [
 					{
@@ -495,6 +498,212 @@ describe("parseLine", () => {
 		it("極端に深い入れ子でも例外を出さない", () => {
 			const raw = `${"[* ".repeat(20_000)}x${"]".repeat(20_000)}`;
 			expect(() => parseLine(raw)).not.toThrow();
+		});
+	});
+});
+
+describe("parseLine: 行頭で決まる記法", () => {
+	describe("コマンド行 $ コマンド", () => {
+		it.each(["$ ls -la", "% ls -la"])(
+			"%j は行全体がコマンドになり、中の記法は解釈しない",
+			(raw) => {
+				expect(parse(raw)).toEqual([{ type: "command-line", raw, content: raw }]);
+			},
+		);
+
+		it("中の記法は解釈しない", () => {
+			expect(parse("$ echo [a] #b")).toEqual([
+				{ type: "command-line", raw: "$ echo [a] #b", content: "$ echo [a] #b" },
+			]);
+		});
+
+		it("インデントのあとでもコマンドになる", () => {
+			expect(parse(" $ ls")).toEqual([{ type: "command-line", raw: "$ ls", content: "$ ls" }]);
+		});
+
+		it.each(["$", "$ ", "$ls", "a $ ls"])("形の違う %j はコマンドにしない", (raw) => {
+			expect(parse(raw)).toEqual([text(raw)]);
+		});
+	});
+
+	describe("ヘルプ行 ? 文", () => {
+		it("行全体がヘルプ行になる", () => {
+			expect(parse("? 使い方 [a]")).toEqual([
+				{ type: "helpfeel", raw: "? 使い方 [a]", content: "? 使い方 [a]" },
+			]);
+		});
+
+		it.each(["?", "? ", "?a"])("形の違う %j はヘルプ行にしない", (raw) => {
+			expect(parse(raw)).toEqual([text(raw)]);
+		});
+	});
+});
+
+describe("parseLine: 行の役割ごとの解析", () => {
+	const role = (kind: LineRole["kind"], blockIndent = 0): LineRole => ({ kind, blockIndent });
+	const slice = (raw: string, span: Span) => raw.slice(span.start, span.end);
+
+	describe("タイトル行", () => {
+		it("記法を解釈せず、全体を1つのテキストにする", () => {
+			expect(parseLine("[a] #b", role("title"))).toEqual({
+				kind: "title",
+				indent: 0,
+				nodes: [{ type: "text", start: 0, end: 6 }],
+			});
+		});
+
+		it("空のタイトルはノードを持たない", () => {
+			expect(parseLine("", role("title"))).toEqual({ kind: "title", indent: 0, nodes: [] });
+		});
+	});
+
+	describe("ブロックの始まりの行", () => {
+		it("code: と名前に分ける", () => {
+			const raw = " code:hello.js";
+			const parsed = parseLine(raw, role("code-head", 1));
+
+			expect(parsed).toEqual({
+				kind: "code-head",
+				indent: 1,
+				prefix: { start: 1, end: 6 },
+				name: { start: 6, end: 14 },
+			});
+		});
+
+		it("table: と名前に分ける", () => {
+			const raw = "table:予定";
+			const parsed = parseLine(raw, role("table-head"));
+
+			expect(parsed.kind).toBe("table-head");
+			if (parsed.kind !== "table-head") return;
+			expect(slice(raw, parsed.prefix)).toBe("table:");
+			expect(slice(raw, parsed.name)).toBe("予定");
+		});
+
+		it.each([
+			["始まりの形をしていない行", "abc", "code-head"],
+			["種類の違う始まりの行", "table:a", "code-head"],
+			["種類の違う始まりの行", "code:a", "table-head"],
+		] as const)("役割と行が食い違うとき(%s)は、本文として解析する", (_name, raw, kind) => {
+			expect(parseLine(raw, role(kind)).kind).toBe("text");
+		});
+	});
+
+	describe("コードブロックの中身", () => {
+		it("始まりの行より1つ深いところまでがインデントで、残りはそのままコードになる", () => {
+			const raw = "    if (a[0]) `x`";
+			const parsed = parseLine(raw, role("code-body", 1));
+
+			expect(parsed).toEqual({ kind: "code-body", indent: 2, content: { start: 2, end: 17 } });
+			if (parsed.kind !== "code-body") return;
+			expect(slice(raw, parsed.content)).toBe("  if (a[0]) `x`");
+		});
+
+		it("役割と行が食い違うとき(始まりの行より深くない)は、本文として解析する", () => {
+			expect(parseLine(" [a]", role("code-body", 1)).kind).toBe("text");
+		});
+	});
+
+	describe("テーブルの行", () => {
+		const cells = (raw: string, blockIndent = 0) => {
+			const parsed = parseLine(raw, role("table-row", blockIndent));
+			if (parsed.kind !== "table-row") throw new Error(`not a table row: ${parsed.kind}`);
+			return parsed.cells.map((cell) => ({
+				content: slice(raw, cell.content),
+				nodes: describeNodes(raw, cell.nodes),
+			}));
+		};
+
+		it("インデントのあとを、タブでセルに分ける", () => {
+			const raw = " a\tbc\td";
+
+			expect(parseLine(raw, role("table-row"))).toEqual({
+				kind: "table-row",
+				indent: 1,
+				cells: [
+					{ content: { start: 1, end: 2 }, nodes: [{ type: "text", start: 1, end: 2 }] },
+					{ content: { start: 3, end: 5 }, nodes: [{ type: "text", start: 3, end: 5 }] },
+					{ content: { start: 6, end: 7 }, nodes: [{ type: "text", start: 6, end: 7 }] },
+				],
+			});
+		});
+
+		it("空のセルも1つのセルとして数える(行末のタブのあとも)", () => {
+			expect(cells(" a\t\tb\t").map((cell) => cell.content)).toEqual(["a", "", "b", ""]);
+		});
+
+		it("中身のない行は、空のセルを1つ持つ", () => {
+			expect(cells("  ")).toEqual([{ content: "", nodes: [] }]);
+		});
+
+		it("セルの中では記法を解釈する", () => {
+			expect(cells(" [a]\t`b` #c")).toEqual([
+				{ content: "[a]", nodes: [expect.objectContaining({ type: "page-link", title: "a" })] },
+				{
+					content: "`b` #c",
+					nodes: [
+						expect.objectContaining({ type: "code", content: "b" }),
+						text(" "),
+						expect.objectContaining({ type: "hashtag", title: "c" }),
+					],
+				},
+			]);
+		});
+
+		it("括弧やバッククォートは、セルをまたいで対にならない", () => {
+			expect(cells(" [a\tb]\t`c\td`")).toEqual([
+				{ content: "[a", nodes: [text("[a")] },
+				{ content: "b]", nodes: [text("b]")] },
+				{ content: "`c", nodes: [text("`c")] },
+				{ content: "d`", nodes: [text("d`")] },
+			]);
+		});
+
+		it("行頭の記法(引用やコマンド)は、セルの中では解釈しない", () => {
+			expect(cells(" > a\t$ b")).toEqual([
+				{ content: "> a", nodes: [text("> a")] },
+				{ content: "$ b", nodes: [text("$ b")] },
+			]);
+		});
+
+		it("役割と行が食い違うとき(始まりの行より深くない)は、本文として解析する", () => {
+			expect(parseLine(" a\tb", role("table-row", 1)).kind).toBe("text");
+		});
+	});
+
+	describe("性質", () => {
+		const anyRole = fc.record({
+			kind: fc.constantFrom<LineRole["kind"]>(
+				"title",
+				"text",
+				"code-head",
+				"code-body",
+				"table-head",
+				"table-row",
+			),
+			blockIndent: fc.integer({ min: 0, max: 3 }),
+		});
+		const rowText = fc.string({
+			unit: fc.constantFrom(..."[]`#\t \t", "a", "あ", "code:", "table:", "https://e.com/"),
+			maxLength: 30,
+		});
+
+		it("どんな行と役割の組み合わせでも例外を出さず、テーブルのセルは行を隙間なく覆う", () => {
+			fc.assert(
+				fc.property(rowText, anyRole, (raw, lineRole) => {
+					const parsed = parseLine(raw, lineRole);
+					if (parsed.kind !== "table-row") return;
+
+					let position = parsed.indent;
+					for (const cell of parsed.cells) {
+						expect(cell.content.start).toBe(position);
+						expectTiling(cell.nodes, cell.content);
+						position = cell.content.end + 1; // セルの間のタブ
+					}
+					expect(position).toBe(raw.length + 1);
+				}),
+				{ numRuns: 1000 },
+			);
 		});
 	});
 });

@@ -1,5 +1,14 @@
+import { HEAD_KIND, matchBlockHead } from "./blocks.ts";
 import { parseIndent } from "./indent.ts";
-import type { ImageNode, InlineNode, ParsedLine, Span } from "./types.ts";
+import type {
+	ImageNode,
+	InlineNode,
+	LineRole,
+	ParsedLine,
+	Span,
+	TableCell,
+	TextLine,
+} from "./types.ts";
 
 /**
  * 記法の入れ子を解釈する深さの上限。これより深い部分は、ただの文字列として扱う。
@@ -7,6 +16,7 @@ import type { ImageNode, InlineNode, ParsedLine, Span } from "./types.ts";
  */
 const MAX_DEPTH = 8;
 
+const BACKTICK = "`".charCodeAt(0);
 const OPEN_BRACKET = "[".charCodeAt(0);
 const CLOSE_BRACKET = "]".charCodeAt(0);
 
@@ -23,7 +33,12 @@ const URL_FIRST = /^https?:\/\/\S+/;
 const URL_LAST = /\shttps?:\/\/\S+$/;
 const WHOLE_URL = /^https?:\/\/\S+$/;
 const IMAGE_URL = /\.(?:png|jpe?g|gif|svg|webp)(?:\?\S*)?$/i;
+/** $ コマンド、% コマンド、? ヘルプの文。記号と空白のあとに中身が必要。 */
+const COMMAND_LINE = /^[$%] +\S/;
+const HELPFEEL = /^\? +\S/;
 const PROJECT_LINK = /^\/[^\s/]+(?:\/.*)?$/;
+
+const TEXT_ROLE: LineRole = { kind: "text", blockIndent: 0 };
 
 type Context = {
 	readonly raw: string;
@@ -33,15 +48,23 @@ type Context = {
 	readonly closing: ReadonlyMap<number, number>;
 };
 
+/** range の中で、from 以降にある最初のバッククォートの位置。なければ -1。range の外は見ない。 */
+function findBacktick(raw: string, from: number, range: Span): number {
+	for (let position = from; position < range.end; position += 1) {
+		if (raw.charCodeAt(position) === BACKTICK) return position;
+	}
+	return -1;
+}
+
 /**
- * `コード` の範囲を、行の左から順にバッククォートを対にして求める。
+ * `コード` の範囲を、range の左から順にバッククォートを対にして求める。
  * コードは他のどの記法よりも優先する(中身は記法として解釈しない)。
  */
-function findCodeSpans(raw: string): Map<number, number> {
+function findCodeSpans(raw: string, range: Span): Map<number, number> {
 	const spans = new Map<number, number>();
-	let open = raw.indexOf("`");
+	let open = findBacktick(raw, range.start, range);
 	while (open !== -1) {
-		const close = raw.indexOf("`", open + 1);
+		const close = findBacktick(raw, open + 1, range);
 		if (close === -1) break;
 		if (close === open + 1) {
 			// 中身が空の対はコードにしない。2つ目のバッククォートから対を探し直す。
@@ -49,19 +72,20 @@ function findCodeSpans(raw: string): Map<number, number> {
 			continue;
 		}
 		spans.set(open, close);
-		open = raw.indexOf("`", close + 1);
+		open = findBacktick(raw, close + 1, range);
 	}
 	return spans;
 }
 
-/** 括弧の対応を、行全体について一度だけ求める。コードの中の括弧は数えない。 */
+/** 括弧の対応を、range について一度だけ求める。コードの中の括弧は数えない。 */
 function findClosingBrackets(
 	raw: string,
+	range: Span,
 	codeSpans: ReadonlyMap<number, number>,
 ): Map<number, number> {
 	const closing = new Map<number, number>();
 	const unclosed: number[] = [];
-	for (let position = 0; position < raw.length; position += 1) {
+	for (let position = range.start; position < range.end; position += 1) {
 		const codeClose = codeSpans.get(position);
 		if (codeClose !== undefined) {
 			position = codeClose;
@@ -76,6 +100,15 @@ function findClosingBrackets(
 		}
 	}
 	return closing;
+}
+
+/**
+ * range の中だけで記法の対応を求める。
+ * テーブルのセルのように行の一部を解析するとき、括弧やバッククォートが範囲をまたいで対にならない。
+ */
+function createContext(raw: string, range: Span): Context {
+	const codeSpans = findCodeSpans(raw, range);
+	return { raw, codeSpans, closing: findClosingBrackets(raw, range, codeSpans) };
 }
 
 /** position から始まる位置でだけ、パターンを照合する(文字列を切り出さずに済む)。 */
@@ -281,19 +314,75 @@ function parseRange(ctx: Context, range: Span, depth: number): InlineNode[] {
 	return nodes;
 }
 
-/**
- * 1行を解析する。
- * 解析は行ごとに独立で、どんな文字列を渡しても例外を出さない。
- * 複数行にまたがる記法(コードブロック、テーブル)は、ここでは扱わない。
- */
-export function parseLine(raw: string): ParsedLine {
-	const { indent } = parseIndent(raw);
-	const codeSpans = findCodeSpans(raw);
-	const ctx = { raw, codeSpans, closing: findClosingBrackets(raw, codeSpans) };
+/** 本文の行。行頭で決まる記法(引用、コマンド行、ヘルプ行)を見てから、行内の記法を解析する。 */
+function textLine(raw: string, indent: number, text: string): TextLine {
 	const rest = { start: indent, end: raw.length };
-	if (raw.charAt(indent) !== ">") return { indent, nodes: parseRange(ctx, rest, 0) };
+	if (COMMAND_LINE.test(text)) {
+		return { kind: "text", indent, nodes: [{ type: "command-line", ...rest, content: rest }] };
+	}
+	if (HELPFEEL.test(text)) {
+		return { kind: "text", indent, nodes: [{ type: "helpfeel", ...rest, content: rest }] };
+	}
 
+	const ctx = createContext(raw, rest);
+	if (!text.startsWith(">")) return { kind: "text", indent, nodes: parseRange(ctx, rest, 0) };
 	const content = { start: indent + 1, end: raw.length };
 	const children = parseRange(ctx, content, 1);
-	return { indent, nodes: [{ type: "quote", ...rest, content, children }] };
+	return { kind: "text", indent, nodes: [{ type: "quote", ...rest, content, children }] };
+}
+
+/** テーブルの行。インデントのあとをタブでセルに分け、セルごとに行内の記法を解析する。 */
+function tableCells(raw: string, indent: number): TableCell[] {
+	const cells: TableCell[] = [];
+	let start = indent;
+	while (start <= raw.length) {
+		const tabAt = raw.indexOf("\t", start);
+		const content = { start, end: tabAt === -1 ? raw.length : tabAt };
+		cells.push({ content, nodes: parseRange(createContext(raw, content), content, 0) });
+		start = content.end + 1;
+	}
+	return cells;
+}
+
+/**
+ * 1行を解析する。
+ *
+ * role は、ページの中でのその行の役割(classifyLines の結果)。省略すると本文の行として解析する。
+ * どんな文字列と役割の組み合わせでも例外を出さない。役割と行の内容が食い違うとき
+ * (ブロックの始まりの形をしていない、ブロックの中身にしては浅い)は、本文の行として解析する。
+ */
+export function parseLine(raw: string): TextLine;
+export function parseLine(raw: string, role: LineRole): ParsedLine;
+export function parseLine(raw: string, role: LineRole = TEXT_ROLE): ParsedLine {
+	const { indent, text } = parseIndent(raw);
+	if (role.kind === "title") {
+		const nodes: InlineNode[] =
+			text === "" ? [] : [{ type: "text", start: indent, end: raw.length }];
+		return { kind: "title", indent, nodes };
+	}
+
+	const insideBlock = indent > role.blockIndent;
+	if (role.kind === "code-body" && insideBlock) {
+		const bodyIndent = role.blockIndent + 1;
+		return {
+			kind: "code-body",
+			indent: bodyIndent,
+			content: { start: bodyIndent, end: raw.length },
+		};
+	}
+	if (role.kind === "table-row" && insideBlock) {
+		return { kind: "table-row", indent, cells: tableCells(raw, indent) };
+	}
+
+	const head = matchBlockHead(text);
+	if (head !== null && HEAD_KIND[head.block] === role.kind) {
+		const nameStart = indent + head.prefix.length;
+		return {
+			kind: HEAD_KIND[head.block],
+			indent,
+			prefix: { start: indent, end: nameStart },
+			name: { start: nameStart, end: raw.length },
+		};
+	}
+	return textLine(raw, indent, text);
 }

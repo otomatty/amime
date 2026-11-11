@@ -21,7 +21,9 @@ export type InlineNode =
 	| IconNode
 	| DecorationNode
 	| StrongNode
-	| QuoteNode;
+	| QuoteNode
+	| CommandLineNode
+	| HelpfeelNode;
 
 /** 記法ではない、ただの文字列。 */
 type TextNode = Span & { readonly type: "text" };
@@ -99,9 +101,55 @@ type QuoteNode = Span & {
 	readonly children: readonly InlineNode[];
 };
 
-export type ParsedLine = {
+/** $ コマンド / % コマンド。行頭にだけ現れる。行全体が content で、中の記法は解釈しない。 */
+type CommandLineNode = Span & { readonly type: "command-line"; readonly content: Span };
+
+/** ? ヘルプの文。行頭にだけ現れる。行全体が content。 */
+type HelpfeelNode = Span & { readonly type: "helpfeel"; readonly content: Span };
+
+/**
+ * ページの中での行の役割。
+ * - title: 1行目
+ * - text: 普通の行
+ * - code-head / table-head: 「code:名前」「table:名前」の行
+ * - code-body / table-row: そのブロックの中身の行
+ */
+export type LineKind = "title" | "text" | "code-head" | "code-body" | "table-head" | "table-row";
+
+export type LineRole = {
+	readonly kind: LineKind;
+	/** ブロックの始まりの行のインデント。ブロックに属さない行では 0。 */
+	readonly blockIndent: number;
+};
+
+/** 記法を解釈した行。nodes は、インデントより後ろを隙間も重なりもなく覆う。 */
+export type TextLine = {
+	readonly kind: "text";
 	/** インデントの深さ。 */
 	readonly indent: number;
-	/** インデントより後ろを、隙間も重なりもなく覆うノードの列。 */
 	readonly nodes: readonly InlineNode[];
 };
+
+/** テーブルのセル。content はセルの範囲(区切りのタブを含まない)で、nodes がそれを覆う。 */
+export type TableCell = {
+	readonly content: Span;
+	readonly nodes: readonly InlineNode[];
+};
+
+export type ParsedLine =
+	| TextLine
+	| { readonly kind: "title"; readonly indent: number; readonly nodes: readonly InlineNode[] }
+	| {
+			readonly kind: "code-head" | "table-head";
+			readonly indent: number;
+			/** 「code:」「table:」の範囲。 */
+			readonly prefix: Span;
+			readonly name: Span;
+	  }
+	| {
+			readonly kind: "code-body";
+			/** 行頭から、ブロックの始まりの行より1つ深いところまで。それより後ろの空白はコードの一部。 */
+			readonly indent: number;
+			readonly content: Span;
+	  }
+	| { readonly kind: "table-row"; readonly indent: number; readonly cells: readonly TableCell[] };
