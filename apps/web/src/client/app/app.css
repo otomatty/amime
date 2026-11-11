@@ -3,6 +3,9 @@
 	--color-paper: #fffdf8;
 	--color-text: #2b2a27;
 	--color-muted: #8a857a;
+	--color-link: #1f6f8b;
+	--color-code-bg: #efeae0;
+	--color-quote-bg: #f1eee6;
 	--indent-width: 1.5em;
 	color-scheme: light;
 	font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;

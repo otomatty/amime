@@ -21,21 +21,23 @@ export function columnFromPoint(char: CharBox, clientX: number): number {
 const verticalDistance = (char: CharBox, clientY: number): number =>
 	Math.max(char.top - clientY, clientY - (char.top + char.height), 0);
 
+/** 「行末」を表す文字位置。setCursor が実際の行の長さに収める。 */
+export const LINE_END = Number.MAX_SAFE_INTEGER;
+
 /**
  * 文字以外の行の余白を押したときの列を求める。
  * 押した高さに最も近い表示上の段(折り返された行の1段)を選び、その段の中で最も近い位置を返す。
  * 段の間の隙間や、最後の段より下を押した場合も、縦に最も近い段で決める。
- * 大きさを測れる文字がなければ null。
+ *
+ * 行全体の最初の文字より左は行頭、最後の文字より右は行末にする。
+ * 装飾して表示している行では記法の記号が隠れているので、見えている文字の端ではなく
+ * 行の端にしないと、行末を押したつもりが「]」の内側に入力されてしまう。
  */
-export function columnOnRow(
-	chars: readonly CharBox[],
-	clientX: number,
-	clientY: number,
-): number | null {
+export function columnOnRow(chars: readonly CharBox[], clientX: number, clientY: number): number {
 	// 大きさが0の文字は位置を判断できないので使わない(画面に描画されていない場合など)。
 	const measurable = chars.filter((char) => char.width > 0 && char.height > 0);
 	const [firstChar, ...rest] = measurable;
-	if (!firstChar) return null;
+	if (!firstChar) return LINE_END;
 	const closestVertically = rest.reduce(
 		(best, char) =>
 			verticalDistance(char, clientY) < verticalDistance(best, clientY) ? char : best,
@@ -49,8 +51,8 @@ export function columnOnRow(
 	const first = row[0] ?? closestVertically;
 	const last = row.at(-1) ?? closestVertically;
 
-	if (clientX < first.left) return first.start;
-	if (clientX >= last.left + last.width) return last.end;
+	if (clientX < first.left) return first === firstChar ? 0 : first.start;
+	if (clientX >= last.left + last.width) return last === measurable.at(-1) ? LINE_END : last.end;
 	const closestHorizontally = row.reduce(
 		(best, char) =>
 			horizontalDistance(char, clientX) < horizontalDistance(best, clientX) ? char : best,
@@ -62,9 +64,6 @@ export function columnOnRow(
 /** 押した横位置と、文字の横の中心との距離。 */
 const horizontalDistance = (char: CharBox, clientX: number): number =>
 	Math.abs(char.left + char.width / 2 - clientX);
-
-/** 行や文字の外を押したときに使う値。setCursor が存在する範囲に収める。 */
-const BEYOND_END = Number.MAX_SAFE_INTEGER;
 
 function measure(element: Element): CharBox {
 	const { left, width, top, height } = element.getBoundingClientRect();
@@ -81,12 +80,12 @@ function measure(element: Element): CharBox {
 /** 押された要素と位置から、カーソルの移動先を求める。 */
 export function cursorFromPoint(target: Element, clientX: number, clientY: number): Cursor {
 	const line = target.closest("[data-line]");
-	if (!line) return { line: BEYOND_END, column: BEYOND_END };
+	if (!line) return { line: LINE_END, column: LINE_END };
 	const lineIndex = Number(line.getAttribute("data-line"));
 
 	const char = target.closest("[data-column]");
 	if (char) return { line: lineIndex, column: columnFromPoint(measure(char), clientX) };
 
 	const chars = Array.from(line.querySelectorAll("[data-column]"), measure);
-	return { line: lineIndex, column: columnOnRow(chars, clientX, clientY) ?? BEYOND_END };
+	return { line: lineIndex, column: columnOnRow(chars, clientX, clientY) };
 }

@@ -118,6 +118,8 @@ export function Editor({ initialLines }: EditorProps) {
 	};
 
 	const handleMouseDown = (event: MouseEvent) => {
+		// リンクを押したときは何もせず、ブラウザの既定の動作(リンク先への移動)に任せる。
+		if (event.target instanceof Element && event.target.closest("a[href]")) return;
 		// 既定の動作(フォーカスの移動と文字列の選択)を止め、入力先を textarea に保つ。
 		event.preventDefault();
 		inputRef.current?.focus();
@@ -136,16 +138,7 @@ export function Editor({ initialLines }: EditorProps) {
 			data-focused={focused}
 			onMouseDown={handleMouseDown}
 		>
-			{state.lines.map((text, index) => (
-				<EditorLine
-					// biome-ignore lint/suspicious/noArrayIndexKey: 行IDは同期を実装するP2で導入する。それまでは行番号で識別する。
-					key={index}
-					index={index}
-					text={text}
-					caretColumn={state.cursor.line === index ? state.cursor.column : null}
-					composing={state.cursor.line === index ? composing : null}
-				/>
-			))}
+			{/* 行より前に置く。Tab の順序が「編集欄 → 本文中のリンク」になり、Shift+Tab では編集欄の前へ抜けられる。 */}
 			<textarea
 				ref={inputRef}
 				className="editor-input"
@@ -163,6 +156,17 @@ export function Editor({ initialLines }: EditorProps) {
 				onFocus={() => setFocused(true)}
 				onBlur={() => setFocused(false)}
 			/>
+			{state.lines.map((text, index) => (
+				<EditorLine
+					// biome-ignore lint/suspicious/noArrayIndexKey: 行IDは同期を実装するP2で導入する。それまでは行番号で識別する。
+					key={index}
+					index={index}
+					text={text}
+					// 編集中の行は、フォーカスがあるときのカーソル行だけ。それ以外の行は記法を装飾して見せる。
+					caretColumn={focused && state.cursor.line === index ? state.cursor.column : null}
+					composing={focused && state.cursor.line === index ? composing : null}
+				/>
+			))}
 		</div>
 	);
 }

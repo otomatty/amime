@@ -170,20 +170,108 @@ test.describe("エディタ(画面の操作)", () => {
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
 	});
 
-	test("Esc で編集欄から抜け、Tab で次の要素へフォーカスを移せる", async ({ page }) => {
-		// いまの画面には編集欄の後ろにフォーカスできる要素がないため、確認用のボタンを置く。
-		await page.evaluate(() => {
-			const button = document.createElement("button");
-			button.textContent = "次の要素";
-			document.querySelector("main")?.append(button);
-		});
+	test("Esc で編集欄から抜け、Tab で本文中の最初のリンクへフォーカスを移せる", async ({ page }) => {
 		await clickLineEnd(page, 0);
 
 		await page.keyboard.press("Escape");
 		await page.keyboard.press("Tab");
 
-		await expect(page.getByRole("button", { name: "次の要素" })).toBeFocused();
+		await expect(page.getByRole("link", { name: "リンク", exact: true })).toBeFocused();
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
+	});
+});
+
+test.describe("記法の表示", () => {
+	const LINK_LINE = 6; // 「[リンク] や #タグ でページをつなげます」
+	const DECORATION_LINE = 7; // 「[* 太字] [/ 斜体] …」
+
+	test.beforeEach(async ({ page }) => {
+		await page.goto("/");
+	});
+
+	test("カーソルのない行は記法を隠して装飾し、行を押すと記法がそのまま見える", async ({ page }) => {
+		const line = lines(page).nth(LINK_LINE);
+		await expect(line).toHaveText("リンク や #タグ でページをつなげます");
+		await expect(line.getByRole("link", { name: "リンク", exact: true })).toBeVisible();
+
+		await clickLineEnd(page, LINK_LINE);
+
+		await expect(line).toHaveText("[リンク] や #タグ でページをつなげます");
+		await expect(line.getByRole("link")).toHaveCount(0);
+	});
+
+	test("別の行へ移ると、元の行は装飾した表示に戻る", async ({ page }) => {
+		await clickLineEnd(page, LINK_LINE);
+		await page.keyboard.press("ArrowUp");
+
+		await expect(lines(page).nth(LINK_LINE)).toHaveText("リンク や #タグ でページをつなげます");
+	});
+
+	test("装飾は見た目に反映される", async ({ page }) => {
+		const line = lines(page).nth(DECORATION_LINE);
+
+		await expect(line.locator('.deco[data-deco="*"]')).toHaveCSS("font-weight", "700");
+		await expect(line.locator('.deco[data-deco="/"]')).toHaveCSS("font-style", "italic");
+		await expect(line.locator('.deco[data-deco="-"]')).toHaveCSS(
+			"text-decoration-line",
+			"line-through",
+		);
+		await expect(line.locator('.deco[data-deco="_"]')).toHaveCSS(
+			"text-decoration-line",
+			"underline",
+		);
+		await expect(line.locator("strong")).toHaveText("強調");
+		await expect(line.locator("code")).toHaveText("code");
+	});
+
+	test("装飾された文字を押すと、その文字の位置にカーソルが入る", async ({ page }) => {
+		const bold = lines(page).nth(DECORATION_LINE).locator('.deco[data-deco="*"] .char');
+		const box = await bold.last().boundingBox(); // 「太字」の「字」
+		if (!box) throw new Error("char is not visible");
+
+		await page.mouse.click(box.x + box.width * 0.75, box.y + box.height / 2);
+		await page.keyboard.type("!");
+
+		await expect(lines(page).nth(DECORATION_LINE)).toHaveAttribute("data-text", /^\[\* 太字!\] /);
+	});
+
+	test("記法で終わる行の右の余白を押すと、記法の後ろ(行末)にカーソルが入る", async ({ page }) => {
+		await clickLineEnd(page, DECORATION_LINE); // 「… `code`」で終わる行
+
+		await page.keyboard.type("!");
+
+		await expect(lines(page).nth(DECORATION_LINE)).toHaveAttribute("data-text", /`code`!$/);
+	});
+
+	test("リンクを押すと、カーソルを置かずにそのページへ移動する", async ({ page }) => {
+		await lines(page).nth(LINK_LINE).getByRole("link", { name: "リンク", exact: true }).click();
+
+		await expect(page).toHaveURL(/\/%E3%83%AA%E3%83%B3%E3%82%AF$/);
+	});
+
+	test("外部リンクは別のタブで開く設定になっている", async ({ page }) => {
+		const link = page.getByRole("link", { name: "Cloudflare" });
+
+		await expect(link).toHaveAttribute("href", "https://www.cloudflare.com/");
+		await expect(link).toHaveAttribute("target", "_blank");
+		await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+	});
+
+	test("1行目はタイトルとして大きく表示し、記法を解釈しない", async ({ page }) => {
+		await clickLineEnd(page, 0);
+		await page.keyboard.type(" [x]");
+		await page.keyboard.press("ArrowDown");
+
+		const title = lines(page).first();
+		await expect(title).toHaveText("はじめに [x]");
+		await expect(title.getByRole("link")).toHaveCount(0);
+		const titleSize = await title.evaluate((el) =>
+			Number.parseFloat(getComputedStyle(el).fontSize),
+		);
+		const bodySize = await lines(page)
+			.nth(1)
+			.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize));
+		expect(titleSize).toBeGreaterThan(bodySize);
 	});
 });
 

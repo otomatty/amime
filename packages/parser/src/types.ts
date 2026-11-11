@@ -24,30 +24,30 @@ export type InlineNode =
 	| QuoteNode;
 
 /** 記法ではない、ただの文字列。 */
-export type TextNode = Span & { readonly type: "text" };
+type TextNode = Span & { readonly type: "text" };
 
 /** `コード` */
-export type CodeNode = Span & { readonly type: "code"; readonly content: Span };
+type CodeNode = Span & { readonly type: "code"; readonly content: Span };
 
 /** [$ 数式] */
-export type FormulaNode = Span & { readonly type: "formula"; readonly content: Span };
+type FormulaNode = Span & { readonly type: "formula"; readonly content: Span };
 
 /** [ページタイトル] */
-export type PageLinkNode = Span & {
+type PageLinkNode = Span & {
 	readonly type: "page-link";
 	readonly content: Span;
 	readonly title: string;
 };
 
 /** #タグ。content は # を含む。 */
-export type HashtagNode = Span & {
+type HashtagNode = Span & {
 	readonly type: "hashtag";
 	readonly content: Span;
 	readonly title: string;
 };
 
 /** [/プロジェクト/ページタイトル] または [/プロジェクト] */
-export type ProjectLinkNode = Span & {
+type ProjectLinkNode = Span & {
 	readonly type: "project-link";
 	readonly content: Span;
 	readonly project: string;
@@ -55,7 +55,7 @@ export type ProjectLinkNode = Span & {
 };
 
 /** https://… / [URL] / [URL 表示文字] / [表示文字 URL]。content は表示する文字列(なければURL)。 */
-export type ExternalLinkNode = Span & {
+type ExternalLinkNode = Span & {
 	readonly type: "external-link";
 	readonly content: Span;
 	readonly url: string;
@@ -69,14 +69,14 @@ export type ImageNode = Span & {
 };
 
 /** [名前.icon] / [名前.icon*3] */
-export type IconNode = Span & {
+type IconNode = Span & {
 	readonly type: "icon";
 	readonly name: string;
 	readonly count: number;
 };
 
 /** [* 太字] [/ 斜体] [- 打ち消し] [_ 下線] など。marks は使われた記号(重複なし)。 */
-export type DecorationNode = Span & {
+type DecorationNode = Span & {
 	readonly type: "decoration";
 	readonly content: Span;
 	readonly children: readonly InlineNode[];
@@ -86,14 +86,14 @@ export type DecorationNode = Span & {
 };
 
 /** [[強調]] */
-export type StrongNode = Span & {
+type StrongNode = Span & {
 	readonly type: "strong";
 	readonly content: Span;
 	readonly children: readonly InlineNode[];
 };
 
 /** > 引用。行頭(インデントの直後)にだけ現れる。 */
-export type QuoteNode = Span & {
+type QuoteNode = Span & {
 	readonly type: "quote";
 	readonly content: Span;
 	readonly children: readonly InlineNode[];
