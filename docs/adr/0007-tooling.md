@@ -20,6 +20,8 @@
 | コミット規約         | commitlint                  | Conventional Commits を検査する                                        |
 | 依存の更新           | Dependabot                  | npm と GitHub Actions の更新をPRで受ける                               |
 
+> 更新(2026-11-12): コンポーネントテストの実行環境は、[ADR-0010](0010-editor-input.md) で happy-dom から jsdom に変更した。
+
 ## 検討した他の案
 
 - **ESLint + Prettier**: 規則は豊富だが、設定とプラグインの組み合わせが増える。型情報を使う規則が必要になった場合は、その規則に限って追加を検討する。

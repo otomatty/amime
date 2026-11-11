@@ -6,7 +6,7 @@ export default defineConfig({
 	plugins: [react()],
 	test: {
 		name: "@amime/web:client",
-		environment: "happy-dom",
+		environment: "jsdom",
 		include: ["src/client/**/*.test.{ts,tsx}"],
 	},
 });

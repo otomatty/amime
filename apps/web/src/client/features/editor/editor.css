@@ -1,0 +1,97 @@
+.editor {
+	position: relative;
+	cursor: text;
+	line-height: 1.8;
+}
+
+/*
+ * 行は折り返したときにインデントの位置で揃える(ぶら下げインデント)。
+ * 左の余白でインデントぶんを空け、1行目だけ text-indent で左に戻して、
+ * そこにインデントの要素(.indent)を並べる。
+ */
+.line {
+	min-height: 1.8em;
+	padding-left: calc(var(--indent) * var(--indent-width));
+	text-indent: calc(var(--indent) * var(--indent-width) * -1);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.indent {
+	display: inline-block;
+	position: relative;
+	width: var(--indent-width);
+	height: 1em;
+	text-indent: 0;
+	vertical-align: baseline;
+}
+
+.indent[data-bullet]::after {
+	content: "";
+	position: absolute;
+	right: 0.6em;
+	top: 0.45em;
+	width: 0.35em;
+	height: 0.35em;
+	border-radius: 50%;
+	background: var(--color-muted);
+}
+
+.composing {
+	text-decoration: underline;
+	text-decoration-thickness: 2px;
+	text-underline-offset: 0.2em;
+}
+
+/* カーソル。幅を持たない要素を文字の間に置き、縦線は疑似要素で描く。 */
+.caret {
+	display: inline-block;
+	position: relative;
+	width: 0;
+	height: 1em;
+	text-indent: 0;
+	vertical-align: baseline;
+}
+
+.editor[data-focused="true"] .caret::after {
+	content: "";
+	position: absolute;
+	left: -1px;
+	top: -0.2em;
+	height: 1.3em;
+	border-left: 2px solid var(--color-text);
+	animation: caret-blink 1.1s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+	50% {
+		opacity: 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.editor[data-focused="true"] .caret::after {
+		animation: none;
+	}
+}
+
+/*
+ * 文字入力を受け取る textarea。画面には見せないが、変換候補のウィンドウの
+ * 位置の基準になるため、display: none にはせずカーソルの位置に重ねる。
+ */
+.editor-input {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 1px;
+	height: 1.8em;
+	padding: 0;
+	border: 0;
+	outline: 0;
+	resize: none;
+	overflow: hidden;
+	opacity: 0;
+	pointer-events: none;
+	font: inherit;
+	line-height: inherit;
+}

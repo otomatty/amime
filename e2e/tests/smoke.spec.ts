@@ -15,9 +15,9 @@ test.describe("起動確認", () => {
 		const nested = page.getByTestId("line").filter({ hasText: "2段目" });
 
 		await expect(nested).toHaveText("2段目");
-		const flatLeft = await flat.locator("span").last().boundingBox();
-		const nestedLeft = await nested.locator("span").last().boundingBox();
-		expect(nestedLeft?.x).toBeGreaterThan(flatLeft?.x ?? Number.POSITIVE_INFINITY);
+		const flatBox = await flat.locator(".char").first().boundingBox();
+		const nestedBox = await nested.locator(".char").first().boundingBox();
+		expect(nestedBox?.x).toBeGreaterThan(flatBox?.x ?? Number.POSITIVE_INFINITY);
 	});
 
 	test("SPAなので、未知のパスでもアプリが表示される", async ({ page }) => {
