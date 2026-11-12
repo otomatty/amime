@@ -48,4 +48,4 @@ pnpm --filter @amime/web exec cf deploy --prebuilt --mode production
 - 認証(P4)が入るまで、書き込みできるAPIを公開環境に置きません([ADR-0009](adr/0009-auth-and-access.md))。
 - Durable Object のクラスを削除・改名するときは、`cloudflare.config.ts` の `exports` に状態(`deleted` / `renamed`)を残す必要があります。Cloudflare の文書で手順を確認してから行ってください。
 - デプロイを前のバージョンに戻しても、Durable Object や D1 のデータは戻りません。保存形式を変える変更は、古い形式も読めるようにしてからデプロイします。
-- ログインの仕組み(P4)ができるまで、デプロイした環境ではページの保存と読み込みが無効です(`/api/pages/*` は 403 を返します)。有効になるのは、手元での開発とテストだけです([ADR-0017](adr/0017-page-storage-and-api.md))。
+- ログインの仕組み(P4)ができるまで、デプロイした環境ではページの保存と読み込みが無効です(`/api/pages/*` は、WebSocket の接続も含めて 403 を返します)。有効になるのは、手元での開発とテストだけです([ADR-0017](adr/0017-page-storage-and-api.md))。

@@ -1,6 +1,7 @@
 import { applyChanges, type Change, type Line, type LineId } from "@amime/sync";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PageApiError } from "./page-api-error.ts";
+import type { PageSocketHandlers } from "./page-socket.ts";
 import { createPageSync, type PageSyncState, SAVE_DELAY_MS } from "./page-sync.ts";
 
 const line = (id: string, text: string = id.toUpperCase()): Line => ({ id: id as LineId, text });
@@ -11,13 +12,22 @@ function createServer(initial: readonly Line[] = []) {
 	const server = {
 		failing: false,
 		commits: [] as (readonly Change[])[],
+		/** 接続している端末に届ける先。接続していなければ null。 */
+		handlers: null as PageSocketHandlers | null,
 		snapshot: () => state,
-		/** 他の人のコミットを入れる。 */
+		/** 他の人のコミットを入れる。配信はしない(届け方は、テストごとに決める)。 */
 		commitFromOther(changes: readonly Change[]) {
 			const result = applyChanges(state.lines, changes);
 			state = { version: state.version + 1, lines: result.lines };
+			return { version: state.version, applied: result.applied };
 		},
 		api: {
+			subscribe: vi.fn((handlers: PageSocketHandlers) => {
+				server.handlers = handlers;
+				return () => {
+					server.handlers = null;
+				};
+			}),
 			load: vi.fn(async () => state),
 			commit: vi.fn(async (changes: readonly Change[]) => {
 				if (server.failing) throw new Error("offline");
@@ -303,6 +313,133 @@ describe("createPageSync", () => {
 		// 予約してあった再試行は、送るものがないので何も送らない。
 		await vi.advanceTimersByTimeAsync(60_000);
 		expect(server.commits).toHaveLength(1);
+	});
+
+	describe("他の人のコミットの配信", () => {
+		const insertX: Change = { type: "insert", line: line("x"), after: null, before: null };
+
+		it("届いたコミットを取り込み、編集欄に渡す文書を知らせる。読み直しはしない", () => {
+			const server = createServer([line("a")]);
+			const { latest } = start(server);
+
+			server.handlers?.onCommit(server.commitFromOther([insertX]));
+
+			expect(latest()).toEqual({
+				status: "saved",
+				remote: { lines: [line("x"), line("a")], base: server.snapshot().lines.slice(1) },
+			});
+			expect(server.api.load).not.toHaveBeenCalled();
+		});
+
+		it("まだ送っていない自分の編集は残り、そのあと保存される", async () => {
+			const server = createServer([line("a")]);
+			const { sync, latest } = start(server);
+			sync.edit([line("a", "A2")]);
+
+			server.handlers?.onCommit(server.commitFromOther([insertX]));
+			expect(latest()?.remote?.lines).toEqual([line("x"), line("a", "A2")]);
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+			expect(server.snapshot().lines).toEqual([line("x"), line("a", "A2")]);
+			expect(latest()?.status).toBe("saved");
+			expect(server.api.load).not.toHaveBeenCalled();
+		});
+
+		it("保存の応答を待っているあいだに届いても、読み直さずに両方を反映する", async () => {
+			const server = createServer([line("a")]);
+			let respond = () => {};
+			server.api.commit.mockImplementationOnce(
+				(changes) =>
+					new Promise((resolve) => {
+						// 他の人のコミットが先にサーバーに入り、そのあとで自分のコミットが入った。
+						const other = server.commitFromOther([insertX]);
+						const mine = server.commitFromOther(changes);
+						server.handlers?.onCommit(other);
+						respond = () => resolve(mine);
+					}),
+			);
+			const { sync, latest } = start(server);
+			sync.edit([line("a", "A2")]);
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+			expect(latest()?.status).toBe("saving");
+
+			respond();
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(latest()).toMatchObject({
+				status: "saved",
+				remote: { lines: [line("x"), line("a", "A2")] },
+			});
+			expect(server.api.load).not.toHaveBeenCalled();
+		});
+
+		it("あいだのコミットを受け取りそこねていたら、読み直して追いつく", async () => {
+			const server = createServer([line("a")]);
+			const { latest } = start(server);
+			server.commitFromOther([insertX]); // これは届かなかった
+
+			server.handlers?.onCommit(server.commitFromOther([{ type: "delete", id: line("a").id }]));
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(server.api.load).toHaveBeenCalledOnce();
+			expect(latest()).toMatchObject({ status: "saved", remote: { lines: [line("x")] } });
+		});
+
+		it("接続したときにサーバーのほうが進んでいたら、読み直して追いつく(つなぎ直したとき)", async () => {
+			const server = createServer([line("a")]);
+			const { latest } = start(server);
+			server.commitFromOther([insertX]);
+
+			server.handlers?.onHello(server.snapshot().version);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(latest()?.remote?.lines).toEqual([line("x"), line("a")]);
+		});
+
+		it("接続したときに同じバージョンなら、読み直さない", async () => {
+			const server = createServer([line("a")]);
+			start(server);
+
+			server.handlers?.onHello(server.snapshot().version);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(server.api.load).not.toHaveBeenCalled();
+		});
+
+		it("追いつくための読み直しに失敗したら、再試行する", async () => {
+			const server = createServer([line("a")]);
+			const { latest } = start(server);
+			server.commitFromOther([insertX]);
+			server.api.load.mockRejectedValueOnce(new PageApiError("failed"));
+
+			server.handlers?.onHello(server.snapshot().version);
+			await vi.advanceTimersByTimeAsync(1000);
+
+			expect(server.api.load).toHaveBeenCalledTimes(2);
+			expect(latest()?.remote?.lines).toEqual([line("x"), line("a")]);
+		});
+
+		it("まだないページを開いているあいだに他の人が書いたら、仮のタイトルを捨てて、その内容を表示する", async () => {
+			const server = createServer();
+			const initial = [line("t", "新しいページ")];
+			const { latest } = start(server, initial);
+
+			server.handlers?.onCommit(server.commitFromOther([insertX]));
+			await vi.advanceTimersByTimeAsync(60_000);
+
+			expect(latest()).toEqual({ status: "saved", remote: { lines: [line("x")], base: initial } });
+			expect(server.api.commit).not.toHaveBeenCalled();
+		});
+
+		it("止めると、接続を閉じる", () => {
+			const server = createServer([line("a")]);
+			const { sync } = start(server);
+			expect(server.handlers).not.toBeNull();
+
+			sync.dispose();
+
+			expect(server.handlers).toBeNull();
+		});
 	});
 
 	it("止めたあとは、保存も通知もしない", async () => {

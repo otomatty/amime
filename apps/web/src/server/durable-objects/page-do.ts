@@ -6,10 +6,14 @@ import {
 	type Line,
 	type LineId,
 	type PageSnapshot,
+	type ServerMessage,
 } from "@amime/sync";
 import { generateKeyBetween } from "fractional-indexing";
 
 type LineRow = { id: string; text: string };
+
+/** WebSocket の終了コード: 方針に反するメッセージを受け取った。 */
+const WS_POLICY_VIOLATION = 1008;
 
 /**
  * 1ページ = 1インスタンス。ページへのコミットをここで直列化する。
@@ -35,6 +39,27 @@ export class PageDO extends DurableObject {
 				value INTEGER NOT NULL
 			);
 		`);
+		// 接続が生きているかをクライアントが確かめるための応答。休止中でも、起こされずに返る。
+		ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+	}
+
+	/**
+	 * WebSocket の接続を受け付ける(ADR-0018)。接続は休止に対応した方式で持つので、
+	 * やりとりがないあいだは、接続を保ったままメモリから降ろされる。
+	 * 要求の検査(切り替えの要求であること、端末の識別子)は、呼び出す Worker の側で済ませてある。
+	 */
+	override fetch(request: Request): Response {
+		const client = new URL(request.url).searchParams.get("client") ?? "";
+		const { 0: clientSocket, 1: serverSocket } = new WebSocketPair();
+		// 端末の識別子をタグにする。その端末のコミットを、本人の接続には配信しないため。
+		this.ctx.acceptWebSocket(serverSocket, [client]);
+		this.#send(serverSocket, { type: "hello", version: this.#version() });
+		return new Response(null, { status: 101, webSocket: clientSocket });
+	}
+
+	/** クライアントからのメッセージは、自動で応答する ping だけを想定している。それ以外を送る接続は閉じる。 */
+	override webSocketMessage(socket: WebSocket): void {
+		socket.close(WS_POLICY_VIOLATION, "unexpected message");
 	}
 
 	getPage(): PageSnapshot {
@@ -44,8 +69,9 @@ export class PageDO extends DurableObject {
 	/**
 	 * 変更をまとめて適用する。対象の行がなくなっている変更は、その変更だけを捨てる(ADR-0016)。
 	 * 実際に効いた変更と、適用後のバージョンを返す。何も効かなければ、バージョンは進まない。
+	 * 効いた変更は、接続している他の端末に配信する。client は、送った端末の識別子。
 	 */
-	commit(changes: readonly Change[]): CommitResult {
+	commit(changes: readonly Change[], client?: string): CommitResult {
 		const { applied } = applyChanges(this.#lines(), changes);
 		if (applied.length === 0) return { version: this.#version(), applied };
 
@@ -58,7 +84,20 @@ export class PageDO extends DurableObject {
 				version,
 			);
 		});
+		// 保存してから配信する。送った本人は応答で結果を受け取るので、本人の接続には送らない。
+		const skipped = new Set(client === undefined ? [] : this.ctx.getWebSockets(client));
+		for (const socket of this.ctx.getWebSockets()) {
+			if (!skipped.has(socket)) this.#send(socket, { type: "commit", version, applied });
+		}
 		return { version, applied };
+	}
+
+	#send(socket: WebSocket, message: ServerMessage): void {
+		try {
+			socket.send(JSON.stringify(message));
+		} catch {
+			// 閉じかけの接続には送れない。受け取れなかった端末は、つなぎ直したときに読み直す。
+		}
 	}
 
 	/** 変更を1つ、保存した内容に書き込む。書き換えるのは、その変更の対象の行だけ。 */

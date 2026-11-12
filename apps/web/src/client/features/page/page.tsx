@@ -33,7 +33,8 @@ const SETTLED: ReadonlySet<SyncStatus> = new Set(["new", "saved"]);
 
 /** 保存されるページ。読み込んでから編集欄を表示し、編集を保存する。 */
 export function Page({ name }: PageProps) {
-	const api = useMemo(() => createPageApi(name), [name]);
+	// 端末(タブ)の識別子は、ページを開くたびに作る。
+	const api = useMemo(() => createPageApi(name, createIdPrefix()), [name]);
 	const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
 	const [attempt, setAttempt] = useState(0);
 

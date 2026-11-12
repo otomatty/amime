@@ -1,6 +1,6 @@
 import { exports } from "cloudflare:workers";
 import { toTitleLc } from "@amime/shared";
-import { parseChanges } from "@amime/sync";
+import { parseClientId, parseCommitRequest } from "@amime/sync";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 
@@ -46,14 +46,21 @@ const pages = new Hono<AppEnv>()
 			onError: (c) => c.json({ error: "commit-too-large" }, 413),
 		}),
 		async (c) => {
-			const body = await readJson(c.req.raw);
-			const changes = parseChanges(
-				typeof body === "object" && body !== null && "changes" in body ? body.changes : null,
-			);
-			if (!changes.ok) return c.json({ error: "invalid-commit" }, 400);
-			return c.json(await pageStub(c.req.param("page")).commit(changes.value));
+			const commit = parseCommitRequest(await readJson(c.req.raw));
+			if (!commit.ok) return c.json({ error: "invalid-commit" }, 400);
+			const { changes, client } = commit.value;
+			return c.json(await pageStub(c.req.param("page")).commit(changes, client));
 		},
-	);
+	)
+	// 他の端末のコミットを受け取るための WebSocket(ADR-0018)。
+	.get("/:page/socket", async (c) => {
+		// 検査は Worker の側で済ませ、正しい要求だけを Durable Object に渡す。
+		if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
+			return c.json({ error: "upgrade-required" }, 426);
+		}
+		if (!parseClientId(c.req.query("client")).ok) return c.json({ error: "invalid-client" }, 400);
+		return pageStub(c.req.param("page")).fetch(c.req.raw);
+	});
 
 /** HTTP API。パスはすべて /api 配下に置き、それ以外は静的アセット(SPA)が応答する。 */
 export const app = new Hono<AppEnv>()

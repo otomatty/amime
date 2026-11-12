@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, type Page, test } from "@playwright/test";
+import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 
 const lines = (page: Page) => page.getByTestId("line");
 const lineTexts = (page: Page) =>
@@ -83,36 +83,6 @@ test.describe("ページの保存", () => {
 		expect((await lineTexts(page)).slice(1)).toEqual(["B", "A", " a1"]);
 	});
 
-	test("別のタブで書かれた内容は、自分が保存するときに取り込まれ、どちらの変更も残る", async ({
-		page,
-		context,
-	}) => {
-		const name = newPageName();
-		await page.goto(`/${name}`);
-		await clickLineEnd(page, 0);
-		await page.keyboard.press("Enter");
-		await page.keyboard.type("最初の行");
-		await expect(status(page)).toHaveText("保存済み");
-
-		const other = await context.newPage();
-		await other.goto(`/${name}`);
-		await expect(lines(other)).toHaveCount(2);
-		await clickLineEnd(other, 1);
-		await other.keyboard.press("Enter");
-		await other.keyboard.type("別のタブの行");
-		await expect(status(other)).toHaveText("保存済み");
-
-		// 最初のタブは、別のタブの行をまだ知らない。そのまま書いて保存する。
-		await page.bringToFront();
-		await clickLineEnd(page, 0);
-		await page.keyboard.type("!");
-
-		await expectLines(page, [`${name}!`, "最初の行", "別のタブの行"]);
-		await expect(status(page)).toHaveText("保存済み");
-		await other.reload();
-		await expectLines(other, [`${name}!`, "最初の行", "別のタブの行"]);
-	});
-
 	test("保存に失敗しても書き続けられ、通信が戻ると自動で保存される", async ({ page }) => {
 		const name = newPageName();
 		await page.goto(`/${name}`);
@@ -139,5 +109,90 @@ test.describe("ページの保存", () => {
 		await page.reload();
 
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
+	});
+});
+
+test.describe("同時編集", () => {
+	/** 1行の本文があるページを作り、もう1つのタブでも開く。 */
+	async function openInTwoTabs(page: Page, context: BrowserContext) {
+		const name = newPageName();
+		await page.goto(`/${name}`);
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Enter");
+		await page.keyboard.type("最初の行");
+		await expect(status(page)).toHaveText("保存済み");
+
+		const other = await context.newPage();
+		await other.goto(`/${name}`);
+		await expectLines(other, [name, "最初の行"]);
+		return { name, other };
+	}
+
+	test("別のタブで書いた内容が、何もしなくてもその場で届く", async ({ page, context }) => {
+		const { name, other } = await openInTwoTabs(page, context);
+
+		await clickLineEnd(other, 1);
+		await other.keyboard.press("Enter");
+		await other.keyboard.type("別のタブの行");
+
+		// 最初のタブは、何も操作していない。
+		await expectLines(page, [name, "最初の行", "別のタブの行"]);
+		await expect(status(page)).toHaveText("保存済み");
+	});
+
+	test("2つのタブで別々の行を書いても、どちらの変更も残り、両方の画面が同じになる", async ({
+		page,
+		context,
+	}) => {
+		const { name, other } = await openInTwoTabs(page, context);
+
+		await clickLineEnd(page, 0);
+		await clickLineEnd(other, 1);
+		for (const letter of ["1", "2", "3"]) {
+			await page.keyboard.type(letter);
+			await other.keyboard.type(letter);
+		}
+
+		const expected = [`${name}123`, "最初の行123"];
+		await expectLines(page, expected);
+		await expectLines(other, expected);
+		await page.reload();
+		await expectLines(page, expected);
+	});
+
+	test("他の人の変更が届いても、自分のカーソルは同じ行に残り、続けて書ける", async ({
+		page,
+		context,
+	}) => {
+		const { name, other } = await openInTwoTabs(page, context);
+		await clickLineEnd(page, 1);
+
+		// 別のタブが、カーソルのある行より上に行を足す。
+		await clickLineEnd(other, 0);
+		await other.keyboard.press("Enter");
+		await other.keyboard.type("上に足した行");
+		await expectLines(page, [name, "上に足した行", "最初の行"]);
+
+		await page.keyboard.type("!");
+
+		await expectLines(page, [name, "上に足した行", "最初の行!"]);
+		await expectLines(other, [name, "上に足した行", "最初の行!"]);
+	});
+
+	test("まだないページを開いているあいだに他の人が書くと、その内容が表示される", async ({
+		page,
+		context,
+	}) => {
+		const name = newPageName();
+		await page.goto(`/${name}`);
+		await expect(status(page)).toHaveText("新しいページです。書き始めると保存されます");
+		const other = await context.newPage();
+		await other.goto(`/${name}`);
+
+		await clickLineEnd(other, 0);
+		await other.keyboard.type(" を先に書いた");
+
+		await expectLines(page, [`${name} を先に書いた`]);
+		await expect(status(page)).toHaveText("保存済み");
 	});
 });

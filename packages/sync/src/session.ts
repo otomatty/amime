@@ -112,6 +112,24 @@ export function acknowledge(session: Session, result: CommitResult): Session | n
 }
 
 /**
+ * 他の人のコミットを受け取る。確定した文書を進め、画面の文書に反映する。
+ * 送信中の変更と、まだ送っていない編集は、その上に載せ直す。送信中の状態は変えない。
+ *
+ * 既に反映してあるバージョンなら、何もしない。あいだのバージョンが抜けていたら null を返す。
+ * そのときは、ページを読み直して recover(送信中なら、応答を待ってから)を呼ぶ。
+ */
+export function receive(session: Session, event: CommitResult): Session | null {
+	if (event.version <= session.version) return session;
+	if (event.version !== session.version + 1) return null;
+
+	const confirmed = applyChanges(session.confirmed, event.applied).lines;
+	const unsent = diffLines(sent(session), session.local);
+	const next = { ...session, version: event.version, confirmed };
+	const local = applyChanges(sent(next), unsent).lines;
+	return { ...next, local: sameLines(local, session.local) ? session.local : local };
+}
+
+/**
  * 読み直したページを確定した文書にする。まだ送っていない編集は、その上に載せ直す。
  * 送信中の変更は、サーバーに入っている(読み直したページに含まれている)ものとして扱う。
  */

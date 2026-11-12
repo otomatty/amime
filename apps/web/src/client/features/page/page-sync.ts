@@ -8,6 +8,7 @@ import {
 	hasUnsaved,
 	type Line,
 	type PageSnapshot,
+	receive,
 	recover,
 	resync,
 	type Session,
@@ -16,6 +17,7 @@ import {
 } from "@amime/sync";
 import type { RemoteDocument } from "../editor/editor-model.ts";
 import { PageApiError } from "./page-api-error.ts";
+import type { PageSocketHandlers } from "./page-socket.ts";
 
 /** 最後の編集から保存を始めるまでの待ち時間。続けて打っているあいだは保存を始めない。 */
 export const SAVE_DELAY_MS = 300;
@@ -42,6 +44,8 @@ export type PageSyncState = {
 export type PageApi = {
 	readonly load: () => Promise<PageSnapshot>;
 	readonly commit: (changes: readonly Change[]) => Promise<CommitResult>;
+	/** 他の端末のコミットを受け取り始める。返した関数を呼ぶと、受け取りをやめる。 */
+	readonly subscribe: (handlers: PageSocketHandlers) => () => void;
 };
 
 type PageSyncOptions = {
@@ -56,8 +60,8 @@ type PageSyncOptions = {
 };
 
 /**
- * 1つのページの保存を受け持つ。編集欄から文書を受け取り、サーバーへ送る。
- * 文書の状態と規則は @amime/sync のセッションにあり、ここは「いつ送るか」だけを決める。
+ * 1つのページの保存と、他の人の変更の受け取りを受け持つ。
+ * 文書の状態と規則は @amime/sync のセッションにあり、ここは「いつ送るか、いつ読み直すか」だけを決める。
  */
 export function createPageSync({ snapshot, initial, api, onState }: PageSyncOptions) {
 	let session: Session = edit(createSession(snapshot), initial);
@@ -67,6 +71,8 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 	let failure: "none" | "failed" | "rejected" = "none";
 	/** 応答が届かなかった送信がある。サーバーに入ったかどうかが分からないので、次に送る前に読み直す。 */
 	let uncertain = false;
+	/** 他の人のコミットを受け取りそこねている。読み直して追いつく。 */
+	let behind = false;
 	let busy = false;
 	let disposed = false;
 
@@ -75,11 +81,16 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 		session.version === 0 && session.inflight === null && sameLines(session.local, initial);
 	const status = (): SyncStatus => {
 		if (untouched()) return "new";
+		if (!hasUnsaved(session)) return "saved";
 		if (failure === "failed") return "retrying";
 		if (session.inflight !== null) return "saving";
-		if (!hasUnsaved(session)) return "saved";
 		return failure === "rejected" ? "rejected" : "unsaved";
 	};
+	/**
+	 * 他の人の変更を取り込むときの、もとにする状態。
+	 * まだないページで仮のタイトルを表示しているだけなら、それは自分の編集ではないので、載せ直さない。
+	 */
+	const receiving = (): Session => (untouched() ? edit(session, session.confirmed) : session);
 	const publish = () => {
 		if (!disposed) onState({ status: status(), remote });
 	};
@@ -108,17 +119,52 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 	};
 
 	/**
+	 * 読み直して、サーバーに追いつく。読み直したページのほうが古ければ(待っているあいだに、
+	 * 配信でそれより先まで進んでいたら)、何もせず false を返す。
+	 */
+	async function catchUp(): Promise<boolean> {
+		const latest = await api.load();
+		if (latest.version < session.version) return false;
+		if (uncertain || latest.version > session.version) settle(recover(receiving(), latest));
+		uncertain = false;
+		behind = false;
+		return true;
+	}
+
+	/** 送信への応答を反映する。他の人の変更が先に入っていたら、読み直して載せ直す。 */
+	async function confirm(result: CommitResult): Promise<void> {
+		const acknowledged = acknowledge(session, result);
+		if (acknowledged !== null) {
+			settle(acknowledged);
+			return;
+		}
+		const latest = await api.load();
+		settle(resync(session, latest));
+	}
+
+	/** 失敗を記録する。続けてもう1回進めるべきなら true を返す。 */
+	function fail(error: unknown, sentLocal: readonly Line[] | null): boolean {
+		if (sentLocal !== null && error instanceof PageApiError && error.kind === "rejected") {
+			return rejected(sentLocal);
+		}
+		// 送信中に失敗したら、サーバーに入ったかどうかが分からない。次に送る前に読み直す。
+		uncertain = uncertain || session.inflight !== null;
+		failure = "failed";
+		publish();
+		schedule(retryDelay);
+		retryDelay = Math.min(retryDelay * 2, MAX_RETRY_MS);
+		return false;
+	}
+
+	/**
 	 * 保存を1回分進める。続けてもう1回進めるべきなら true を返す。
-	 * await のあとでは、待っているあいだに編集されているかもしれないので、必ずその時点の session を使う。
+	 * await のあとでは、待っているあいだに編集されたり配信が届いたりしているかもしれないので、
+	 * 必ずその時点の session を使う。
 	 */
 	async function step(): Promise<boolean> {
 		let sentLocal: readonly Line[] | null = null;
 		try {
-			if (uncertain) {
-				const latest = await api.load();
-				settle(recover(session, latest));
-				uncertain = false;
-			}
+			if ((uncertain || behind) && !(await catchUp())) return true;
 			const sending = disposed || untouched() ? null : send(session);
 			if (sending === null) {
 				failure = "none";
@@ -131,30 +177,14 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 			sentLocal = session.local;
 			const result = await api.commit(sending.changes);
 			sentLocal = null;
-			const acknowledged = acknowledge(session, result);
-			if (acknowledged === null) {
-				// 他の人の変更が先に入っている。読み直して、その時点の session に載せ直す。
-				const latest = await api.load();
-				settle(resync(session, latest));
-			} else {
-				settle(acknowledged);
-			}
+			await confirm(result);
 			failure = "none";
 			retryDelay = FIRST_RETRY_MS;
 			publish();
 			// 保存中に書き足した分があれば、続けて保存する。
 			return true;
 		} catch (error) {
-			if (sentLocal !== null && error instanceof PageApiError && error.kind === "rejected") {
-				return rejected(sentLocal);
-			}
-			// 送信中に失敗したら、サーバーに入ったかどうかが分からない。次に送る前に読み直す。
-			uncertain = uncertain || session.inflight !== null;
-			failure = "failed";
-			publish();
-			schedule(retryDelay);
-			retryDelay = Math.min(retryDelay * 2, MAX_RETRY_MS);
-			return false;
+			return fail(error, sentLocal);
 		}
 	}
 
@@ -162,13 +192,35 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 		if (busy) return;
 		busy = true;
 		try {
-			while (await step()) {
-				// 送るものがなくなるか、失敗するまで続ける。
+			// 送るものがなくなるか、失敗するまで続ける。待っているあいだに遅れが分かったら、もう1回進める。
+			while ((await step()) || (behind && failure !== "failed")) {
+				// 繰り返すだけ。
 			}
 		} finally {
 			busy = false;
 		}
 	}
+
+	const unsubscribe = api.subscribe({
+		onHello(version) {
+			// つないだ時点でサーバーのほうが進んでいたら、切れているあいだのコミットを受け取りそこねている。
+			if (version <= session.version) return;
+			behind = true;
+			void save();
+		},
+		onCommit(event) {
+			if (event.version <= session.version) return;
+			const next = receive(receiving(), event);
+			if (next === null) {
+				// あいだのコミットが抜けている。読み直して追いつく。
+				behind = true;
+				void save();
+				return;
+			}
+			settle(next);
+			publish();
+		},
+	});
 
 	return {
 		/** 編集欄の文書が変わったときに呼ぶ。 */
@@ -185,6 +237,7 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 		/** 保存をやめる。 */
 		dispose(): void {
 			disposed = true;
+			unsubscribe();
 			if (timer !== null) clearTimeout(timer);
 		},
 	};

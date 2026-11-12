@@ -79,6 +79,45 @@ describe("reduceModel", () => {
 			});
 		});
 
+		it("選択している範囲も、同じ行についていく", () => {
+			const selecting = reduceModel(start(), {
+				type: "edit",
+				command: (state) => ({
+					lines: state.lines,
+					anchor: { line: 1, column: 0 },
+					cursor: { line: 2, column: 1 },
+				}),
+				group: null,
+				at: 0,
+			});
+			const remote = [line("x", "他の人の行"), ...document];
+
+			const model = reduceModel(selecting, { type: "replace", lines: remote, base: document });
+
+			expect(model.history.present).toMatchObject({
+				anchor: { line: 2, column: 0 },
+				cursor: { line: 3, column: 1 },
+			});
+		});
+
+		it("選択の始点の行が消されていたら、選択をやめる", () => {
+			const selecting = reduceModel(start(), {
+				type: "edit",
+				command: (state) => ({ ...state, anchor: { line: 0, column: 0 } }),
+				group: null,
+				at: 0,
+			});
+
+			const model = reduceModel(selecting, {
+				type: "replace",
+				lines: document.slice(1),
+				base: document,
+			});
+
+			expect(model.history.present.anchor).toBeUndefined();
+			expect(model.history.present.cursor).toEqual({ line: 0, column: 2 });
+		});
+
 		it("カーソルのある行が消されていたら、同じ位置にある行へ移る。列は行の長さに収める", () => {
 			const remote = [line("a", "題"), line("c", "末")];
 
