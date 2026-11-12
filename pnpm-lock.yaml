@@ -47,9 +47,6 @@ importers:
       '@amime/parser':
         specifier: workspace:*
         version: link:../../packages/parser
-      '@amime/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       '@amime/sync':
         specifier: workspace:*
         version: link:../../packages/sync
