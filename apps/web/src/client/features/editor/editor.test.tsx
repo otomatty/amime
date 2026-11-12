@@ -147,6 +147,22 @@ describe("Editor", () => {
 		});
 	});
 
+	describe("行のない場所を押したとき", () => {
+		it("編集欄の中で行のない場所(テーブルの右など)を押すと、文書の末尾ではなく、押した高さに近い行に入る", () => {
+			render(<Editor initialLines={["t", "ab", "cd"]} />);
+			const rows = screen.getAllByTestId("line");
+			// 仮想DOMでは位置を測れないので、2行目だけが押した高さにあることにする。
+			rows.forEach((row, index) => {
+				row.getBoundingClientRect = () =>
+					({ top: index * 20, bottom: index * 20 + 20, left: 0, width: 0, height: 20 }) as DOMRect;
+			});
+
+			fireEvent.mouseDown(screen.getByTestId("editor"), { clientY: 30 });
+
+			expect(caret()).toEqual({ line: 1, column: 2 });
+		});
+	});
+
 	describe("コードブロックとテーブル", () => {
 		const kindsOf = () =>
 			screen.getAllByTestId("line").map((element) => element.getAttribute("data-kind"));
@@ -207,6 +223,252 @@ describe("Editor", () => {
 
 			expect(lines()[2]).toBe(" x\ty");
 			expect(caret()).toEqual({ line: 2, column: 4 });
+		});
+	});
+
+	describe("範囲選択", () => {
+		const selectedText = () =>
+			[...document.querySelectorAll("[data-column].selected")].map((el) => el.textContent).join("");
+
+		it("Shift+矢印で選択を広げ、選択した文字に印が付く", () => {
+			render(<Editor initialLines={["abcd"]} />);
+			clickChar(0, 1);
+
+			press("ArrowRight", { shiftKey: true });
+			press("ArrowRight", { shiftKey: true });
+
+			expect(selectedText()).toBe("bc");
+			expect(caret()).toEqual({ line: 0, column: 3 });
+		});
+
+		it("選択したまま文字を打つと、選択した範囲と置き換わる", () => {
+			render(<Editor initialLines={["abcd"]} />);
+			clickChar(0, 1);
+			press("ArrowRight", { shiftKey: true });
+			press("ArrowRight", { shiftKey: true });
+
+			type("X");
+
+			expect(lines()).toEqual(["aXd"]);
+			expect(selectedText()).toBe("");
+		});
+
+		it("Ctrl+A ですべてを選択し、Backspace でまとめて消せる", () => {
+			render(<Editor initialLines={["ab", "cd"]} />);
+			clickChar(0, 0);
+
+			press("a", { ctrlKey: true });
+			expect(selectedText()).toBe("abcd");
+			expect(document.querySelectorAll(".line-break.selected")).toHaveLength(1);
+			press("Backspace");
+
+			expect(lines()).toEqual([""]);
+		});
+
+		it("Shift を押しながら別の位置を押すと、そこまでを選択する", () => {
+			render(<Editor initialLines={["abcd", "efgh"]} />);
+			clickChar(0, 1);
+
+			const target = screen.getAllByTestId("line")[1]?.querySelector('[data-column="2"]');
+			fireEvent.mouseDown(target as Element, { shiftKey: true });
+
+			expect(selectedText()).toBe("bcdef");
+		});
+
+		it("押したまま動かす(ドラッグ)と、動かした先までを選択する", () => {
+			render(<Editor initialLines={["abcd", "efgh"]} />);
+			clickChar(0, 1);
+
+			const target = screen.getAllByTestId("line")[1]?.querySelector('[data-column="2"]');
+			fireEvent.mouseMove(target as Element, { buttons: 1 });
+			expect(selectedText()).toBe("bcdef");
+
+			fireEvent.mouseUp(target as Element);
+			fireEvent.mouseMove(screen.getAllByTestId("line")[0] as Element, { buttons: 0 });
+			expect(selectedText()).toBe("bcdef");
+		});
+
+		it("押してすぐ離しただけなら、選択にはならない", () => {
+			render(<Editor initialLines={["abcd"]} />);
+			clickChar(0, 1);
+
+			const same = screen.getByTestId("line").querySelector('[data-column="1"]');
+			fireEvent.mouseMove(same as Element, { buttons: 1 });
+			fireEvent.mouseUp(same as Element);
+
+			expect(selectedText()).toBe("");
+		});
+
+		it("編集欄からフォーカスが外れているあいだは、選択を表示しない", () => {
+			render(<Editor initialLines={["abcd"]} />);
+			clickChar(0, 1);
+			press("ArrowRight", { shiftKey: true });
+
+			fireEvent.blur(input());
+
+			expect(selectedText()).toBe("");
+		});
+
+		describe("選択したままの日本語入力", () => {
+			function selectAndCompose() {
+				render(<Editor initialLines={["abcd"]} />);
+				clickChar(0, 1);
+				press("ArrowRight", { shiftKey: true });
+				press("ArrowRight", { shiftKey: true });
+				fireEvent.compositionStart(input());
+				fireEvent.compositionUpdate(input(), { data: "にほ" });
+			}
+
+			it("変換を始めただけでは、選択した範囲は消えない", () => {
+				selectAndCompose();
+
+				expect(lines()).toEqual(["abcd"]);
+			});
+
+			it("変換を取り消すと、文書も選択も元のまま", () => {
+				selectAndCompose();
+
+				fireEvent.compositionEnd(input(), { data: "" });
+
+				expect(lines()).toEqual(["abcd"]);
+				expect(selectedText()).toBe("bc");
+			});
+
+			it("確定すると選択した範囲と置き換わり、1回の取り消しで選択した状態まで戻る", () => {
+				selectAndCompose();
+				type("日本");
+				fireEvent.compositionEnd(input(), { data: "日本" });
+				expect(lines()).toEqual(["a日本d"]);
+
+				press("z", { ctrlKey: true });
+
+				expect(lines()).toEqual(["abcd"]);
+				expect(selectedText()).toBe("bc");
+			});
+		});
+	});
+
+	describe("コピーと切り取り", () => {
+		function select() {
+			render(<Editor initialLines={["ab", " [c]", "de"]} />);
+			clickChar(0, 1);
+			press("ArrowDown", { shiftKey: true });
+			press("ArrowDown", { shiftKey: true });
+		}
+		const clipboard = () => ({ setData: vi.fn() });
+
+		it("コピーすると、選択した範囲の生のテキストがクリップボードに入る", () => {
+			select();
+			const clipboardData = clipboard();
+
+			const notPrevented = fireEvent.copy(input(), { clipboardData });
+
+			expect(clipboardData.setData).toHaveBeenCalledWith("text/plain", "b\n [c]\nd");
+			expect(notPrevented).toBe(false);
+			expect(lines()).toEqual(["ab", " [c]", "de"]);
+		});
+
+		it("切り取ると、クリップボードに入れたうえで選択した範囲を消す", () => {
+			select();
+			const clipboardData = clipboard();
+
+			fireEvent.cut(input(), { clipboardData });
+
+			expect(clipboardData.setData).toHaveBeenCalledWith("text/plain", "b\n [c]\nd");
+			expect(lines()).toEqual(["ae"]);
+		});
+
+		it("選択していなければ、コピーも切り取りも何もしない", () => {
+			render(<Editor initialLines={["ab"]} />);
+			clickChar(0, 1);
+			const clipboardData = clipboard();
+
+			fireEvent.copy(input(), { clipboardData });
+			fireEvent.cut(input(), { clipboardData });
+
+			expect(clipboardData.setData).not.toHaveBeenCalled();
+			expect(lines()).toEqual(["ab"]);
+		});
+
+		it("キーの文字が英字にならない配列でも、C の位置のキーでコピーの準備をする", () => {
+			select();
+
+			press("с", { ctrlKey: true, code: "KeyC" });
+
+			expect(input().value).toBe("b\n [c]\nd");
+		});
+
+		it("Ctrl+C を押した時点で、入力欄に選択した文字列を入れて選択しておく(コピーの操作が確実に届くようにする)", () => {
+			select();
+
+			const notPrevented = press("c", { ctrlKey: true });
+
+			expect(notPrevented).toBe(true);
+			expect(input().value).toBe("b\n [c]\nd");
+			expect(input().selectionStart).toBe(0);
+			expect(input().selectionEnd).toBe(input().value.length);
+		});
+
+		it("コピーのあと、入力欄は空に戻る(次に打った文字に混ざらない)", () => {
+			select();
+			press("c", { ctrlKey: true });
+
+			fireEvent.copy(input(), { clipboardData: clipboard() });
+
+			expect(input().value).toBe("");
+		});
+
+		it("選択していないときの Ctrl+C では、入力欄に何も入れない", () => {
+			render(<Editor initialLines={["ab"]} />);
+			clickChar(0, 1);
+
+			press("c", { ctrlKey: true });
+
+			expect(input().value).toBe("");
+		});
+	});
+
+	describe("取り消しとやり直し", () => {
+		it("Ctrl+Z で直前の編集を取り消し、Ctrl+Shift+Z でやり直す", () => {
+			render(<Editor initialLines={["ab"]} />);
+			fireEvent.mouseDown(screen.getByTestId("line"));
+			press("Enter");
+			expect(lines()).toEqual(["ab", ""]);
+
+			press("z", { ctrlKey: true });
+			expect(lines()).toEqual(["ab"]);
+			expect(caret()).toEqual({ line: 0, column: 2 });
+
+			press("Z", { ctrlKey: true, shiftKey: true });
+			expect(lines()).toEqual(["ab", ""]);
+		});
+
+		it("続けて打った文字は、1回の取り消しでまとめて消える", () => {
+			render(<Editor initialLines={["ab"]} />);
+			fireEvent.mouseDown(screen.getByTestId("line"));
+
+			type("c");
+			type("d");
+			press("z", { ctrlKey: true });
+
+			expect(lines()).toEqual(["ab"]);
+		});
+
+		it("貼り付けた複数行は、打った文字とは別の単位で取り消せる", () => {
+			render(<Editor initialLines={["ab"]} />);
+			fireEvent.mouseDown(screen.getByTestId("line"));
+
+			type("c");
+			type("x\ny");
+			press("z", { ctrlKey: true });
+
+			expect(lines()).toEqual(["abc"]);
+		});
+
+		it("取り消しのキーは、ブラウザの既定の動作を止める", () => {
+			render(<Editor initialLines={["ab"]} />);
+
+			expect(press("z", { ctrlKey: true })).toBe(false);
 		});
 	});
 

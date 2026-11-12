@@ -1,6 +1,6 @@
 import { invariant } from "@amime/shared";
 import { nextBoundary, previousBoundary, snapToBoundary } from "./graphemes.ts";
-import { lineAtCursor } from "./state.ts";
+import { lineAtCursor, selectionRange } from "./state.ts";
 import type { Cursor, EditorState } from "./types.ts";
 
 const withCursor = (state: EditorState, cursor: Cursor): EditorState => ({
@@ -8,8 +8,10 @@ const withCursor = (state: EditorState, cursor: Cursor): EditorState => ({
 	cursor,
 });
 
-/** 1文字左へ。行頭では前の行の末尾へ移る。 */
+/** 1文字左へ。行頭では前の行の末尾へ移る。選択しているときは、選択をやめて選択の始まりへ移る。 */
 export function moveLeft(state: EditorState): EditorState {
+	const range = selectionRange(state);
+	if (range !== null) return withCursor(state, range.start);
 	const { line, column } = state.cursor;
 	const current = lineAtCursor(state);
 	if (column > 0) return withCursor(state, { line, column: previousBoundary(current, column) });
@@ -19,8 +21,10 @@ export function moveLeft(state: EditorState): EditorState {
 	return withCursor(state, { line: line - 1, column: previous.length });
 }
 
-/** 1文字右へ。行末では次の行の先頭へ移る。 */
+/** 1文字右へ。行末では次の行の先頭へ移る。選択しているときは、選択をやめて選択の終わりへ移る。 */
 export function moveRight(state: EditorState): EditorState {
+	const range = selectionRange(state);
+	if (range !== null) return withCursor(state, range.end);
 	const { line, column } = state.cursor;
 	const current = lineAtCursor(state);
 	if (column < current.length) {

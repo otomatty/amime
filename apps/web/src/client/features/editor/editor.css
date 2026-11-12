@@ -247,3 +247,23 @@ a.link:hover {
 	font: inherit;
 	line-height: inherit;
 }
+
+/* 範囲選択。 */
+.selected {
+	background: var(--color-selection);
+}
+
+/* 画像は背景の色が隠れるので、選択されていることを枠で示す。 */
+.image.selected {
+	outline: 3px solid var(--color-selection);
+	outline-offset: -3px;
+}
+
+/* 選択が次の行へ続いていることを示す、行末の印。 */
+.line-break {
+	display: inline-block;
+	text-indent: 0;
+	width: 0.5em;
+	height: 1.3em;
+	vertical-align: text-bottom;
+}

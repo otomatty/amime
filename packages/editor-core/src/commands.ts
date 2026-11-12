@@ -1,18 +1,21 @@
 import { parseIndent } from "@amime/parser";
 import { ceilToBoundary, nextBoundary, previousBoundary, snapToBoundary } from "./graphemes.ts";
-import { lineAtCursor } from "./state.ts";
-import type { EditorState } from "./types.ts";
+import { lineAt, lineAtCursor, selectionRange, withSelection } from "./state.ts";
+import type { Cursor, EditorState } from "./types.ts";
 
 const LINE_BREAK = /\r\n?/g;
 
 /**
  * カーソル位置に文字列を挿入する。改行を含む場合は複数行として挿入する。
+ * 範囲を選択しているときは、選択した範囲と置き換える。
  * 挿入する行のインデントには手を加えない(貼り付けた内容をそのまま保つ)。
  */
-export function insertText(state: EditorState, text: string): EditorState {
+export function insertText(selected: EditorState, text: string): EditorState {
+	lineAtCursor(selected);
+	if (text === "") return selected;
+	const state = cutSelection(selected);
 	const { line, column } = state.cursor;
 	const current = lineAtCursor(state);
-	if (text === "") return state;
 
 	const head = current.slice(0, column) + text.replace(LINE_BREAK, "\n");
 	const inserted = (head + current.slice(column)).split("\n");
@@ -31,9 +34,10 @@ export function insertText(state: EditorState, text: string): EditorState {
  * (テーブルの行で、インデントに続くセルの区切りのタブまで引き継がないようにする)。
  */
 export function splitLine(
-	state: EditorState,
+	selected: EditorState,
 	maxInherited = Number.POSITIVE_INFINITY,
 ): EditorState {
+	const state = cutSelection(selected);
 	const { line, column } = state.cursor;
 	const current = lineAtCursor(state);
 	const head = current.slice(0, column);
@@ -64,8 +68,38 @@ function removeBetween(
 	};
 }
 
-/** カーソルの直前の1文字を消す。行頭では前の行とつなげる。 */
+/**
+ * 選択した範囲を取り除き、カーソルをその継ぎ目に置く。選択していなければ何もしない。
+ * 継ぎ目の両側が1文字に結合しても、カーソルは寄せない。続けてその位置に文字を入れる操作
+ * (置き換え、改行)のためのもので、寄せると入れる位置がずれてしまう。
+ */
+function cutSelection(state: EditorState): EditorState {
+	const range = selectionRange(state);
+	if (range === null) return state;
+	const { start, end } = range;
+	const head = lineAt(state.lines, start.line).slice(0, start.column);
+	const tail = lineAt(state.lines, end.line).slice(end.column);
+	return {
+		lines: state.lines.toSpliced(start.line, end.line - start.line + 1, head + tail),
+		cursor: start,
+	};
+}
+
+/** 選択した範囲を消す。選択していなければ何もしない。 */
+export function deleteSelection(state: EditorState): EditorState {
+	const cut = cutSelection(state);
+	if (cut === state) return state;
+	// 消した継ぎ目の両側が1文字に結合することがある。その場合は、結合した文字の手前に置く。
+	const { line, column } = cut.cursor;
+	return {
+		lines: cut.lines,
+		cursor: { line, column: snapToBoundary(lineAt(cut.lines, line), column) },
+	};
+}
+
+/** カーソルの直前の1文字を消す。行頭では前の行とつなげる。選択しているときは、選択した範囲だけを消す。 */
 export function deleteBackward(state: EditorState): EditorState {
+	if (selectionRange(state) !== null) return deleteSelection(state);
 	const { line, column } = state.cursor;
 	const current = lineAtCursor(state);
 	if (column > 0) {
@@ -78,8 +112,9 @@ export function deleteBackward(state: EditorState): EditorState {
 	return removeBetween(state, line - 1, 2, previous, current);
 }
 
-/** カーソルの直後の1文字を消す。行末では次の行とつなげる。 */
+/** カーソルの直後の1文字を消す。行末では次の行とつなげる。選択しているときは、選択した範囲だけを消す。 */
 export function deleteForward(state: EditorState): EditorState {
+	if (selectionRange(state) !== null) return deleteSelection(state);
 	const { line, column } = state.cursor;
 	const current = lineAtCursor(state);
 	if (column < current.length) {
@@ -92,24 +127,51 @@ export function deleteForward(state: EditorState): EditorState {
 	return removeBetween(state, line, 2, current, next);
 }
 
-/** カーソルのある行を1段深くする。 */
-export function indentLine(state: EditorState): EditorState {
-	const { line, column } = state.cursor;
-	const indented = ` ${lineAtCursor(state)}`;
-	return {
-		lines: state.lines.with(line, indented),
-		// 行頭が結合文字だと、足した空白と1文字に結合する。その場合は結合した文字の後ろに置く。
-		cursor: { line, column: ceilToBoundary(indented, column + 1) },
+/**
+ * インデントを変える対象の行に、shift を適用する。
+ * 対象は、選択していなければカーソルのある行、選択していれば選択にかかるすべての行。
+ * 選択が行頭で終わっているときは、その行を対象にしない(その行の文字は1つも選択されていない)。
+ * カーソルと選択の始点は、moveColumn で行の動きに合わせてずらす。
+ */
+function shiftLines(
+	state: EditorState,
+	shift: (text: string) => string,
+	moveColumn: (shifted: string, column: number) => number,
+): EditorState {
+	const range = selectionRange(state) ?? { start: state.cursor, end: state.cursor };
+	const first = range.start.line;
+	const last =
+		range.end.column === 0 && range.end.line > first ? range.end.line - 1 : range.end.line;
+	lineAt(state.lines, last);
+
+	const lines = state.lines.map((text, index) =>
+		index < first || index > last ? text : shift(text),
+	);
+	if (lines.every((text, index) => text === state.lines[index])) return state;
+
+	const move = (position: Cursor): Cursor => {
+		const shifted = lineAt(lines, position.line);
+		if (shifted === state.lines[position.line]) return position;
+		return { line: position.line, column: moveColumn(shifted, position.column) };
 	};
+	return withSelection(lines, move(state.cursor), state.anchor && move(state.anchor));
 }
 
-/** カーソルのある行を1段浅くする。インデントがなければ何もしない。 */
+/** カーソルのある行(選択しているときは、選択にかかるすべての行)を1段深くする。 */
+export function indentLine(state: EditorState): EditorState {
+	return shiftLines(
+		state,
+		(text) => ` ${text}`,
+		// 行頭が結合文字だと、足した空白と1文字に結合する。その場合は結合した文字の後ろに置く。
+		(shifted, column) => ceilToBoundary(shifted, column + 1),
+	);
+}
+
+/** カーソルのある行(選択しているときは、選択にかかるすべての行)を1段浅くする。インデントのない行はそのまま。 */
 export function outdentLine(state: EditorState): EditorState {
-	const { line, column } = state.cursor;
-	const current = lineAtCursor(state);
-	if (parseIndent(current).indent === 0) return state;
-	return {
-		lines: state.lines.with(line, current.slice(1)),
-		cursor: { line, column: Math.max(0, column - 1) },
-	};
+	return shiftLines(
+		state,
+		(text) => (parseIndent(text).indent === 0 ? text : text.slice(1)),
+		(shifted, column) => snapToBoundary(shifted, Math.max(0, column - 1)),
+	);
 }

@@ -23,6 +23,11 @@ type EditorLineProps = {
 	readonly caretColumn: number | null;
 	/** 日本語入力などで変換中の文字列。変換中でなければ null。 */
 	readonly composing: string | null;
+	/** この行の中で選択されている範囲(文字位置)。選択にかかっていなければ null。 */
+	readonly selectionStart?: number | null;
+	readonly selectionEnd?: number | null;
+	/** 選択がこの行の改行を越えて、次の行へ続いているか。 */
+	readonly selectsLineBreak?: boolean;
 };
 
 /** 太字の段階(* の数)として見た目に反映する上限。 */
@@ -42,7 +47,18 @@ type RenderContext = {
 	readonly caret: ReactNode;
 	/** この行を編集中か。編集中は記法の記号も見せ、リンクや画像を実体にしない。 */
 	readonly editing: boolean;
+	/** この行の中で選択されている範囲。選択にかかっていなければ null。 */
+	readonly selection: Span | null;
+	/** 選択が次の行へ続いていることを示す、行末の印。続いていなければ null。 */
+	readonly lineBreak: ReactNode;
 };
+
+/** span の全体が選択されていれば、クラス名に選択の印を足す。 */
+function marked(ctx: RenderContext, span: Span, className: string): string {
+	const { selection } = ctx;
+	const selected = selection !== null && span.start >= selection.start && span.end <= selection.end;
+	return selected ? `${className} selected` : className;
+}
 
 /** 画面に並べる1文字ぶんの要素。位置は、行の生のテキストでの位置。 */
 type Piece = { readonly text: string; readonly start: number; readonly end: number };
@@ -71,7 +87,11 @@ function chars(ctx: RenderContext, span: Span, className = "char"): ReactNode[] 
 	return pieces(ctx, span).map((piece) => (
 		<Fragment key={piece.start}>
 			{piece.start === ctx.caretColumn && ctx.caret}
-			<span className={className} data-column={piece.start} data-end={piece.end}>
+			<span
+				className={marked(ctx, piece, className)}
+				data-column={piece.start}
+				data-end={piece.end}
+			>
 				{piece.text}
 			</span>
 		</Fragment>
@@ -84,7 +104,7 @@ function indents(ctx: RenderContext, indent: number, bullet: boolean): ReactNode
 		<Fragment key={piece.start}>
 			{piece.start === ctx.caretColumn && ctx.caret}
 			<span
-				className="indent"
+				className={marked(ctx, piece, "indent")}
 				data-bullet={bullet && piece.end === indent ? "" : undefined}
 				data-column={piece.start}
 				data-end={piece.end}
@@ -153,7 +173,7 @@ function image(ctx: RenderContext, node: NodeOf<"image">): ReactNode {
 	const element = (
 		// 画像の内容は分からない。リンク付きならリンク先を代替テキストにし、なければ空にする。
 		<img
-			className="image"
+			className={marked(ctx, node, "image")}
 			src={node.src}
 			alt={node.link ?? ""}
 			loading="lazy"
@@ -168,7 +188,7 @@ function image(ctx: RenderContext, node: NodeOf<"image">): ReactNode {
 function icon(ctx: RenderContext, node: NodeOf<"icon">): ReactNode {
 	if (ctx.editing) return chars(ctx, node);
 	return (
-		<span className="icon" title={node.name} {...atomPosition(node)}>
+		<span className={marked(ctx, node, "icon")} title={node.name} {...atomPosition(node)}>
 			{node.name}
 			{node.count > 1 && `×${node.count}`}
 		</span>
@@ -231,6 +251,8 @@ function tableCell(ctx: RenderContext, cell: TableCell): ReactNode {
 				<span className="cell-text">
 					{renderNodes(ctx, cell.nodes)}
 					{ctx.caretColumn === content.end && ctx.caret}
+					{/* テーブルの行では、行末の印を最後のセルの中に置く(行の直下に置くと列が1つ増えてしまう)。 */}
+					{content.end === ctx.text.length && ctx.lineBreak}
 				</span>
 				<span className="cell-fill" data-column={content.end} data-end={content.end} />
 			</span>
@@ -272,6 +294,9 @@ export const EditorLine = memo(function EditorLine({
 	blockIndent,
 	caretColumn,
 	composing,
+	selectionStart = null,
+	selectionEnd = null,
+	selectsLineBreak = false,
 }: EditorLineProps) {
 	const parsed = parseLine(text, { kind, blockIndent });
 	const style = { "--indent": parsed.indent } as CSSProperties;
@@ -286,7 +311,20 @@ export const EditorLine = memo(function EditorLine({
 			<span className="caret" data-testid="caret" />
 		</>
 	);
-	const ctx: RenderContext = { text, caretColumn, caret, editing: caretColumn !== null };
+	const selection =
+		selectionStart === null || selectionEnd === null
+			? null
+			: { start: selectionStart, end: selectionEnd };
+	// 選択が次の行へ続いていることを、行末の印で示す(空行でも選択されていると分かる)。
+	const lineBreak = selectsLineBreak ? <span className="line-break selected" /> : null;
+	const ctx: RenderContext = {
+		text,
+		caretColumn,
+		caret,
+		editing: caretColumn !== null,
+		selection,
+		lineBreak,
+	};
 	const isRow = parsed.kind === "table-row";
 	// コードとテーブルの行は箇条書きではないので、印を付けない。
 	const indentSpans = indents(ctx, parsed.indent, !isRow && parsed.kind !== "code-body");
@@ -305,6 +343,7 @@ export const EditorLine = memo(function EditorLine({
 			{lineBody(ctx, parsed)}
 			{/* テーブルの行では、行末のカーソルは最後のセルが描画する。 */}
 			{!isRow && caretColumn === text.length && caret}
+			{!isRow && lineBreak}
 		</div>
 	);
 });

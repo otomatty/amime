@@ -31,6 +31,22 @@ export function columnInCell(firstVisible: CharBox, cell: Span, clientX: number)
 	return clientX < firstVisible.left ? cell.start : cell.end;
 }
 
+type Row = { readonly top: number; readonly bottom: number };
+
+/** 押した高さに最も近い行の番号。同じ近さなら後ろの行。行がなければ -1。 */
+export function nearestRow(rows: readonly Row[], clientY: number): number {
+	let nearest = -1;
+	let shortest = Number.POSITIVE_INFINITY;
+	rows.forEach((row, index) => {
+		const distance = Math.max(row.top - clientY, clientY - row.bottom, 0);
+		if (distance <= shortest) {
+			nearest = index;
+			shortest = distance;
+		}
+	});
+	return nearest;
+}
+
 /** 「行末」を表す文字位置。setCursor が実際の行の長さに収める。 */
 export const LINE_END = Number.MAX_SAFE_INTEGER;
 
@@ -87,10 +103,35 @@ function measure(element: Element): CharBox {
 	};
 }
 
-/** 押された要素と位置から、カーソルの移動先を求める。 */
-export function cursorFromPoint(target: Element, clientX: number, clientY: number): Cursor {
-	const line = target.closest("[data-line]");
-	if (!line) return { line: LINE_END, column: LINE_END };
+const DOCUMENT_START: Cursor = { line: 0, column: 0 };
+const DOCUMENT_END: Cursor = { line: LINE_END, column: LINE_END };
+
+/**
+ * 行のない場所(テーブルの右の余白、編集欄の外など)を押したときに、位置を決めるのに使う行を探す。
+ * すべての行より上なら文書の先頭、下なら文書の末尾。そのあいだなら、押した高さに最も近い行。
+ */
+function lineNear(root: Element | null, clientY: number): Element | Cursor {
+	const lines = root ? [...root.querySelectorAll("[data-line]")] : [];
+	const rows = lines.map((line) => line.getBoundingClientRect());
+	const first = rows[0];
+	const last = rows.at(-1);
+	if (!first || !last || clientY >= last.bottom) return DOCUMENT_END;
+	if (clientY < first.top) return DOCUMENT_START;
+	return lines[nearestRow(rows, clientY)] ?? DOCUMENT_END;
+}
+
+/**
+ * 押された要素と位置から、カーソルの移動先を求める。
+ * root は編集欄の要素。行のない場所を押したときに、近くの行を探すのに使う。
+ */
+export function cursorFromPoint(
+	target: Element,
+	clientX: number,
+	clientY: number,
+	root: Element | null = null,
+): Cursor {
+	const line = target.closest("[data-line]") ?? lineNear(root, clientY);
+	if (!(line instanceof Element)) return line;
 	const lineIndex = Number(line.getAttribute("data-line"));
 
 	const char = target.closest("[data-column]");
