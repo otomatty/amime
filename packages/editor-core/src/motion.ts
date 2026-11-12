@@ -1,6 +1,6 @@
 import { invariant } from "@amime/shared";
 import { nextBoundary, previousBoundary, snapToBoundary } from "./graphemes.ts";
-import { lineAtCursor, selectionRange } from "./state.ts";
+import { lineAt, lineAtCursor, selectionRange } from "./state.ts";
 import type { Cursor, EditorState } from "./types.ts";
 
 const withCursor = (state: EditorState, cursor: Cursor): EditorState => ({
@@ -57,6 +57,15 @@ export function moveToLineStart(state: EditorState): EditorState {
 
 export function moveToLineEnd(state: EditorState): EditorState {
 	return withCursor(state, { line: state.cursor.line, column: lineAtCursor(state).length });
+}
+
+export function moveToDocumentStart(state: EditorState): EditorState {
+	return withCursor(state, { line: 0, column: 0 });
+}
+
+export function moveToDocumentEnd(state: EditorState): EditorState {
+	const line = state.lines.length - 1;
+	return withCursor(state, { line, column: lineAt(state.lines, line).length });
 }
 
 /** 指定した位置へカーソルを移す。範囲外や文字の途中の指定は、有効な位置に寄せる。 */

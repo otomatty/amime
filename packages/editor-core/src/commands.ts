@@ -1,6 +1,13 @@
 import { parseIndent } from "@amime/parser";
 import { ceilToBoundary, nextBoundary, previousBoundary, snapToBoundary } from "./graphemes.ts";
-import { lineAt, lineAtCursor, selectionRange, withSelection } from "./state.ts";
+import {
+	type LineRange,
+	lineAt,
+	lineAtCursor,
+	selectionRange,
+	targetLines,
+	withSelection,
+} from "./state.ts";
 import type { Cursor, EditorState } from "./types.ts";
 
 const LINE_BREAK = /\r\n?/g;
@@ -128,22 +135,15 @@ export function deleteForward(state: EditorState): EditorState {
 }
 
 /**
- * インデントを変える対象の行に、shift を適用する。
- * 対象は、選択していなければカーソルのある行、選択していれば選択にかかるすべての行。
- * 選択が行頭で終わっているときは、その行を対象にしない(その行の文字は1つも選択されていない)。
+ * 指定した範囲の行に shift を適用する。
  * カーソルと選択の始点は、moveColumn で行の動きに合わせてずらす。
  */
 function shiftLines(
 	state: EditorState,
+	{ first, last }: LineRange,
 	shift: (text: string) => string,
 	moveColumn: (shifted: string, column: number) => number,
 ): EditorState {
-	const range = selectionRange(state) ?? { start: state.cursor, end: state.cursor };
-	const first = range.start.line;
-	const last =
-		range.end.column === 0 && range.end.line > first ? range.end.line - 1 : range.end.line;
-	lineAt(state.lines, last);
-
 	const lines = state.lines.map((text, index) =>
 		index < first || index > last ? text : shift(text),
 	);
@@ -157,21 +157,33 @@ function shiftLines(
 	return withSelection(lines, move(state.cursor), state.anchor && move(state.anchor));
 }
 
-/** カーソルのある行(選択しているときは、選択にかかるすべての行)を1段深くする。 */
-export function indentLine(state: EditorState): EditorState {
+/** 指定した範囲の行を1段深くする。 */
+export function indentLines(state: EditorState, range: LineRange): EditorState {
 	return shiftLines(
 		state,
+		range,
 		(text) => ` ${text}`,
 		// 行頭が結合文字だと、足した空白と1文字に結合する。その場合は結合した文字の後ろに置く。
 		(shifted, column) => ceilToBoundary(shifted, column + 1),
 	);
 }
 
-/** カーソルのある行(選択しているときは、選択にかかるすべての行)を1段浅くする。インデントのない行はそのまま。 */
-export function outdentLine(state: EditorState): EditorState {
+/** 指定した範囲の行を1段浅くする。インデントのない行はそのまま。 */
+export function outdentLines(state: EditorState, range: LineRange): EditorState {
 	return shiftLines(
 		state,
+		range,
 		(text) => (parseIndent(text).indent === 0 ? text : text.slice(1)),
 		(shifted, column) => snapToBoundary(shifted, Math.max(0, column - 1)),
 	);
+}
+
+/** カーソルのある行(選択しているときは、選択にかかるすべての行)を1段深くする。 */
+export function indentLine(state: EditorState): EditorState {
+	return indentLines(state, targetLines(state));
+}
+
+/** カーソルのある行(選択しているときは、選択にかかるすべての行)を1段浅くする。インデントのない行はそのまま。 */
+export function outdentLine(state: EditorState): EditorState {
+	return outdentLines(state, targetLines(state));
 }

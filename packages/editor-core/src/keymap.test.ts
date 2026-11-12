@@ -61,11 +61,120 @@ describe("bindingForKey", () => {
 	});
 
 	it.each(["ctrl", "alt", "meta"] as const)(
-		"%s との組み合わせはまだ扱わず、ブラウザに任せる",
+		"%s との組み合わせで割り当てのないキーは扱わず、ブラウザに任せる",
 		(modifier) => {
-			expect(handleKey(base, key("ArrowLeft", { [modifier]: true }))).toBeNull();
+			expect(handleKey(base, key("Enter", { [modifier]: true }))).toBeNull();
 		},
 	);
+
+	describe("アウトライン編集", () => {
+		const outline = state(["A", " a1", "B", " b1"], 2, 0);
+		const linesAfter = (input: KeyInput, context: KeyContext = {}) =>
+			commandForKey(input, context)?.(outline)?.lines;
+
+		it("Ctrl+上下は、カーソルのある行だけを動かす", () => {
+			expect(linesAfter(key("ArrowUp", { ctrl: true }))).toEqual(["A", "B", " a1", " b1"]);
+			expect(linesAfter(key("ArrowDown", { ctrl: true }))).toEqual(["A", " a1", " b1", "B"]);
+		});
+
+		it("Ctrl+左右は、カーソルのある行のインデントを変える", () => {
+			expect(linesAfter(key("ArrowRight", { ctrl: true }))).toEqual(["A", " a1", " B", " b1"]);
+			expect(commandForKey(key("ArrowLeft", { ctrl: true }))?.(state([" x"], 0, 1))).toEqual(
+				state(["x"], 0, 0),
+			);
+		});
+
+		it("Alt+上下は、行を子の行ごと動かす", () => {
+			expect(linesAfter(key("ArrowUp", { alt: true }))).toEqual(["B", " b1", "A", " a1"]);
+			expect(
+				commandForKey(key("ArrowDown", { alt: true }))?.(state(["A", " a1", "B"], 0, 0)).lines,
+			).toEqual(["B", "A", " a1"]);
+		});
+
+		it("Alt+左右は、行を子の行ごとインデントする", () => {
+			expect(linesAfter(key("ArrowRight", { alt: true }))).toEqual(["A", " a1", " B", "  b1"]);
+			expect(
+				commandForKey(key("ArrowLeft", { alt: true }))?.(state(["P", " A", "  a1"], 1, 0)).lines,
+			).toEqual(["P", "A", " a1"]);
+		});
+
+		it("Mac でも、行の操作には Control キーを使う", () => {
+			expect(linesAfter(key("ArrowUp", { ctrl: true }), { mac: true })).toEqual([
+				"A",
+				"B",
+				" a1",
+				" b1",
+			]);
+		});
+
+		it("Mac の Option+左右は割り当てない(単語単位の移動のために空けておく)", () => {
+			expect(bindingForKey(key("ArrowLeft", { alt: true }), { mac: true })).toBeNull();
+			expect(bindingForKey(key("ArrowRight", { alt: true }), { mac: true })).toBeNull();
+			expect(linesAfter(key("ArrowUp", { alt: true }), { mac: true })).toEqual([
+				"B",
+				" b1",
+				"A",
+				" a1",
+			]);
+		});
+
+		it.each([
+			["Ctrl+Shift+上", key("ArrowUp", { ctrl: true, shift: true })],
+			["Alt+Shift+上", key("ArrowUp", { alt: true, shift: true })],
+			["Ctrl+Alt+上", key("ArrowUp", { ctrl: true, alt: true })],
+			["Alt+Meta+上", key("ArrowUp", { alt: true, meta: true })],
+		])("%s のように、ほかの修飾キーが重なった組み合わせは扱わない", (_name, input) => {
+			expect(bindingForKey(input)).toBeNull();
+			expect(bindingForKey(input, { mac: true })).toBeNull();
+		});
+
+		it("取り消しの単位は、ほかの編集とまとめない", () => {
+			expect(bindingForKey(key("ArrowUp", { alt: true }))).toMatchObject({
+				type: "command",
+				group: null,
+			});
+		});
+	});
+
+	describe("文書の先頭・末尾への移動", () => {
+		const middle = state(["ab", "cd", "ef"], 1, 1);
+
+		it("Ctrl+Home / Ctrl+End で、文書の先頭と末尾へ動く", () => {
+			expect(handleKey(middle, key("Home", { ctrl: true }))).toEqual(
+				state(["ab", "cd", "ef"], 0, 0),
+			);
+			expect(handleKey(middle, key("End", { ctrl: true }))).toEqual(
+				state(["ab", "cd", "ef"], 2, 2),
+			);
+		});
+
+		it("Shift を足すと、そこまでを選択する", () => {
+			expect(handleKey(middle, key("End", { ctrl: true, shift: true }))).toEqual({
+				lines: ["ab", "cd", "ef"],
+				anchor: { line: 1, column: 1 },
+				cursor: { line: 2, column: 2 },
+			});
+		});
+
+		it("Mac では、Command+矢印で文書や行の端へ動く", () => {
+			const mac = { mac: true };
+			const cursorAfter = (name: string) =>
+				commandForKey(key(name, { meta: true }), mac)?.(middle).cursor;
+
+			expect(cursorAfter("ArrowUp")).toEqual({ line: 0, column: 0 });
+			expect(cursorAfter("ArrowDown")).toEqual({ line: 2, column: 2 });
+			expect(cursorAfter("ArrowLeft")).toEqual({ line: 1, column: 0 });
+			expect(cursorAfter("ArrowRight")).toEqual({ line: 1, column: 2 });
+			expect(
+				commandForKey(key("ArrowUp", { meta: true, shift: true }), mac)?.(middle).anchor,
+			).toEqual({ line: 1, column: 1 });
+		});
+
+		it("Mac では Ctrl+Home を扱わず、Mac 以外では Meta+矢印を扱わない", () => {
+			expect(bindingForKey(key("Home", { ctrl: true }), { mac: true })).toBeNull();
+			expect(bindingForKey(key("ArrowUp", { meta: true }))).toBeNull();
+		});
+	});
 
 	describe("テーブルの行の中", () => {
 		const row = state(["t", " ab"], 1, 2);
