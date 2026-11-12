@@ -76,20 +76,68 @@ describe("restorePage", () => {
 			{ inflight: commit("c1", update("a", "1")), changes: [update("b", "1")] },
 			{ inflight: commit("c2", update("a", "2")), changes: [update("b", "2")] },
 		]);
+		api.load.mockResolvedValueOnce({ version: 5, lines: [line("a", "2"), line("b", "B")] });
 
 		const result = await restorePage(api, pending);
 
 		expect(api.commit.mock.calls.map(([sent]) => sent.id)).toEqual(["c1", "c2"]);
-		expect(result.restored).toEqual([line("a", "A"), line("b", "2")]);
+		expect(result.restored).toEqual([line("a", "2"), line("b", "2")]);
 	});
 
-	it("サーバーに断られたコミットは飛ばして、残りを復元する", async () => {
+	it("古い記録のまだ送っていなかった変更が、新しい記録の送信中だったコミットを上書きしない", async () => {
+		// 古い記録の変更はまだ画面の上にしかないのに、新しい記録のコミットは先にサーバーに入る。
+		// そのまま載せると、古い変更が新しい変更に勝ってしまう。
+		const { api, pending } = setup([
+			{ inflight: null, changes: [update("a", "古い"), update("b", "B2")] },
+			{ inflight: commit("c2", update("a", "新しい")), changes: [] },
+		]);
+		api.load.mockResolvedValueOnce({ version: 4, lines: [line("a", "新しい"), line("b", "B")] });
+
+		expect(await restorePage(api, pending)).toMatchObject({
+			restored: [line("a", "新しい"), line("b", "B2")],
+			noticed: true,
+		});
+	});
+
+	it("新しい記録のコミットが以前にサーバーに入っていたものなら、古い記録のまだ送っていなかった変更が後になる", async () => {
+		// 以前に入っていたコミットを画面に載せ直すと、そのあとに他の人がした変更を上書きしてしまう。
+		const { api, pending } = setup([
+			{ inflight: null, changes: [update("a", "古い")] },
+			{ inflight: commit("c2", update("a", "新しい"), update("b", "B2")), changes: [] },
+		]);
+		api.commit.mockResolvedValueOnce({ version: 9, applied: [], duplicate: true });
+		api.load.mockResolvedValueOnce({
+			version: 9,
+			lines: [line("a", "新しい"), line("b", "他の人")],
+		});
+
+		expect((await restorePage(api, pending)).restored).toEqual([
+			line("a", "古い"),
+			line("b", "他の人"),
+		]);
+	});
+
+	it("載せた結果が読み込んだページと同じなら、載せ直す変更はない", async () => {
+		const { api, pending } = setup([
+			{ inflight: null, changes: [update("a", "古い")] },
+			{ inflight: commit("c2", update("a", "新しい")), changes: [] },
+		]);
+		api.load.mockResolvedValueOnce({ version: 4, lines: [line("a", "新しい"), line("b", "B")] });
+
+		expect(await restorePage(api, pending)).toMatchObject({ restored: null, noticed: true });
+	});
+
+	it("サーバーに断られたコミットは、まだ送っていなかった変更として載せる", async () => {
+		// 捨てると、書いたものが黙って消える。載せておけば、画面に残り、送れないことが表示される。
 		const { api, pending } = setup([
 			{ inflight: commit("c1", update("a", "長すぎる")), changes: [update("b", "B2")] },
 		]);
 		api.commit.mockRejectedValueOnce(new PageApiError("rejected"));
 
-		expect((await restorePage(api, pending)).restored).toEqual([line("a", "A"), line("b", "B2")]);
+		expect(await restorePage(api, pending)).toMatchObject({
+			restored: [line("a", "長すぎる"), line("b", "B2")],
+			noticed: true,
+		});
 	});
 
 	it("送り直しに失敗したら(通信できない)、読み込みの失敗にする", async () => {
