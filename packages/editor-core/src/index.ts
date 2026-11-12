@@ -1,6 +1,14 @@
 export { deleteSelection, insertText } from "./commands.ts";
 export { type Grapheme, segmentGraphemes } from "./graphemes.ts";
-export { applyEdit, createHistory, type EditGroup, type History, redo, undo } from "./history.ts";
+export {
+	applyEdit,
+	createHistory,
+	type EditGroup,
+	type History,
+	redo,
+	replaceLines,
+	undo,
+} from "./history.ts";
 export {
 	bindingForKey,
 	type Command,

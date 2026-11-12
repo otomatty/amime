@@ -143,6 +143,8 @@ describe("Page", () => {
 		stubFetch(() => json(saved));
 		render(<Page name="買い物" />);
 		await waitFor(() => expect(lines()).toEqual(["買い物"]));
+		// 接続は、編集欄を表示したあとで始まる。
+		await waitFor(() => expect(sockets).toHaveLength(1));
 
 		const commit = {
 			type: "commit",
@@ -175,6 +177,7 @@ describe("Page", () => {
 		const fetchMock = stubFetch(() => json(saved));
 		render(<Page name="買い物" />);
 		await waitFor(() => expect(lines()).toEqual(["買い物"]));
+		await waitFor(() => expect(sockets).toHaveLength(1));
 		const insert = (version: number, id: string, after: string) => ({
 			type: "commit",
 			version,

@@ -111,6 +111,9 @@ importers:
       '@amime/shared':
         specifier: workspace:*
         version: link:../shared
+      '@amime/sync':
+        specifier: workspace:*
+        version: link:../sync
 
   packages/parser: {}
 
