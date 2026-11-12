@@ -389,6 +389,26 @@ describe("EditorLine", () => {
 			expect(renderSelected("ab", { start: 1, end: 2 }).querySelector(".line-break")).toBeNull();
 		});
 
+		it("テーブルの行では、改行の印を最後のセルの中に表示する", () => {
+			render(
+				<EditorLine
+					index={2}
+					text={" a\tb"}
+					kind="table-row"
+					blockIndent={0}
+					caretColumn={null}
+					composing={null}
+					selectionStart={4}
+					selectionEnd={4}
+					selectsLineBreak
+				/>,
+			);
+
+			const cells = line().querySelectorAll(".cell-text");
+			expect(cells[1]?.querySelector(".line-break.selected")).not.toBeNull();
+			expect(line().querySelectorAll(".line-break")).toHaveLength(1);
+		});
+
 		it("空行でも、選択が次の行へ続くなら改行の印を表示する", () => {
 			expect(
 				renderSelected("", { start: 0, end: 0, lineBreak: true }).querySelector(".line-break"),

@@ -15,6 +15,8 @@ import type { EditorState } from "./types.ts";
 /** キー入力のうち、割り当ての判断に使う情報。値は KeyboardEvent と同じ意味。 */
 export type KeyInput = {
 	readonly key: string;
+	/** キーの位置(KeyboardEvent.code)。英字にならない配列で、ショートカットの英字を求めるのに使う。 */
+	readonly code?: string;
 	readonly shift: boolean;
 	readonly ctrl: boolean;
 	readonly alt: boolean;
@@ -80,9 +82,22 @@ const SHIFT_KEYS = new Map<string, KeyBinding>([
 	["End", run(extendSelection(moveToLineEnd))],
 ]);
 
+const LATIN_LETTER = /^[a-z]$/i;
+const LETTER_KEY_CODE = /^Key([A-Z])$/;
+
+/**
+ * ショートカットの判定に使う英字(小文字)を返す。英字のキーでなければ null。
+ * キーの文字が英字ならそれを使う。英字にならない配列(キリル文字など)では、
+ * キーの位置から英字を求める。Ctrl+Z などが、配列を切り替えなくても働く。
+ */
+export function shortcutLetter(input: KeyInput): string | null {
+	if (LATIN_LETTER.test(input.key)) return input.key.toLowerCase();
+	return LETTER_KEY_CODE.exec(input.code ?? "")?.[1]?.toLowerCase() ?? null;
+}
+
 /** Ctrl(Mac では Command)との組み合わせ。コピー・切り取り・貼り付けは、ここでは扱わずブラウザに任せる。 */
 function modifiedBinding(input: KeyInput, mac: boolean): KeyBinding | null {
-	const key = input.key.toLowerCase();
+	const key = shortcutLetter(input);
 	if (key === "z") return input.shift ? REDO : UNDO;
 	if (input.shift) return null;
 	if (key === "y" && !mac) return REDO;
@@ -90,12 +105,12 @@ function modifiedBinding(input: KeyInput, mac: boolean): KeyBinding | null {
 	return null;
 }
 
-/** テーブルの行での Tab。複数行を選択しているときは、ほかの行と同じくインデントにする。 */
-const tabInTableRow: Command = (state) => {
-	const range = selectionRange(state);
-	const spansLines = range !== null && range.start.line !== range.end.line;
-	return spansLines ? indentLine(state) : insertText(state, "\t");
-};
+/**
+ * テーブルの行での Tab。選択していなければ、セルの区切り(タブ文字)を入れる。
+ * 選択しているときは、ほかの行と同じく選択した行のインデントにする(選択した文字をタブで置き換えない)。
+ */
+const tabInTableRow: Command = (state) =>
+	selectionRange(state) === null ? insertText(state, "\t") : indentLine(state);
 
 /** テーブルの行の中でだけ働きが変わるキー。 */
 function tableRowBinding(input: KeyInput, tableRowIndent: number): KeyBinding | null {

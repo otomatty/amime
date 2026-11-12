@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { type CharBox, columnFromPoint, columnInCell, columnOnRow, LINE_END } from "./hit-test.ts";
+import {
+	type CharBox,
+	columnFromPoint,
+	columnInCell,
+	columnOnRow,
+	LINE_END,
+	nearestRow,
+} from "./hit-test.ts";
 
 describe("columnFromPoint", () => {
 	const char = { start: 3, end: 5, left: 100, width: 20, top: 0, height: 20 };
@@ -38,6 +45,36 @@ describe("columnInCell", () => {
 	it("それ以外の余白(文字の下や右)を押したら、セルの末尾", () => {
 		expect(columnInCell(first, cell, 100)).toBe(7);
 		expect(columnInCell(first, cell, 300)).toBe(7);
+	});
+});
+
+describe("nearestRow", () => {
+	const rows = [
+		{ top: 0, bottom: 20 },
+		{ top: 20, bottom: 40 },
+		{ top: 60, bottom: 80 },
+	];
+
+	it("高さが行の中にあれば、その行", () => {
+		expect(nearestRow(rows, 25)).toBe(1);
+	});
+
+	it("行と行のあいだなら、近いほうの行", () => {
+		expect(nearestRow(rows, 45)).toBe(1);
+		expect(nearestRow(rows, 55)).toBe(2);
+	});
+
+	it("すべての行より上なら最初の行、下なら最後の行", () => {
+		expect(nearestRow(rows, -10)).toBe(0);
+		expect(nearestRow(rows, 500)).toBe(2);
+	});
+
+	it("同じ近さなら、後ろの行", () => {
+		expect(nearestRow(rows, 50)).toBe(2);
+	});
+
+	it("行がなければ -1", () => {
+		expect(nearestRow([], 10)).toBe(-1);
 	});
 });
 

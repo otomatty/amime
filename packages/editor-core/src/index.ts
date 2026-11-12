@@ -7,6 +7,7 @@ export {
 	type KeyBinding,
 	type KeyContext,
 	type KeyInput,
+	shortcutLetter,
 } from "./keymap.ts";
 export { setCursor } from "./motion.ts";
 export { selectedText, selectTo } from "./selection.ts";

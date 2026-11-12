@@ -49,6 +49,8 @@ type RenderContext = {
 	readonly editing: boolean;
 	/** この行の中で選択されている範囲。選択にかかっていなければ null。 */
 	readonly selection: Span | null;
+	/** 選択が次の行へ続いていることを示す、行末の印。続いていなければ null。 */
+	readonly lineBreak: ReactNode;
 };
 
 /** span の全体が選択されていれば、クラス名に選択の印を足す。 */
@@ -249,6 +251,8 @@ function tableCell(ctx: RenderContext, cell: TableCell): ReactNode {
 				<span className="cell-text">
 					{renderNodes(ctx, cell.nodes)}
 					{ctx.caretColumn === content.end && ctx.caret}
+					{/* テーブルの行では、行末の印を最後のセルの中に置く(行の直下に置くと列が1つ増えてしまう)。 */}
+					{content.end === ctx.text.length && ctx.lineBreak}
 				</span>
 				<span className="cell-fill" data-column={content.end} data-end={content.end} />
 			</span>
@@ -311,7 +315,16 @@ export const EditorLine = memo(function EditorLine({
 		selectionStart === null || selectionEnd === null
 			? null
 			: { start: selectionStart, end: selectionEnd };
-	const ctx: RenderContext = { text, caretColumn, caret, editing: caretColumn !== null, selection };
+	// 選択が次の行へ続いていることを、行末の印で示す(空行でも選択されていると分かる)。
+	const lineBreak = selectsLineBreak ? <span className="line-break selected" /> : null;
+	const ctx: RenderContext = {
+		text,
+		caretColumn,
+		caret,
+		editing: caretColumn !== null,
+		selection,
+		lineBreak,
+	};
 	const isRow = parsed.kind === "table-row";
 	// コードとテーブルの行は箇条書きではないので、印を付けない。
 	const indentSpans = indents(ctx, parsed.indent, !isRow && parsed.kind !== "code-body");
@@ -330,8 +343,7 @@ export const EditorLine = memo(function EditorLine({
 			{lineBody(ctx, parsed)}
 			{/* テーブルの行では、行末のカーソルは最後のセルが描画する。 */}
 			{!isRow && caretColumn === text.length && caret}
-			{/* 選択が次の行へ続いていることを、行末の印で示す(空行でも選択されていると分かる)。 */}
-			{!isRow && selectsLineBreak && <span className="line-break selected" />}
+			{!isRow && lineBreak}
 		</div>
 	);
 });

@@ -9,11 +9,13 @@ import {
 	type EditorState,
 	type History,
 	insertText,
+	type KeyInput,
 	redo,
 	selectedText,
 	selectionRange,
 	selectTo,
 	setCursor,
+	shortcutLetter,
 	undo,
 } from "@amime/editor-core";
 import { classifyLines } from "@amime/parser";
@@ -67,6 +69,15 @@ type Action =
 	  }
 	| { readonly type: "undo" }
 	| { readonly type: "redo" };
+
+const keyInput = (event: KeyboardEvent): KeyInput => ({
+	key: event.key,
+	code: event.code,
+	shift: event.shiftKey,
+	ctrl: event.ctrlKey,
+	alt: event.altKey,
+	meta: event.metaKey,
+});
 
 function reducer(history: History, action: Action): History {
 	switch (action.type) {
@@ -145,10 +156,10 @@ export function Editor({ initialLines }: EditorProps) {
 	};
 
 	const handleCompositionStart = () => {
+		// 範囲を選択していても、ここでは消さない。確定したときに、選択した範囲との置き換えを
+		// 1回の編集として行う(変換を取り消せば何も変わらず、取り消しも1回で元に戻る)。
 		isComposing.current = true;
 		setComposing("");
-		// 変換中の文字列は選択した範囲と置き換わるものなので、先に消しておく。
-		run(deleteSelection);
 	};
 
 	const handleCompositionUpdate = (event: CompositionEvent) => {
@@ -168,8 +179,9 @@ export function Editor({ initialLines }: EditorProps) {
 	 */
 	const prepareClipboard = (event: KeyboardEvent): boolean => {
 		const modifier = IS_MAC ? event.metaKey : event.ctrlKey;
-		const key = event.key.toLowerCase();
-		if (!modifier || (key !== "c" && key !== "x")) return false;
+		const letter = shortcutLetter(keyInput(event));
+		// AltGr(Ctrl+Alt として届く)との組み合わせは文字の入力なので、対象にしない。
+		if (!modifier || event.altKey || (letter !== "c" && letter !== "x")) return false;
 		const text = selectedText(state);
 		const input = inputRef.current;
 		if (text !== "" && input) {
@@ -196,16 +208,10 @@ export function Editor({ initialLines }: EditorProps) {
 		const composingNow =
 			isComposing.current || event.nativeEvent.isComposing || event.keyCode === KEY_CODE_COMPOSING;
 		if (composingNow || prepareClipboard(event)) return;
-		const binding = bindingForKey(
-			{
-				key: event.key,
-				shift: event.shiftKey,
-				ctrl: event.ctrlKey,
-				alt: event.altKey,
-				meta: event.metaKey,
-			},
-			{ tableRowIndent: tableRowIndentAt(state.cursor.line), mac: IS_MAC },
-		);
+		const binding = bindingForKey(keyInput(event), {
+			tableRowIndent: tableRowIndentAt(state.cursor.line),
+			mac: IS_MAC,
+		});
 		if (!binding) return;
 		event.preventDefault();
 		if (binding.type === "command") run(binding.command, binding.group);
@@ -229,11 +235,8 @@ export function Editor({ initialLines }: EditorProps) {
 
 	/** 画面上の位置から、カーソルの移動先を求める。 */
 	const cursorAt = (target: EventTarget | null, clientX: number, clientY: number): Cursor => {
-		const root = rootRef.current;
-		// 編集欄より上までドラッグしたら、文書の先頭まで。
-		if (root && clientY < root.getBoundingClientRect().top) return { line: 0, column: 0 };
 		if (!(target instanceof Element)) return { line: LINE_END, column: LINE_END };
-		return cursorFromPoint(target, clientX, clientY);
+		return cursorFromPoint(target, clientX, clientY, rootRef.current);
 	};
 
 	/** ボタンを押しているあいだ、マウスの位置まで選択を広げる。編集欄の外へ出ても続ける。 */

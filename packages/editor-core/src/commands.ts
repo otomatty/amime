@@ -13,7 +13,7 @@ const LINE_BREAK = /\r\n?/g;
 export function insertText(selected: EditorState, text: string): EditorState {
 	lineAtCursor(selected);
 	if (text === "") return selected;
-	const state = deleteSelection(selected);
+	const state = cutSelection(selected);
 	const { line, column } = state.cursor;
 	const current = lineAtCursor(state);
 
@@ -37,7 +37,7 @@ export function splitLine(
 	selected: EditorState,
 	maxInherited = Number.POSITIVE_INFINITY,
 ): EditorState {
-	const state = deleteSelection(selected);
+	const state = cutSelection(selected);
 	const { line, column } = state.cursor;
 	const current = lineAtCursor(state);
 	const head = current.slice(0, column);
@@ -68,14 +68,33 @@ function removeBetween(
 	};
 }
 
-/** 選択した範囲を消す。選択していなければ何もしない。 */
-export function deleteSelection(state: EditorState): EditorState {
+/**
+ * 選択した範囲を取り除き、カーソルをその継ぎ目に置く。選択していなければ何もしない。
+ * 継ぎ目の両側が1文字に結合しても、カーソルは寄せない。続けてその位置に文字を入れる操作
+ * (置き換え、改行)のためのもので、寄せると入れる位置がずれてしまう。
+ */
+function cutSelection(state: EditorState): EditorState {
 	const range = selectionRange(state);
 	if (range === null) return state;
 	const { start, end } = range;
 	const head = lineAt(state.lines, start.line).slice(0, start.column);
 	const tail = lineAt(state.lines, end.line).slice(end.column);
-	return removeBetween(state, start.line, end.line - start.line + 1, head, tail);
+	return {
+		lines: state.lines.toSpliced(start.line, end.line - start.line + 1, head + tail),
+		cursor: start,
+	};
+}
+
+/** 選択した範囲を消す。選択していなければ何もしない。 */
+export function deleteSelection(state: EditorState): EditorState {
+	const cut = cutSelection(state);
+	if (cut === state) return state;
+	// 消した継ぎ目の両側が1文字に結合することがある。その場合は、結合した文字の手前に置く。
+	const { line, column } = cut.cursor;
+	return {
+		lines: cut.lines,
+		cursor: { line, column: snapToBoundary(lineAt(cut.lines, line), column) },
+	};
 }
 
 /** カーソルの直前の1文字を消す。行頭では前の行とつなげる。選択しているときは、選択した範囲だけを消す。 */

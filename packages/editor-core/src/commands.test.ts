@@ -215,6 +215,16 @@ describe("範囲を選択しているときの編集", () => {
 		);
 	});
 
+	it("選択を消すと前後の文字が結合する場合でも、入れた文字は選択のあった位置に入る", () => {
+		const J = "\u{1F1EF}";
+		const P = "\u{1F1F5}";
+
+		expect(insertText(selecting([`${J}x${P}`], [0, 2], [0, 3]), "X")).toEqual(
+			state([`${J}X${P}`], 0, 3),
+		);
+		expect(splitLine(selecting([`${J}x${P}`], [0, 2], [0, 3]))).toEqual(state([J, P], 1, 0));
+	});
+
 	it("空文字列を入れても、選択した範囲は消えない", () => {
 		const before = selecting(["abcd"], [0, 1], [0, 3]);
 		expect(insertText(before, "")).toBe(before);

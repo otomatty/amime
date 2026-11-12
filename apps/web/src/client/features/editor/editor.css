@@ -253,6 +253,12 @@ a.link:hover {
 	background: var(--color-selection);
 }
 
+/* 画像は背景の色が隠れるので、選択されていることを枠で示す。 */
+.image.selected {
+	outline: 3px solid var(--color-selection);
+	outline-offset: -3px;
+}
+
 /* 選択が次の行へ続いていることを示す、行末の印。 */
 .line-break {
 	display: inline-block;

@@ -493,6 +493,30 @@ test.describe("テーブルの端の扱い", () => {
 		);
 	});
 
+	test("テーブルの右の、行のない場所を押すと、文書の末尾ではなくその行の末尾にカーソルが入る", async ({
+		page,
+	}) => {
+		const editor = await page.getByTestId("editor").boundingBox();
+		const row = await lines(page).nth(TABLE_ROW_1).boundingBox();
+		if (!editor || !row) throw new Error("editor is not visible");
+
+		await page.mouse.click(editor.x + editor.width - 4, row.y + row.height / 2);
+		await page.keyboard.type("!");
+
+		await expect(lines(page).nth(TABLE_ROW_1)).toHaveAttribute("data-text", " 月\t火\t水!");
+	});
+
+	test("テーブルの行で文字を選択して Tab を押しても、選択した文字は消えずにインデントされる", async ({
+		page,
+	}) => {
+		await clickLineEnd(page, TABLE_ROW_1);
+		await page.keyboard.press("Shift+ArrowLeft");
+
+		await page.keyboard.press("Tab");
+
+		await expect(lines(page).nth(TABLE_ROW_1)).toHaveAttribute("data-text", "  月\t火\t水");
+	});
+
 	test("先頭のセルの頭で Tab を押すと、空の先頭セルができる", async ({ page }) => {
 		await clickLineEnd(page, TABLE_ROW_1);
 		await page.keyboard.press("Home");
@@ -588,9 +612,9 @@ test.describe("範囲選択・コピー・取り消し", () => {
 		await page.keyboard.press("Shift+Home");
 		expect(await selectedText(page)).toBe("はじめに");
 
-		await page.keyboard.press("Control+c");
+		await page.keyboard.press("ControlOrMeta+c");
 		await page.keyboard.press("End");
-		await page.keyboard.press("Control+v");
+		await page.keyboard.press("ControlOrMeta+v");
 
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめにはじめに");
 		expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("はじめに");
@@ -604,7 +628,7 @@ test.describe("範囲選択・コピー・取り消し", () => {
 		await page.keyboard.press("Shift+ArrowDown");
 		await page.keyboard.press("Shift+End");
 
-		await page.keyboard.press("Control+x");
+		await page.keyboard.press("ControlOrMeta+x");
 		expect((await lineTexts(page)).slice(1, 3)).toEqual([
 			"行頭に空白を入れると箇条書きになります",
 			"",
@@ -613,14 +637,14 @@ test.describe("範囲選択・コピー・取り消し", () => {
 
 		await clickLineEnd(page, 0);
 		await page.keyboard.press("Enter");
-		await page.keyboard.press("Control+v");
+		await page.keyboard.press("ControlOrMeta+v");
 		expect((await lineTexts(page)).slice(0, 3)).toEqual(["はじめに", " 1段目", "  2段目"]);
 	});
 
 	test("Ctrl+A ですべてを選択できる", async ({ page }) => {
 		await clickLineEnd(page, 0);
 
-		await page.keyboard.press("Control+a");
+		await page.keyboard.press("ControlOrMeta+a");
 		await page.keyboard.type("x");
 
 		expect(await lineTexts(page)).toEqual(["x"]);
@@ -645,14 +669,14 @@ test.describe("範囲選択・コピー・取り消し", () => {
 		await page.keyboard.press("Enter");
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめにabc");
 
-		await page.keyboard.press("Control+z");
+		await page.keyboard.press("ControlOrMeta+z");
 		expect((await lineTexts(page))[1]).toBe("行頭に空白を入れると箇条書きになります");
-		await page.keyboard.press("Control+z");
+		await page.keyboard.press("ControlOrMeta+z");
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
 
-		await page.keyboard.press("Control+Shift+z");
+		await page.keyboard.press("ControlOrMeta+Shift+z");
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめにabc");
-		await page.keyboard.press("Control+y");
+		await page.keyboard.press("ControlOrMeta+y");
 		expect((await lineTexts(page))[1]).toBe("");
 	});
 
@@ -662,7 +686,7 @@ test.describe("範囲選択・コピー・取り消し", () => {
 		await page.keyboard.type("x");
 		await expect(lines(page).first()).toHaveAttribute("data-text", "x");
 
-		await page.keyboard.press("Control+z");
+		await page.keyboard.press("ControlOrMeta+z");
 
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
 		expect(await selectedText(page)).toBe("はじめに");

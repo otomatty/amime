@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { bindingForKey, type Command, type KeyContext, type KeyInput } from "./keymap.ts";
+import {
+	bindingForKey,
+	type Command,
+	type KeyContext,
+	type KeyInput,
+	shortcutLetter,
+} from "./keymap.ts";
 import type { EditorState } from "./types.ts";
 
 const state = (lines: string[], line: number, column: number): EditorState => ({
@@ -133,6 +139,20 @@ describe("bindingForKey", () => {
 			});
 		});
 
+		it("テーブルの行で1行の中を選択しているときも、Tab はインデントになる(選択した文字を消さない)", () => {
+			const selection: EditorState = {
+				lines: ["t", " abc\tdef"],
+				anchor: { line: 1, column: 1 },
+				cursor: { line: 1, column: 4 },
+			};
+
+			expect(commandForKey(key("Tab"), { tableRowIndent: 1 })?.(selection)).toEqual({
+				lines: ["t", "  abc\tdef"],
+				anchor: { line: 1, column: 2 },
+				cursor: { line: 1, column: 5 },
+			});
+		});
+
 		it("テーブルの行でも、複数行を選択しているときの Tab はインデントになる", () => {
 			const selection: EditorState = {
 				lines: ["t", " a", " b"],
@@ -175,6 +195,37 @@ describe("bindingForKey", () => {
 		it("Control キーとの組み合わせは扱わない", () => {
 			expect(bindingForKey(key("z", { ctrl: true }), mac)).toBeNull();
 			expect(bindingForKey(key("a", { ctrl: true }), mac)).toBeNull();
+		});
+	});
+
+	describe("英字以外の配列(キーの文字が英字にならない配列)", () => {
+		it("キーの位置(code)から英字を求めて、割り当てを決める", () => {
+			expect(bindingForKey({ ...key("я", { ctrl: true }), code: "KeyZ" })).toEqual({
+				type: "undo",
+			});
+			expect(bindingForKey({ ...key("ф", { ctrl: true }), code: "KeyA" })?.type).toBe("command");
+		});
+
+		it("キーの文字が英字なら、位置ではなく文字で決める(配列を入れ替えている人のため)", () => {
+			expect(bindingForKey({ ...key("z", { ctrl: true }), code: "KeyY" })).toEqual({
+				type: "undo",
+			});
+		});
+
+		it("英字のキーでなければ、割り当てはない", () => {
+			expect(bindingForKey({ ...key("1", { ctrl: true }), code: "Digit1" })).toBeNull();
+			expect(bindingForKey(key("я", { ctrl: true }))).toBeNull();
+		});
+	});
+
+	describe("shortcutLetter", () => {
+		it.each([
+			["英字のキー", { ...key("C"), code: "KeyC" }, "c"],
+			["英字にならない配列の、C の位置のキー", { ...key("с"), code: "KeyC" }, "c"],
+			["英字ではないキー", { ...key("Enter"), code: "Enter" }, null],
+			["位置の分からないキー", key("с"), null],
+		])("%s", (_name, input, expected) => {
+			expect(shortcutLetter(input)).toBe(expected);
 		});
 	});
 

@@ -147,6 +147,22 @@ describe("Editor", () => {
 		});
 	});
 
+	describe("行のない場所を押したとき", () => {
+		it("編集欄の中で行のない場所(テーブルの右など)を押すと、文書の末尾ではなく、押した高さに近い行に入る", () => {
+			render(<Editor initialLines={["t", "ab", "cd"]} />);
+			const rows = screen.getAllByTestId("line");
+			// 仮想DOMでは位置を測れないので、2行目だけが押した高さにあることにする。
+			rows.forEach((row, index) => {
+				row.getBoundingClientRect = () =>
+					({ top: index * 20, bottom: index * 20 + 20, left: 0, width: 0, height: 20 }) as DOMRect;
+			});
+
+			fireEvent.mouseDown(screen.getByTestId("editor"), { clientY: 30 });
+
+			expect(caret()).toEqual({ line: 1, column: 2 });
+		});
+	});
+
 	describe("コードブロックとテーブル", () => {
 		const kindsOf = () =>
 			screen.getAllByTestId("line").map((element) => element.getAttribute("data-kind"));
@@ -293,15 +309,42 @@ describe("Editor", () => {
 			expect(selectedText()).toBe("");
 		});
 
-		it("選択したまま日本語入力を始めると、選択した範囲を先に消す", () => {
-			render(<Editor initialLines={["abcd"]} />);
-			clickChar(0, 1);
-			press("ArrowRight", { shiftKey: true });
-			press("ArrowRight", { shiftKey: true });
+		describe("選択したままの日本語入力", () => {
+			function selectAndCompose() {
+				render(<Editor initialLines={["abcd"]} />);
+				clickChar(0, 1);
+				press("ArrowRight", { shiftKey: true });
+				press("ArrowRight", { shiftKey: true });
+				fireEvent.compositionStart(input());
+				fireEvent.compositionUpdate(input(), { data: "にほ" });
+			}
 
-			fireEvent.compositionStart(input());
+			it("変換を始めただけでは、選択した範囲は消えない", () => {
+				selectAndCompose();
 
-			expect(lines()).toEqual(["ad"]);
+				expect(lines()).toEqual(["abcd"]);
+			});
+
+			it("変換を取り消すと、文書も選択も元のまま", () => {
+				selectAndCompose();
+
+				fireEvent.compositionEnd(input(), { data: "" });
+
+				expect(lines()).toEqual(["abcd"]);
+				expect(selectedText()).toBe("bc");
+			});
+
+			it("確定すると選択した範囲と置き換わり、1回の取り消しで選択した状態まで戻る", () => {
+				selectAndCompose();
+				type("日本");
+				fireEvent.compositionEnd(input(), { data: "日本" });
+				expect(lines()).toEqual(["a日本d"]);
+
+				press("z", { ctrlKey: true });
+
+				expect(lines()).toEqual(["abcd"]);
+				expect(selectedText()).toBe("bc");
+			});
 		});
 	});
 
@@ -345,6 +388,14 @@ describe("Editor", () => {
 
 			expect(clipboardData.setData).not.toHaveBeenCalled();
 			expect(lines()).toEqual(["ab"]);
+		});
+
+		it("キーの文字が英字にならない配列でも、C の位置のキーでコピーの準備をする", () => {
+			select();
+
+			press("с", { ctrlKey: true, code: "KeyC" });
+
+			expect(input().value).toBe("b\n [c]\nd");
 		});
 
 		it("Ctrl+C を押した時点で、入力欄に選択した文字列を入れて選択しておく(コピーの操作が確実に届くようにする)", () => {
