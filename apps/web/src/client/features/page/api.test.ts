@@ -1,4 +1,4 @@
-import type { Change, ClientId, LineId } from "@amime/sync";
+import type { ClientId, Commit, CommitId, LineId } from "@amime/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPageApi, pageSocketUrl } from "./api.ts";
 import { PageApiError } from "./page-api-error.ts";
@@ -76,18 +76,19 @@ describe("createPageApi", () => {
 	});
 
 	describe("commit", () => {
-		const changes: Change[] = [{ type: "delete", id: "a" as LineId }];
+		const changes = [{ type: "delete", id: "a" as LineId }] as const;
+		const commit: Commit = { id: "c1" as CommitId, changes };
 
 		it("変更をJSONで送り、結果を返す", async () => {
 			const fetchMock = stubFetch(json({ version: 3, applied: changes }));
 
-			expect(await api.commit(changes)).toEqual({ version: 3, applied: changes });
+			expect(await api.commit(commit)).toEqual({ version: 3, applied: changes });
 			expect(fetchMock).toHaveBeenCalledWith(
 				`/api/pages/${encodeURIComponent("買い物/メモ")}/commits`,
 				{
 					method: "POST",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ changes, client: "tab-1" }),
+					body: JSON.stringify({ id: "c1", changes, client: "tab-1" }),
 				},
 			);
 		});
@@ -98,13 +99,13 @@ describe("createPageApi", () => {
 		])("内容が%sと断られたら、送り直しても通らない失敗になる", async (_name, status) => {
 			stubFetch(json({ error: "invalid-commit" }, status));
 
-			await expect(api.commit(changes)).rejects.toMatchObject({ kind: "rejected" });
+			await expect(api.commit(commit)).rejects.toMatchObject({ kind: "rejected" });
 		});
 
 		it("サーバーの失敗は、送り直せる失敗になる", async () => {
 			stubFetch(json({}, 503));
 
-			await expect(api.commit(changes)).rejects.toMatchObject({ kind: "failed" });
+			await expect(api.commit(commit)).rejects.toMatchObject({ kind: "failed" });
 		});
 	});
 });

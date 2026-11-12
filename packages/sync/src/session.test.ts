@@ -10,13 +10,12 @@ import {
 	hasUnsaved,
 	pendingChanges,
 	receive,
-	recover,
 	resync,
 	type Session,
 	send,
 	withPending,
 } from "./session.ts";
-import type { Change, CommitResult, Line, LineId } from "./types.ts";
+import type { Change, CommitId, CommitResult, Line, LineId } from "./types.ts";
 
 const id = (value: string): LineId => value as LineId;
 const line = (lineId: string, text: string = lineId.toUpperCase()): Line => ({
@@ -24,9 +23,22 @@ const line = (lineId: string, text: string = lineId.toUpperCase()): Line => ({
 	text,
 });
 
+let commitSerial = 0;
+/** 呼ぶたびに違う、コミットのID。 */
+const nextCommitId = (): CommitId => {
+	commitSerial += 1;
+	return `commit-${commitSerial}` as CommitId;
+};
+
+/** 送信を始める。送るものがなければ null。 */
+function trySend(session: Session) {
+	const sending = send(session, nextCommitId());
+	return sending && { ...sending, changes: sending.commit.changes };
+}
+
 /** 送信できる変更があるはずの場面で、送信を始める。 */
 function mustSend(session: Session) {
-	const sending = send(session);
+	const sending = trySend(session);
 	if (sending === null) throw new Error("nothing to send");
 	return sending;
 }
@@ -52,7 +64,7 @@ describe("セッション(1つの端末から見たページの状態)", () => {
 
 		expect(session.local).toBe(snapshot.lines);
 		expect(hasUnsaved(session)).toBe(false);
-		expect(send(session)).toBeNull();
+		expect(trySend(session)).toBeNull();
 	});
 
 	it("編集すると、未保存の変更がある状態になる", () => {
@@ -76,7 +88,7 @@ describe("セッション(1つの端末から見たページの状態)", () => {
 	it("送信中は、次の送信を始めない(1度に1つのコミットだけを送る)", () => {
 		const { session } = mustSend(edit(createSession(snapshot), [line("a", "A2"), line("b")]));
 
-		expect(send(edit(session, [line("a", "A3"), line("b")]))).toBeNull();
+		expect(trySend(edit(session, [line("a", "A3"), line("b")]))).toBeNull();
 	});
 
 	it("サーバーが受け付けると、確定した文書が進み、未保存の変更がなくなる", () => {
@@ -154,99 +166,23 @@ describe("セッション(1つの端末から見たページの状態)", () => {
 		expect(mustSend(next).changes).toEqual(sending.changes);
 	});
 
-	describe("recover(応答が届かなかった送信のあとの読み直し)", () => {
-		const base = [line("a"), line("b")];
-		const typed = [line("a"), line("b"), line("new"), line("more")];
-		/** new の行を入れるコミットを送り、応答が届かないまま more の行を書き足した状態。 */
-		const sentThenTyped = () => {
-			const sending = mustSend(
-				edit(createSession({ version: 0, lines: base }), [...base, line("new")]),
-			);
-			return { changes: sending.changes, session: edit(sending.session, typed) };
-		};
+	it("送信中でないときの読み直し(受け取りそこねた分に追いつく)でも、まだ送っていない編集は残る", () => {
+		const session = edit(createSession(snapshot), [line("a"), line("b"), line("mine")]);
 
-		it("サーバーに入っていた場合、同じ変更が二重にならず、書き足した分だけが未保存として残る", () => {
-			const server = createServer(base);
-			const { changes, session } = sentThenTyped();
-			server.commit(changes); // 応答は届かなかった
+		const next = resync(session, { version: 5, lines: [line("x"), line("a"), line("b")] });
 
-			const next = recover(session, server.snapshot());
+		expect(next.local).toEqual([line("x"), line("a"), line("b"), line("mine")]);
+		expect(hasUnsaved(next)).toBe(true);
+	});
 
-			expect(next).toMatchObject({ version: 1, inflight: null });
-			expect(next.local).toBe(typed);
-			expect(mustSend(next).changes).toEqual([
-				{ type: "insert", line: line("more"), after: id("new"), before: null },
-			]);
-		});
+	it("応答が届かなかった送信は、送信中のまま残る。同じコミットを、同じIDで送り直せる", () => {
+		const sending = mustSend(edit(createSession(snapshot), [line("a", "A2"), line("b")]));
+		const typedMore = edit(sending.session, [line("a", "A2"), line("b", "B2")]);
 
-		it("サーバーに入っていなかった場合、送ったはずの変更も含めて、次の送信で送る", () => {
-			const server = createServer(base);
-			const { session } = sentThenTyped();
-
-			const next = recover(session, server.snapshot());
-
-			expect(next.local).toBe(typed);
-			server.commit(mustSend(next).changes);
-			expect(server.snapshot().lines).toEqual(typed);
-		});
-
-		it("他の人の変更が入っていたら、それも取り込む", () => {
-			const server = createServer(base);
-			const { changes, session } = sentThenTyped();
-			server.commit(changes);
-			server.commit([{ type: "insert", line: line("x"), after: null, before: null }]);
-
-			const next = recover(session, server.snapshot());
-
-			expect(next.local).toEqual([line("x"), ...typed]);
-		});
-
-		it("送ったあとで取り消して元に戻していたら、その取り消しも送る(サーバーに入っていても、いなくても)", () => {
-			const undoneAfterSending = () => {
-				const sending = mustSend(
-					edit(createSession({ version: 0, lines: base }), [line("a", "A2"), line("b")]),
-				);
-				return { changes: sending.changes, session: edit(sending.session, base) };
-			};
-			// 画面は確定した文書と同じだが、送った変更がサーバーに入ったかどうかが分からない。
-			expect(hasUnsaved(undoneAfterSending().session)).toBe(true);
-
-			// サーバーに入っていた場合: 画面は取り消したままで、取り消しを送る。
-			const applied = createServer(base);
-			applied.commit(undoneAfterSending().changes);
-			const afterApplied = recover(undoneAfterSending().session, applied.snapshot());
-			expect(afterApplied.local).toEqual(base);
-			expect(mustSend(afterApplied).changes).toEqual([{ type: "update", id: id("a"), text: "A" }]);
-
-			// サーバーに入っていなかった場合: 送るものはない。
-			const notApplied = recover(undoneAfterSending().session, createServer(base).snapshot());
-			expect(notApplied.local).toEqual(base);
-			expect(hasUnsaved(notApplied)).toBe(false);
-		});
-
-		it("足した行を送ったあとで、その行に書き足していたら、書き足した分も残る", () => {
-			const typedOnNewLine = () => {
-				const sending = mustSend(
-					edit(createSession({ version: 0, lines: base }), [...base, line("n", "書きかけ")]),
-				);
-				const local = [...base, line("n", "書きかけの続き")];
-				return { changes: sending.changes, local, session: edit(sending.session, local) };
-			};
-
-			// サーバーに入っていた場合: 行は既にあるので、本文の書き換えだけが未送信として残る。
-			const applied = createServer(base);
-			const { changes, local, session } = typedOnNewLine();
-			applied.commit(changes);
-			const afterApplied = recover(session, applied.snapshot());
-			expect(afterApplied.local).toEqual(local);
-			expect(mustSend(afterApplied).changes).toEqual([
-				{ type: "update", id: id("n"), text: "書きかけの続き" },
-			]);
-
-			// サーバーに入っていなかった場合: 行ごと、もう一度送る。
-			const notApplied = recover(typedOnNewLine().session, createServer(base).snapshot());
-			expect(notApplied.local).toEqual(local);
-		});
+		// 何もしなければ、送信中のコミットはそのまま。新しい送信は始まらない。
+		expect(typedMore.inflight).toBe(sending.commit);
+		expect(trySend(typedMore)).toBeNull();
+		expect(hasUnsaved(typedMore)).toBe(true);
 	});
 });
 
@@ -254,50 +190,38 @@ describe("pendingChanges / withPending(未送信の変更の取り出しと、�
 	const snapshot = { version: 3, lines: [line("a"), line("b")] };
 
 	it("未送信の変更がなければ、空になる", () => {
-		expect(pendingChanges(createSession(snapshot))).toEqual([]);
+		expect(pendingChanges(createSession(snapshot))).toEqual({ inflight: null, changes: [] });
 	});
 
 	it("まだ送っていない編集を、確定した文書からの変更として取り出す", () => {
 		const session = edit(createSession(snapshot), [line("a", "A2"), line("b"), line("n")]);
 
-		expect(pendingChanges(session)).toEqual([
-			{ type: "update", id: id("a"), text: "A2" },
-			{ type: "insert", line: line("n"), after: id("b"), before: null },
-		]);
+		expect(pendingChanges(session)).toEqual({
+			inflight: null,
+			changes: [
+				{ type: "update", id: id("a"), text: "A2" },
+				{ type: "insert", line: line("n"), after: id("b"), before: null },
+			],
+		});
 	});
 
-	it("送信中の変更も含める(サーバーに入ったかどうかは、応答が届くまで分からない)", () => {
-		const sending = mustSend(edit(createSession(snapshot), [line("a", "A2"), line("b")]));
-		const typedMore = edit(sending.session, [line("a", "A2"), line("b", "B2")]);
-
-		expect(pendingChanges(typedMore)).toEqual([
-			{ type: "update", id: id("a"), text: "A2" },
-			{ type: "update", id: id("b"), text: "B2" },
-		]);
-	});
-
-	it("足した行を送っているあいだにその行へ書き足した分は、行がサーバーに入っていても、いなくても載せ直せる", () => {
+	it("送信中のコミットは、IDと一緒に別に取り出す。残りは、そのコミットが入ったあとの文書からの変更", () => {
 		const sending = mustSend(
 			edit(createSession(snapshot), [...snapshot.lines, line("n", "書きかけ")]),
 		);
 		const typedMore = edit(sending.session, [...snapshot.lines, line("n", "書きかけの続き")]);
-		const pending = pendingChanges(typedMore);
 
-		// 送った順(行を足す → 本文を書き換える)で残す。
-		expect(pending).toEqual([
-			{ type: "insert", line: line("n", "書きかけ"), after: id("b"), before: null },
-			{ type: "update", id: id("n"), text: "書きかけの続き" },
-		]);
-		const expected = [...snapshot.lines, line("n", "書きかけの続き")];
-		expect(withPending([...snapshot.lines, line("n", "書きかけ")], [pending])).toEqual(expected);
-		expect(withPending(snapshot.lines, [pending])).toEqual(expected);
+		expect(pendingChanges(typedMore)).toEqual({
+			inflight: sending.commit,
+			changes: [{ type: "update", id: id("n"), text: "書きかけの続き" }],
+		});
 	});
 
 	it("取り出した変更を、あとで読み込んだページに載せ直せる。そのあいだの他の人の変更は残る", () => {
 		const session = edit(createSession(snapshot), [line("a", "A2"), line("b"), line("n")]);
 		const later = [line("x"), line("a"), line("b")];
 
-		expect(withPending(later, [pendingChanges(session)])).toEqual([
+		expect(withPending(later, [pendingChanges(session).changes])).toEqual([
 			line("x"),
 			line("a", "A2"),
 			line("b"),
@@ -305,11 +229,8 @@ describe("pendingChanges / withPending(未送信の変更の取り出しと、�
 		]);
 	});
 
-	it("既にサーバーに入っていた変更は、載せ直しても二重にならない", () => {
-		const session = edit(createSession(snapshot), [line("a"), line("b"), line("n")]);
-		const later = [line("a"), line("b"), line("n")];
-
-		expect(withPending(later, [pendingChanges(session)])).toBe(later);
+	it("載せるものがなければ、同じ文書を返す", () => {
+		expect(withPending(snapshot.lines, [[], []])).toBe(snapshot.lines);
 	});
 
 	it("複数の記録は、渡した順に載せる", () => {
@@ -348,7 +269,7 @@ describe("receive(他の人のコミットの受け取り)", () => {
 
 		// 他の人のコミット(バージョン4)が先にサーバーに入り、自分のコミットはバージョン5になった。
 		const received = receive(sending.session, fromOther(4, insertX));
-		expect(received?.inflight).toBe(sending.changes);
+		expect(received?.inflight).toBe(sending.commit);
 		expect(received?.local).toEqual([line("x"), line("a"), line("b", "B2")]);
 
 		const next = received && acknowledge(received, { version: 5, applied: sending.changes });
@@ -383,7 +304,7 @@ describe("1つのコミットに収まらない変更", () => {
 	function saveAll(start: Session, server: ReturnType<typeof createServer>) {
 		const commits: (readonly Change[])[] = [];
 		let session = start;
-		for (let sending = send(session); sending !== null; sending = send(session)) {
+		for (let sending = trySend(session); sending !== null; sending = trySend(session)) {
 			commits.push(sending.changes);
 			const next = acknowledge(sending.session, server.commit(sending.changes));
 			if (next === null) throw new Error("unexpected gap");
@@ -482,7 +403,7 @@ describe("複数の端末が同じページを編集したとき", () => {
 				sessions[who] = edit(session, editLocal(session.local, seed, text, newId));
 			},
 			send(who: number) {
-				const sending = send(sessionOf(who));
+				const sending = trySend(sessionOf(who));
 				if (sending === null) return;
 				sessions[who] = sending.session;
 				const result = server.commit(sending.changes);
@@ -497,7 +418,7 @@ describe("複数の端末が同じページを編集したとき", () => {
 				responses[who] = null;
 				const session = sessionOf(who);
 				const next = acknowledge(session, result) ?? resync(session, server.snapshot());
-				sessions[who] = behind.delete(who) ? recover(next, server.snapshot()) : next;
+				sessions[who] = behind.delete(who) ? resync(next, server.snapshot()) : next;
 			},
 			deliver(who: number) {
 				const event = inboxes[who]?.shift();
@@ -506,7 +427,7 @@ describe("複数の端末が同じページを編集したとき", () => {
 				const next = receive(session, event);
 				// 抜けがあったら読み直す。送信中なら、応答が届いてから読み直す。
 				if (next !== null) sessions[who] = next;
-				else if (session.inflight === null) sessions[who] = recover(session, server.snapshot());
+				else if (session.inflight === null) sessions[who] = resync(session, server.snapshot());
 				else behind.add(who);
 			},
 			/** 届いていないものをすべて届け、残った変更を保存し終える。 */
@@ -543,7 +464,7 @@ describe("複数の端末が同じページを編集したとき", () => {
 				// 最後に保存した人のコミットを、全員が受け取る。
 				for (const who of CLIENTS) {
 					world.settle(who);
-					const latest = recover(world.sessionOf(who), world.server.snapshot());
+					const latest = resync(world.sessionOf(who), world.server.snapshot());
 					expect(latest.local).toEqual(world.server.snapshot().lines);
 					expect(world.sessionOf(who).local).toEqual(world.server.snapshot().lines);
 					expect(hasUnsaved(latest)).toBe(false);

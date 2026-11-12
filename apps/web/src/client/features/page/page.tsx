@@ -1,10 +1,11 @@
-import { type Line, type PageSnapshot, startTracking, withPending } from "@amime/sync";
+import { type Line, type PageSnapshot, startTracking } from "@amime/sync";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "../editor/editor.tsx";
 import { createIdPrefix } from "../editor/editor-model.ts";
 import { createPageApi } from "./api.ts";
 import { createChannel } from "./channel.ts";
 import { createClientId } from "./client-id.ts";
+import { createCommitId } from "./commit-id.ts";
 import { PageApiError } from "./page-api-error.ts";
 import { createPageSync, type PageApi, type SyncStatus } from "./page-sync.ts";
 import {
@@ -13,6 +14,7 @@ import {
 	createPendingStore,
 	type PendingStore,
 } from "./pending-store.ts";
+import { restorePage } from "./restore.ts";
 import { titleFromName } from "./route.ts";
 import "./page.css";
 
@@ -26,8 +28,10 @@ type Loaded =
 	| {
 			readonly status: "ready";
 			readonly snapshot: PageSnapshot;
-			/** 前回送れなかった変更を載せた文書。復元するものがなければ null。 */
+			/** 前回送れなかった変更を載せた文書。載せるものがなければ null。 */
 			readonly restored: readonly Line[] | null;
+			/** 前回送れなかった変更を復元したことを、画面に伝えるか。 */
+			readonly noticed: boolean;
 	  }
 	| { readonly status: "error"; readonly kind: PageApiError["kind"] };
 
@@ -69,13 +73,10 @@ export function Page({ name }: PageProps) {
 	useEffect(() => {
 		let cancelled = false;
 		setLoaded({ status: "loading" });
-		// 前回送れなかった変更が端末内に残っていたら、引き取って、読み込んだページに載せる(ADR-0020)。
-		Promise.all([api.load(), pending.adopt()]).then(
-			([snapshot, records]) => {
-				if (cancelled) return;
-				const document = withPending(snapshot.lines, records);
-				const restored = document === snapshot.lines ? null : document;
-				setLoaded({ status: "ready", snapshot, restored });
+		// 前回送れなかった変更が端末内に残っていたら、復元する(ADR-0020)。
+		restorePage(api, pending).then(
+			(result) => {
+				if (!cancelled) setLoaded({ status: "ready", ...result });
 			},
 			(error: unknown) => {
 				const kind = error instanceof PageApiError ? error.kind : "failed";
@@ -114,6 +115,7 @@ export function Page({ name }: PageProps) {
 			title={titleFromName(name)}
 			snapshot={loaded.snapshot}
 			restored={loaded.restored}
+			noticed={loaded.noticed}
 			api={api}
 			pending={pending}
 		/>
@@ -125,11 +127,12 @@ type PageEditorProps = {
 	readonly title: string;
 	readonly snapshot: PageSnapshot;
 	readonly restored: readonly Line[] | null;
+	readonly noticed: boolean;
 	readonly api: PageApi;
 	readonly pending: PendingStore;
 };
 
-function PageEditor({ title, snapshot, restored, api, pending }: PageEditorProps) {
+function PageEditor({ title, snapshot, restored, noticed, api, pending }: PageEditorProps) {
 	// まだないページは、タイトルだけを入れた仮の文書から始める。この内容のままなら保存しない。
 	const placeholder = restored === null && snapshot.lines.length === 0;
 	const initial = useMemo(() => {
@@ -151,6 +154,7 @@ function PageEditor({ title, snapshot, restored, api, pending }: PageEditorProps
 			onRemote: remote.emit,
 			// まだサーバーに入っていない変更を、端末内に残す。タブを閉じても、次に開いたときに送れる。
 			onPending: pending.save,
+			createCommitId,
 		});
 		sync.current = current;
 		// 通信が戻ったら、再試行を待たずにすぐ保存する。
@@ -181,7 +185,7 @@ function PageEditor({ title, snapshot, restored, api, pending }: PageEditorProps
 			<p className="page-status" role="status" data-status={status}>
 				{STATUS_LABELS[status]}
 			</p>
-			{restored !== null && (
+			{noticed && (
 				<p className="page-notice" role="note">
 					前回、送信できなかった変更を復元しました。
 				</p>

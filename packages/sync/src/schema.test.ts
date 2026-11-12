@@ -16,26 +16,28 @@ const remove = { type: "delete", id: "c1-0" };
 const move = { type: "move", id: "c1-0", after: "c1-1", before: null };
 
 const parseChanges = (input: unknown) => {
-	const parsed = parseCommitRequest({ changes: input });
+	const parsed = parseCommitRequest({ id: "c1", changes: input });
 	return parsed.ok ? { ok: true, value: parsed.value.changes } : parsed;
 };
 
 describe("parseCommitRequest", () => {
-	it("送った端末の識別子を受け付ける。なくてもよい", () => {
-		expect(parseCommitRequest({ changes: [remove], client: "tab-1" })).toEqual({
+	it("コミットのIDと変更を受け付ける。送った端末の識別子は、なくてもよい", () => {
+		expect(parseCommitRequest({ id: "c1", changes: [remove], client: "tab-1" })).toEqual({
 			ok: true,
-			value: { changes: [remove], client: "tab-1" },
+			value: { id: "c1", changes: [remove], client: "tab-1" },
 		});
-		expect(parseCommitRequest({ changes: [remove] })).toEqual({
+		expect(parseCommitRequest({ id: "c1", changes: [remove] })).toEqual({
 			ok: true,
-			value: { changes: [remove] },
+			value: { id: "c1", changes: [remove] },
 		});
 	});
 
 	it.each([
 		["オブジェクトでない", [remove]],
-		["changes がない", { client: "tab-1" }],
-		["端末の識別子に使えない文字がある", { changes: [], client: "a b" }],
+		["changes がない", { id: "c1", client: "tab-1" }],
+		["コミットのIDがない", { changes: [] }],
+		["コミットのIDに使えない文字がある", { id: "a b", changes: [] }],
+		["端末の識別子に使えない文字がある", { id: "c1", changes: [], client: "a b" }],
 	])("%s入力は受け付けない", (_name, input) => {
 		expect(parseCommitRequest(input)).toEqual({ ok: false, error: "invalid" });
 	});
@@ -137,29 +139,49 @@ describe("parseCommitResult", () => {
 	});
 });
 
+describe("parseCommitResult(重複)", () => {
+	it("以前に受け付けていたコミットだという印を受け付ける", () => {
+		const result = { version: 3, applied: [], duplicate: true };
+
+		expect(parseCommitResult(result)).toEqual({ ok: true, value: result });
+	});
+});
+
 describe("parsePendingRecord", () => {
+	const entry = { inflight: { id: "c1", changes: [update] }, changes: [remove] };
+
 	it("端末内に残した未送信の変更(JSONの文字列)を受け付ける", () => {
-		const record = { savedAt: 1000, changes: [update, remove] };
+		const record = { savedAt: 1000, entries: [entry, { inflight: null, changes: [] }] };
 
 		expect(parsePendingRecord(JSON.stringify(record))).toEqual({ ok: true, value: record });
 	});
 
 	it("送れない長さの本文も受け付ける(復元して、直してもらうため)", () => {
 		const changes = [{ type: "update", id: "a", text: "a".repeat(MAX_LINE_LENGTH + 1) }];
+		const record = { savedAt: 1, entries: [{ inflight: { id: "c1", changes }, changes }] };
 
-		expect(parsePendingRecord(JSON.stringify({ savedAt: 1, changes })).ok).toBe(true);
+		expect(parsePendingRecord(JSON.stringify(record)).ok).toBe(true);
 	});
 
 	it("変更の数が多くても受け付ける(送るときに分ける)", () => {
 		const changes = Array.from({ length: MAX_CHANGES + 1 }, () => remove);
+		const record = { savedAt: 1, entries: [{ inflight: null, changes }] };
 
-		expect(parsePendingRecord(JSON.stringify({ savedAt: 1, changes })).ok).toBe(true);
+		expect(parsePendingRecord(JSON.stringify(record)).ok).toBe(true);
 	});
 
 	it.each([
 		["JSONでない", "{"],
-		["時刻がない", JSON.stringify({ changes: [] })],
-		["形の違う変更", JSON.stringify({ savedAt: 1, changes: [{ type: "delete" }] })],
+		["時刻がない", JSON.stringify({ entries: [] })],
+		["以前の形の記録", JSON.stringify({ savedAt: 1, changes: [] })],
+		[
+			"形の違う変更",
+			JSON.stringify({ savedAt: 1, entries: [{ inflight: null, changes: [{ type: "delete" }] }] }),
+		],
+		[
+			"IDのない送信中のコミット",
+			JSON.stringify({ savedAt: 1, entries: [{ inflight: { changes: [] }, changes: [] }] }),
+		],
 		["文字列でない", null],
 	])("%s記録は受け付けない", (_name, input) => {
 		expect(parsePendingRecord(input)).toEqual({ ok: false, error: "invalid" });

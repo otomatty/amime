@@ -28,11 +28,19 @@ afterEach(() => {
 function leavePending(page: string, changes: unknown[]) {
 	window.localStorage.setItem(
 		`amime:pending:${encodeURIComponent(page)}:closed-tab`,
-		JSON.stringify({ savedAt: Date.now(), changes }),
+		JSON.stringify({ savedAt: Date.now(), entries: [{ inflight: null, changes }] }),
 	);
 }
+/** 端末内に残っている、未送信の変更(送信中のコミットの中身も含む)。 */
 const pendingRecords = () =>
-	Object.values({ ...window.localStorage }).map((value) => JSON.parse(String(value)).changes);
+	Object.values({ ...window.localStorage }).map((value) =>
+		JSON.parse(String(value)).entries.flatMap(
+			(entry: { inflight: { changes: unknown[] } | null; changes: unknown[] }) => [
+				...(entry.inflight?.changes ?? []),
+				...entry.changes,
+			],
+		),
+	);
 
 describe("Page", () => {
 	const saved = { version: 1, lines: [{ id: "a", text: "買い物" }] };

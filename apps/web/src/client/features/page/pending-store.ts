@@ -1,5 +1,10 @@
 import { toTitleLc } from "@amime/shared";
-import { type Change, type ClientId, type PendingRecord, parsePendingRecord } from "@amime/sync";
+import {
+	type ClientId,
+	type PendingEntry,
+	type PendingRecord,
+	parsePendingRecord,
+} from "@amime/sync";
 
 /** 残しておく期間。これより古い記録は、復元せずに消す。 */
 export const PENDING_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -12,17 +17,17 @@ const KEY_PREFIX = "amime:pending:";
  */
 export type PendingStore = {
 	/**
-	 * このタブの未送信の変更を残す。空なら、記録を消す。
+	 * このタブの未送信の変更を残す。何もなければ、記録を消す。
 	 * 残せなかったら(保存先が使えない、容量がいっぱい)false を返す。
 	 */
-	readonly save: (changes: readonly Change[]) => boolean;
+	readonly save: (pending: PendingEntry) => boolean;
 	/**
 	 * 同じページについて、閉じたタブが残した未送信の変更を引き取る。古い順に返す。
 	 * 引き取った変更は、このタブの記録に移す。引き取った直後にこのタブが閉じても、変更は失われない。
 	 * まだ開いているタブの記録は引き取らない(そのタブが自分で送る)。
 	 * 引き取りは1度だけ行う。もう一度呼ぶと、同じ結果を返す。
 	 */
-	readonly adopt: () => Promise<readonly (readonly Change[])[]>;
+	readonly adopt: () => Promise<readonly PendingEntry[]>;
 	/**
 	 * このタブが開いていることを、他のタブに示す。返した関数を呼ぶと、示すのをやめる。
 	 * 示しているあいだ、このタブの記録は他のタブに引き取られない。タブが閉じたり落ちたりすると、自動で解かれる。
@@ -103,8 +108,8 @@ export function createPendingStore({
 	};
 
 	/** 自分の記録を書く。savedAt は、記録の新旧を比べるための時刻。 */
-	const write = (target: Storage, changes: readonly Change[], savedAt: number): void => {
-		if (changes.length === 0) {
+	const write = (target: Storage, entries: readonly PendingEntry[], savedAt: number): void => {
+		if (entries.length === 0) {
 			target.removeItem(ownKey);
 			// 引き取った変更も送り終えた。移せなかった元の記録を残しておくと、次に開いたときに古い変更を載せ直してしまう。
 			for (const { other, release } of leftovers) {
@@ -115,10 +120,10 @@ export function createPendingStore({
 			lastSaved = null;
 			return;
 		}
-		const serialized = JSON.stringify(changes);
+		const serialized = JSON.stringify(entries);
 		// 内容が同じでも、他のタブに引き取られて記録が消えていたら、書き直す。
 		if (serialized === lastSaved && target.getItem(ownKey) !== null) return;
-		target.setItem(ownKey, JSON.stringify({ savedAt, changes }));
+		target.setItem(ownKey, JSON.stringify({ savedAt, entries }));
 		lastSaved = serialized;
 	};
 
@@ -153,8 +158,8 @@ export function createPendingStore({
 		try {
 			// 記録は古い順に引き取る。移した記録の時刻は、最後に引き取った記録の時刻にする。
 			// いまの時刻にすると、引き取りの途中で閉じたときに、まだ引き取っていない新しい記録と新旧が逆になる。
-			const changes = claimed.flatMap(({ record }) => record.changes);
-			write(target, changes, other.record.savedAt);
+			const entries = claimed.flatMap(({ record }) => record.entries);
+			write(target, entries, other.record.savedAt);
 			removeUnchanged(target, other);
 			return "moved";
 		} catch {
@@ -188,22 +193,23 @@ export function createPendingStore({
 		});
 	};
 
-	async function adoptOthers(): Promise<readonly (readonly Change[])[]> {
+	async function adoptOthers(): Promise<readonly PendingEntry[]> {
 		if (storage === null) return [];
 		try {
 			for (const other of readOthers(storage)) await claimIfAbandoned(storage, other);
 		} catch {
 			// 保存先やロックが使えなくなった。そこまでに引き取れた分を返す。
 		}
-		return claimed.map(({ record }) => record.changes);
+		return claimed.flatMap(({ record }) => record.entries);
 	}
-	let adopted: Promise<readonly (readonly Change[])[]> | null = null;
+	let adopted: Promise<readonly PendingEntry[]> | null = null;
 
 	return {
-		save(changes) {
+		save(pending) {
 			if (storage === null) return false;
 			try {
-				write(storage, changes, now());
+				const empty = pending.inflight === null && pending.changes.length === 0;
+				write(storage, empty ? [] : [pending], now());
 				return true;
 			} catch {
 				return false;

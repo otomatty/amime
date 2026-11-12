@@ -11,6 +11,13 @@ const post = (path: string, body: unknown) =>
 		body: typeof body === "string" ? body : JSON.stringify(body),
 	});
 
+let commitSerial = 0;
+/** 呼ぶたびに違う、コミットのID。 */
+const commitId = () => {
+	commitSerial += 1;
+	return `app-test-${commitSerial}`;
+};
+
 const insertTitle = { type: "insert", line: { id: "c1-0", text: "題" }, after: null, before: null };
 
 describe("GET /api/health", () => {
@@ -41,7 +48,10 @@ describe("ページのAPI", () => {
 	});
 
 	it("コミットを送ると変更が保存され、効いた変更とバージョンが返る", async () => {
-		const response = await post("/api/pages/api-commit/commits", { changes: [insertTitle] });
+		const response = await post("/api/pages/api-commit/commits", {
+			id: commitId(),
+			changes: [insertTitle],
+		});
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ version: 1, applied: [insertTitle] });
@@ -53,6 +63,7 @@ describe("ページのAPI", () => {
 
 	it("ページ名は、空白と大文字小文字の違いを同じページとして扱う", async () => {
 		await post(`/api/pages/${encodeURIComponent("API Title メモ")}/commits`, {
+			id: commitId(),
 			changes: [insertTitle],
 		});
 
@@ -64,13 +75,28 @@ describe("ページのAPI", () => {
 	it.each([
 		["JSONでない本文", "{"],
 		["changes のない本文", {}],
-		["形の違う変更", { changes: [{ type: "delete" }] }],
+		["形の違う変更", { id: commitId(), changes: [{ type: "delete" }] }],
 	])("%sは 400 で断り、何も保存しない", async (_name, body) => {
 		const response = await post("/api/pages/api-invalid/commits", body);
 
 		expect(response.status).toBe(400);
 		expect(await response.json()).toEqual({ error: "invalid-commit" });
 		expect(await (await get("/api/pages/api-invalid")).json()).toEqual({ version: 0, lines: [] });
+	});
+
+	it("コミットのIDがない本文は 400 で断る", async () => {
+		const response = await post("/api/pages/api-no-id/commits", { changes: [] });
+
+		expect(response.status).toBe(400);
+	});
+
+	it("同じIDのコミットを送り直しても、二重に適用しない。重複だと分かる応答を返す", async () => {
+		const body = { id: "api-retry", changes: [insertTitle] };
+		await post("/api/pages/api-retry/commits", body);
+
+		const response = await post("/api/pages/api-retry/commits", body);
+
+		expect(await response.json()).toEqual({ version: 1, applied: [], duplicate: true });
 	});
 
 	it("長すぎるページ名は 400 で断る", async () => {
@@ -100,7 +126,7 @@ describe("ページのAPI", () => {
 		it("書き込みを 403 で断り、何も保存しない", async () => {
 			const response = await app.request(
 				"/api/pages/api-disabled/commits",
-				{ method: "POST", body: JSON.stringify({ changes: [insertTitle] }) },
+				{ method: "POST", body: JSON.stringify({ id: commitId(), changes: [insertTitle] }) },
 				disabled,
 			);
 
@@ -121,7 +147,7 @@ describe("ページの WebSocket", () => {
 		before: null,
 	});
 	const commitFrom = (page: string, client: string, change: unknown) =>
-		post(`/api/pages/${page}/commits`, { changes: [change], client });
+		post(`/api/pages/${page}/commits`, { id: commitId(), changes: [change], client });
 
 	/** WebSocket で接続し、届いたメッセージを集める。 */
 	async function connect(page: string, client: string) {
@@ -162,6 +188,20 @@ describe("ページの WebSocket", () => {
 			]),
 		);
 		expect(writer.messages).toEqual([{ type: "hello", version: 0 }]);
+	});
+
+	it("送り直された同じコミットは、配信しない", async () => {
+		const reader = await connect("ws-duplicate", "reader");
+		const body = { id: "ws-retry", changes: [insert("a")], client: "writer" };
+
+		await post("/api/pages/ws-duplicate/commits", body);
+		await post("/api/pages/ws-duplicate/commits", body);
+		await commitFrom("ws-duplicate", "writer", insert("b"));
+
+		await vi.waitFor(() => expect(reader.messages).toHaveLength(3));
+		expect(reader.messages.map((message) => (message as { version?: number }).version)).toEqual([
+			0, 1, 2,
+		]);
 	});
 
 	it("何も効かなかったコミットは配信しない", async () => {
@@ -243,7 +283,7 @@ describe("他のサイトからの要求", () => {
 			{
 				method: "POST",
 				headers: foreign,
-				body: JSON.stringify({ changes: [change] }),
+				body: JSON.stringify({ id: commitId(), changes: [change] }),
 			},
 		);
 
@@ -267,7 +307,7 @@ describe("他のサイトからの要求", () => {
 		const commit = await exports.default.fetch("https://amime.test/api/pages/origin-same/commits", {
 			method: "POST",
 			headers: same,
-			body: JSON.stringify({ changes: [change] }),
+			body: JSON.stringify({ id: commitId(), changes: [change] }),
 		});
 		const socket = await exports.default.fetch(
 			"https://amime.test/api/pages/origin-same/socket?client=reader",
@@ -284,7 +324,7 @@ describe("他のサイトからの要求", () => {
 			{
 				method: "POST",
 				headers: { Origin: "http://amime.test" },
-				body: JSON.stringify({ changes: [change] }),
+				body: JSON.stringify({ id: commitId(), changes: [change] }),
 			},
 		);
 
@@ -297,7 +337,7 @@ describe("他のサイトからの要求", () => {
 			{
 				method: "POST",
 				headers: { Origin: "null" },
-				body: JSON.stringify({ changes: [change] }),
+				body: JSON.stringify({ id: commitId(), changes: [change] }),
 			},
 		);
 
