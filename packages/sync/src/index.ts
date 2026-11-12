@@ -22,6 +22,7 @@ export {
 } from "./session.ts";
 export type {
 	Change,
+	ClientId,
 	CommitRequest,
 	CommitResult,
 	Line,

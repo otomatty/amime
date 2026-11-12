@@ -17,6 +17,15 @@ const MAX_COMMIT_BYTES = 2 * 1024 * 1024;
  */
 const pageStub = (name: string) => exports.PageDO.getByName(`default/${toTitleLc(name)}`);
 
+/** Origin ヘッダーの指すサイトが、要求を受けたこのサイトと同じか。 */
+function sameSite(origin: string, url: string): boolean {
+	try {
+		return new URL(origin).host === new URL(url).host;
+	} catch {
+		return false;
+	}
+}
+
 async function readJson(request: Request): Promise<unknown> {
 	try {
 		return await request.json();
@@ -30,6 +39,12 @@ const pages = new Hono<AppEnv>()
 	.use(async (c, next) => {
 		// 認証(P4)が入るまで、公開環境ではページを読み書きできないようにする(ADR-0009、ADR-0017)。
 		if (c.env.PAGE_API !== "enabled") return c.json({ error: "page-api-disabled" }, 403);
+		// 他のサイトのページからの要求を断る。ブラウザは、他のサイトへの要求に Origin を付ける。
+		// WebSocket は他のサイトからでも接続でき、書き込みも形式によっては送れてしまうので、ここで止める。
+		const origin = c.req.header("origin");
+		if (origin !== undefined && !sameSite(origin, c.req.url)) {
+			return c.json({ error: "cross-origin" }, 403);
+		}
 		c.header("cache-control", "no-store");
 		return next();
 	})

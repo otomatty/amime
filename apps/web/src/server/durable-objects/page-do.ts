@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
 	applyChanges,
 	type Change,
+	type ClientId,
 	type CommitResult,
 	type Line,
 	type LineId,
@@ -71,7 +72,7 @@ export class PageDO extends DurableObject {
 	 * 実際に効いた変更と、適用後のバージョンを返す。何も効かなければ、バージョンは進まない。
 	 * 効いた変更は、接続している他の端末に配信する。client は、送った端末の識別子。
 	 */
-	commit(changes: readonly Change[], client?: string): CommitResult {
+	commit(changes: readonly Change[], client?: ClientId): CommitResult {
 		const { applied } = applyChanges(this.#lines(), changes);
 		if (applied.length === 0) return { version: this.#version(), applied };
 

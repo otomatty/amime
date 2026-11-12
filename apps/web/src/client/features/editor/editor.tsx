@@ -22,12 +22,13 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useMemo,
-	useReducer,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from "react";
 import { EditorLine } from "./editor-line.tsx";
-import { createIdPrefix, createModel, type RemoteDocument, reduceModel } from "./editor-model.ts";
+import { createIdPrefix, createModel } from "./editor-model.ts";
+import { createEditorStore } from "./editor-store.ts";
 import { cursorFromPoint, LINE_END } from "./hit-test.ts";
 import { groupLines } from "./line-groups.ts";
 import { lineSelection } from "./line-selection.ts";
@@ -38,10 +39,18 @@ type EditorProps = {
 	readonly initialLines?: readonly string[];
 	/** 行IDを持つ最初の文書(保存されているページ)。行があれば、こちらを使う。 */
 	readonly initialDocument?: readonly Line[];
-	/** 他の人の変更を取り込んだ文書。渡されるたびに、画面の文書を置き換える。 */
-	readonly remote?: RemoteDocument | null;
-	/** 編集で文書が変わるたびに呼ばれる。 */
+	/** 他の人の変更を取り込んだ文書の届け先。届くたびに、画面の文書を置き換える。 */
+	readonly remote?: RemoteSource;
+	/**
+	 * 自分の編集で文書が変わるたびに、その場で呼ばれる(描画を待たない)。
+	 * 外から届いた文書に置き換えたときは呼ばれない。
+	 */
 	readonly onChange?: (lines: readonly Line[]) => void;
+};
+
+/** 外から届く文書の出どころ。apply を登録しておくと、文書が届くたびに呼ばれる。 */
+type RemoteSource = {
+	readonly subscribe: (apply: (lines: readonly Line[]) => void) => () => void;
 };
 
 /** 単独で押されても、編集の操作としては扱わないキー。 */
@@ -68,25 +77,26 @@ const keyInput = (event: KeyboardEvent): KeyInput => ({
  * 行エディタ。表示は自前で描画し、文字入力は画面に見えない textarea で受け取る(ADR-0010)。
  * 編集の規則はすべて @amime/editor-core にあり、ここはイベントを操作に変換するだけ。
  */
-export function Editor({ initialLines, initialDocument, remote = null, onChange }: EditorProps) {
-	const [{ history, tracker }, dispatch] = useReducer(
-		reduceModel,
-		{ initialLines, initialDocument },
-		(content) => createModel(content, createIdPrefix()),
+export function Editor({ initialLines, initialDocument, remote, onChange }: EditorProps) {
+	// 状態は、描画の外で、操作を受け取ったその場で進める(editor-store.ts を参照)。
+	const [store] = useState(() =>
+		createEditorStore(createModel({ initialLines, initialDocument }, createIdPrefix())),
 	);
+	const { history, tracker } = useSyncExternalStore(store.subscribe, store.getModel);
+	const { dispatch } = store;
 	const state = history.present;
 
-	// 編集で文書が変わったら知らせる。最初の文書は、呼び出し側が既に持っているので知らせない。
-	const reported = useRef(tracker.lines);
+	// 呼び出し側が渡す関数が変わっても、登録はし直さず、いつも最新のものを呼ぶ。
+	const latestOnChange = useRef(onChange);
 	useEffect(() => {
-		if (reported.current === tracker.lines) return;
-		reported.current = tracker.lines;
-		onChange?.(tracker.lines);
-	}, [tracker.lines, onChange]);
+		latestOnChange.current = onChange;
+	}, [onChange]);
+	useEffect(() => store.onEdit((lines) => latestOnChange.current?.(lines)), [store]);
 
-	useEffect(() => {
-		if (remote !== null) dispatch({ type: "replace", ...remote });
-	}, [remote]);
+	useEffect(
+		() => remote?.subscribe((lines) => store.dispatch({ type: "replace", lines })),
+		[remote, store],
+	);
 
 	const [composing, setComposing] = useState<string | null>(null);
 	const [focused, setFocused] = useState(false);

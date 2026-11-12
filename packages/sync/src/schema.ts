@@ -1,6 +1,13 @@
 import { err, ok, type Result } from "@amime/shared";
 import * as v from "valibot";
-import type { CommitRequest, CommitResult, LineId, PageSnapshot, ServerMessage } from "./types.ts";
+import type {
+	ClientId,
+	CommitRequest,
+	CommitResult,
+	LineId,
+	PageSnapshot,
+	ServerMessage,
+} from "./types.ts";
 
 /** 1行の本文の長さの上限(UTF-16 の符号単位)。 */
 export const MAX_LINE_LENGTH = 20_000;
@@ -41,7 +48,12 @@ const VersionSchema = v.pipe(v.number(), v.integer(), v.minValue(0));
 const SnapshotSchema = v.object({ version: VersionSchema, lines: v.array(LineSchema) });
 const commitResult = { version: VersionSchema, applied: v.array(ChangeSchema) };
 const CommitResultSchema = v.object(commitResult);
-const ClientIdSchema = v.pipe(v.string(), v.regex(IDENTIFIER));
+// 端末の識別子も外部から届く文字列。形を検査したうえで、ここでブランド型にする。
+const ClientIdSchema = v.pipe(
+	v.string(),
+	v.regex(IDENTIFIER),
+	v.transform((value) => value as ClientId),
+);
 const CommitRequestSchema = v.object({
 	changes: ChangesSchema,
 	client: v.optional(ClientIdSchema),
@@ -61,7 +73,7 @@ export const parseCommitRequest = (input: unknown): Result<CommitRequest, "inval
 	parse(CommitRequestSchema, input);
 
 /** 外部から届いた端末の識別子を検査する。 */
-export const parseClientId = (input: unknown): Result<string, "invalid"> =>
+export const parseClientId = (input: unknown): Result<ClientId, "invalid"> =>
 	parse(ClientIdSchema, input);
 
 /** サーバーから WebSocket で届いたメッセージを検査する。 */

@@ -159,6 +159,42 @@ describe("Page", () => {
 		expect(status()).toBe("保存済み");
 	});
 
+	it("コミットが続けて届いても、すべての行が画面に残り、自分からは何も送らない", async () => {
+		const sockets: EventTarget[] = [];
+		class CapturedSocket extends EventTarget {
+			static readonly OPEN = 1;
+			readonly readyState = 1;
+			constructor() {
+				super();
+				sockets.push(this);
+			}
+			send() {}
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", CapturedSocket);
+		const fetchMock = stubFetch(() => json(saved));
+		render(<Page name="買い物" />);
+		await waitFor(() => expect(lines()).toEqual(["買い物"]));
+		const insert = (version: number, id: string, after: string) => ({
+			type: "commit",
+			version,
+			applied: [{ type: "insert", line: { id, text: id }, after, before: null }],
+		});
+
+		// 画面を描き直す間もなく、2つのコミットが続けて届く。
+		act(() => {
+			for (const commit of [insert(2, "x", "a"), insert(3, "y", "x")]) {
+				sockets
+					.at(-1)
+					?.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(commit) }));
+			}
+		});
+		await new Promise((resolve) => setTimeout(resolve, 400));
+
+		expect(lines()).toEqual(["買い物", "x", "y"]);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("保存に失敗したら、再試行することを表示する", async () => {
 		stubFetch((_url, init) => (init?.method === "POST" ? json({}, 500) : json(saved)));
 		render(<Page name="買い物" />);

@@ -15,7 +15,6 @@ import {
 	sameLines,
 	send,
 } from "@amime/sync";
-import type { RemoteDocument } from "../editor/editor-model.ts";
 import { PageApiError } from "./page-api-error.ts";
 import type { PageSocketHandlers } from "./page-socket.ts";
 
@@ -35,12 +34,6 @@ const MAX_RETRY_MS = 30_000;
  */
 export type SyncStatus = "new" | "saved" | "unsaved" | "saving" | "retrying" | "rejected";
 
-export type PageSyncState = {
-	readonly status: SyncStatus;
-	/** 他の人の変更を取り込んだ結果、編集欄に渡す文書。取り込みがまだなければ null。 */
-	readonly remote: RemoteDocument | null;
-};
-
 export type PageApi = {
 	readonly load: () => Promise<PageSnapshot>;
 	readonly commit: (changes: readonly Change[]) => Promise<CommitResult>;
@@ -56,23 +49,32 @@ type PageSyncOptions = {
 	 */
 	readonly initial: readonly Line[];
 	readonly api: PageApi;
-	readonly onState: (state: PageSyncState) => void;
+	/** 保存の状態を知らせる。 */
+	readonly onStatus: (status: SyncStatus) => void;
+	/**
+	 * 他の人の変更を取り込んで、画面の文書が変わった。編集欄の文書を、渡した文書に置き換えること。
+	 * 編集欄は、編集のたびに edit をその場で呼ぶ。そのため、ここで渡す文書は、いつも編集欄のいまの文書を
+	 * もとに作ったものになっている(置き換えで、編集欄の入力が失われることはない)。
+	 */
+	readonly onRemote: (lines: readonly Line[]) => void;
 };
 
 /**
  * 1つのページの保存と、他の人の変更の受け取りを受け持つ。
  * 文書の状態と規則は @amime/sync のセッションにあり、ここは「いつ送るか、いつ読み直すか」だけを決める。
  */
-export function createPageSync({ snapshot, initial, api, onState }: PageSyncOptions) {
+export function createPageSync({ snapshot, initial, api, onStatus, onRemote }: PageSyncOptions) {
 	let session: Session = edit(createSession(snapshot), initial);
-	let remote: RemoteDocument | null = null;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let retryDelay = FIRST_RETRY_MS;
 	let failure: "none" | "failed" | "rejected" = "none";
 	/** 応答が届かなかった送信がある。サーバーに入ったかどうかが分からないので、次に送る前に読み直す。 */
 	let uncertain = false;
-	/** 他の人のコミットを受け取りそこねている。読み直して追いつく。 */
-	let behind = false;
+	/**
+	 * サーバーにあると分かっている、いちばん新しいバージョン。
+	 * 自分の持つバージョンがこれより古ければ、他の人のコミットを受け取りそこねているので、読み直して追いつく。
+	 */
+	let knownVersion = snapshot.version;
 	let busy = false;
 	let disposed = false;
 
@@ -91,8 +93,9 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 	 * まだないページで仮のタイトルを表示しているだけなら、それは自分の編集ではないので、載せ直さない。
 	 */
 	const receiving = (): Session => (untouched() ? edit(session, session.confirmed) : session);
+	const behind = () => session.version < knownVersion;
 	const publish = () => {
-		if (!disposed) onState({ status: status(), remote });
+		if (!disposed) onStatus(status());
 	};
 
 	const schedule = (delay: number) => {
@@ -103,10 +106,11 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 		}, delay);
 	};
 
-	/** サーバーの結果を反映する。画面の文書が変わったら、編集欄に渡す文書として知らせる。 */
+	/** サーバーの結果を反映する。画面の文書が変わったら、編集欄の文書を置き換えさせる。 */
 	const settle = (next: Session) => {
-		if (next.local !== session.local) remote = { lines: next.local, base: session.local };
+		const changed = next.local !== session.local;
 		session = next;
+		if (changed && !disposed) onRemote(next.local);
 	};
 
 	/** 送った内容をサーバーに断られた。断られるまでのあいだに内容が直されていたら、続けて保存する。 */
@@ -127,8 +131,8 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 		if (latest.version < session.version) return false;
 		if (uncertain || latest.version > session.version) settle(recover(receiving(), latest));
 		uncertain = false;
-		behind = false;
-		return true;
+		// 読み直したページより先のコミットがあると分かっていれば、まだ遅れている。もう1度読み直す。
+		return !behind();
 	}
 
 	/** 送信への応答を反映する。他の人の変更が先に入っていたら、読み直して載せ直す。 */
@@ -138,7 +142,17 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 			settle(acknowledged);
 			return;
 		}
+		knownVersion = Math.max(knownVersion, result.version);
+		if (result.applied.length === 0) {
+			// 何も効かなかったので、サーバーの文書は自分のコミットでは変わっていない。送信中の状態だけをやめる。
+			// 遅れている分は、このあとの読み直し(catchUp)で追いつく。
+			settle(acknowledge(session, { version: session.version, applied: [] }) ?? session);
+			return;
+		}
+		// 自分のコミットは result.version として入った。配信は自分のコミットを届けないので、
+		// 配信だけではこのバージョンに届かない。読み直したページは、必ずいまの文書より新しい。
 		const latest = await api.load();
+		if (latest.version < result.version) throw new PageApiError("failed");
 		settle(resync(session, latest));
 	}
 
@@ -164,7 +178,7 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 	async function step(): Promise<boolean> {
 		let sentLocal: readonly Line[] | null = null;
 		try {
-			if ((uncertain || behind) && !(await catchUp())) return true;
+			if ((uncertain || behind()) && !(await catchUp())) return true;
 			const sending = disposed || untouched() ? null : send(session);
 			if (sending === null) {
 				failure = "none";
@@ -193,7 +207,7 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 		busy = true;
 		try {
 			// 送るものがなくなるか、失敗するまで続ける。待っているあいだに遅れが分かったら、もう1回進める。
-			while ((await step()) || (behind && failure !== "failed")) {
+			while ((await step()) || (behind() && failure !== "failed")) {
 				// 繰り返すだけ。
 			}
 		} finally {
@@ -204,16 +218,15 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 	const unsubscribe = api.subscribe({
 		onHello(version) {
 			// つないだ時点でサーバーのほうが進んでいたら、切れているあいだのコミットを受け取りそこねている。
-			if (version <= session.version) return;
-			behind = true;
-			void save();
+			knownVersion = Math.max(knownVersion, version);
+			if (behind()) void save();
 		},
 		onCommit(event) {
 			if (event.version <= session.version) return;
 			const next = receive(receiving(), event);
 			if (next === null) {
 				// あいだのコミットが抜けている。読み直して追いつく。
-				behind = true;
+				knownVersion = Math.max(knownVersion, event.version);
 				void save();
 				return;
 			}

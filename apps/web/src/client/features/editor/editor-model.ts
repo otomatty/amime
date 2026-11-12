@@ -10,28 +10,12 @@ import {
 	setCursor,
 	undo,
 } from "@amime/editor-core";
-import {
-	applyChanges,
-	diffLines,
-	type Line,
-	type LineTracker,
-	startTracking,
-	trackLines,
-} from "@amime/sync";
+import { type Line, type LineTracker, startTracking, trackLines } from "@amime/sync";
 
 /** 編集欄の状態。編集の履歴と、行IDの割り当て。 */
 export type EditorModel = {
 	readonly history: History;
 	readonly tracker: LineTracker;
-};
-
-/**
- * 外から届いた文書。他の人の変更を取り込んだ結果、画面の文書を置き換えるときに渡す。
- * base は、取り込みを計算した時点の画面の文書。そのあとに打った文字を載せ直すのに使う。
- */
-export type RemoteDocument = {
-	readonly lines: readonly Line[];
-	readonly base: readonly Line[];
 };
 
 export type EditorAction =
@@ -45,7 +29,8 @@ export type EditorAction =
 	  }
 	| { readonly type: "undo" }
 	| { readonly type: "redo" }
-	| ({ readonly type: "replace" } & RemoteDocument);
+	/** 画面の文書を、外から届いた文書(他の人の変更を取り込んだもの)に置き換える。 */
+	| { readonly type: "replace"; readonly lines: readonly Line[] };
 
 type InitialContent = {
 	/** 行IDを持たない最初の本文。 */
@@ -102,13 +87,8 @@ function nextHistory(history: History, action: Exclude<EditorAction, { type: "re
  * 画面の文書を、外から届いた文書に置き換える。
  * カーソルと選択は同じ行についていく。履歴は捨てる(取り消しで他の人の変更を巻き戻さないため。ADR-0014)。
  */
-function replaceDocument(model: EditorModel, remote: RemoteDocument): EditorModel {
+function replaceDocument(model: EditorModel, lines: readonly Line[]): EditorModel {
 	const current = model.tracker.lines;
-	// 取り込みの計算のあとに打った文字があれば、届いた文書に載せ直す。
-	const lines =
-		current === remote.base
-			? remote.lines
-			: applyChanges(remote.lines, diffLines(remote.base, current)).lines;
 	const tracker = { ...model.tracker, lines };
 
 	/** 位置を、同じ行の新しい位置にする。その行がなくなっていたら null。 */
@@ -128,7 +108,7 @@ function replaceDocument(model: EditorModel, remote: RemoteDocument): EditorMode
 }
 
 export function reduceModel(model: EditorModel, action: EditorAction): EditorModel {
-	if (action.type === "replace") return replaceDocument(model, action);
+	if (action.type === "replace") return replaceDocument(model, action.lines);
 	const history = nextHistory(model.history, action);
 	if (history === model.history) return model;
 	// 行IDは、編集の前後の本文を見比べて割り当てる。編集の操作そのものは本文だけを扱う(ADR-0016)。

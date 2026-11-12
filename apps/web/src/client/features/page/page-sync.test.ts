@@ -2,7 +2,7 @@ import { applyChanges, type Change, type Line, type LineId } from "@amime/sync";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PageApiError } from "./page-api-error.ts";
 import type { PageSocketHandlers } from "./page-socket.ts";
-import { createPageSync, type PageSyncState, SAVE_DELAY_MS } from "./page-sync.ts";
+import { createPageSync, SAVE_DELAY_MS, type SyncStatus } from "./page-sync.ts";
 
 const line = (id: string, text: string = id.toUpperCase()): Line => ({ id: id as LineId, text });
 
@@ -41,15 +41,24 @@ function createServer(initial: readonly Line[] = []) {
 	return server;
 }
 
+/** 保存の状態と、編集欄に最後に渡された文書(まだ渡されていなければ null)。 */
+type Observed = { readonly status: SyncStatus; readonly remote: readonly Line[] | null };
+
 function start(server: ReturnType<typeof createServer>, initial?: readonly Line[]) {
-	const states: PageSyncState[] = [];
+	const states: Observed[] = [];
+	const remotes: (readonly Line[])[] = [];
 	const sync = createPageSync({
 		snapshot: server.snapshot(),
 		initial: initial ?? server.snapshot().lines,
 		api: server.api,
-		onState: (state) => states.push(state),
+		onStatus: (status) => states.push({ status, remote: remotes.at(-1) ?? null }),
+		onRemote: (lines) => remotes.push(lines),
 	});
-	return { sync, states, latest: () => states.at(-1) };
+	const latest = (): Observed | undefined => {
+		const status = states.at(-1)?.status;
+		return status && { status, remote: remotes.at(-1) ?? null };
+	};
+	return { sync, states, remotes, latest };
 }
 
 describe("createPageSync", () => {
@@ -125,7 +134,7 @@ describe("createPageSync", () => {
 		expect(server.snapshot().lines).toEqual([line("x"), line("a", "A2")]);
 		expect(latest()).toEqual({
 			status: "saved",
-			remote: { lines: [line("x"), line("a", "A2")], base: local },
+			remote: [line("x"), line("a", "A2")],
 		});
 	});
 
@@ -144,15 +153,11 @@ describe("createPageSync", () => {
 		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
 
 		// 読み直しの応答を待っているあいだに、さらに書く。
-		const typedDuringReload = [line("a", "A2"), line("b")];
-		sync.edit(typedDuringReload);
+		sync.edit([line("a", "A2"), line("b")]);
 		release();
 		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
 
-		expect(latest()?.remote).toEqual({
-			lines: [line("x"), line("a", "A2"), line("b")],
-			base: typedDuringReload,
-		});
+		expect(latest()?.remote).toEqual([line("x"), line("a", "A2"), line("b")]);
 		expect(server.snapshot().lines).toEqual([line("x"), line("a", "A2"), line("b")]);
 		expect(latest()?.status).toBe("saved");
 	});
@@ -215,7 +220,7 @@ describe("createPageSync", () => {
 
 		expect(server.api.load).toHaveBeenCalledOnce();
 		expect(server.api.commit).toHaveBeenCalledTimes(1);
-		expect(latest()).toMatchObject({ status: "saved", remote: { lines: local } });
+		expect(latest()).toEqual({ status: "saved", remote: local });
 	});
 
 	it("再試行のときの読み直しにも失敗したら、さらに間隔を延ばして再試行する", async () => {
@@ -326,7 +331,7 @@ describe("createPageSync", () => {
 
 			expect(latest()).toEqual({
 				status: "saved",
-				remote: { lines: [line("x"), line("a")], base: server.snapshot().lines.slice(1) },
+				remote: [line("x"), line("a")],
 			});
 			expect(server.api.load).not.toHaveBeenCalled();
 		});
@@ -337,7 +342,7 @@ describe("createPageSync", () => {
 			sync.edit([line("a", "A2")]);
 
 			server.handlers?.onCommit(server.commitFromOther([insertX]));
-			expect(latest()?.remote?.lines).toEqual([line("x"), line("a", "A2")]);
+			expect(latest()?.remote).toEqual([line("x"), line("a", "A2")]);
 			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
 
 			expect(server.snapshot().lines).toEqual([line("x"), line("a", "A2")]);
@@ -368,9 +373,83 @@ describe("createPageSync", () => {
 
 			expect(latest()).toMatchObject({
 				status: "saved",
-				remote: { lines: [line("x"), line("a", "A2")] },
+				remote: [line("x"), line("a", "A2")],
 			});
 			expect(server.api.load).not.toHaveBeenCalled();
+		});
+
+		it("続けて届いたコミットを、届いた順にすべて編集欄へ渡す。自分からは何も送らない", async () => {
+			const server = createServer([line("a")]);
+			const { remotes } = start(server);
+			const insertY: Change = {
+				type: "insert",
+				line: line("y"),
+				after: line("x").id,
+				before: null,
+			};
+
+			server.handlers?.onCommit(server.commitFromOther([insertX]));
+			server.handlers?.onCommit(server.commitFromOther([insertY]));
+			await vi.advanceTimersByTimeAsync(60_000);
+
+			expect(remotes).toEqual([
+				[line("x"), line("a")],
+				[line("x"), line("y"), line("a")],
+			]);
+			expect(server.api.commit).not.toHaveBeenCalled();
+		});
+
+		it("何も効かなかった保存のあとの読み直しが、配信より遅れて届いても、文書を巻き戻さない", async () => {
+			const server = createServer([line("a")]);
+			const { sync, latest } = start(server);
+			// 他の人が、自分と同じ変更を先に保存していた(バージョン1)。自分の保存は何も効かない。
+			const same = server.commitFromOther([{ type: "update", id: line("a").id, text: "A2" }]);
+			let release = () => {};
+			server.api.load.mockImplementationOnce(async () => {
+				const stale = server.snapshot();
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				return stale;
+			});
+			sync.edit([line("a", "A2")]);
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+			expect(server.api.load).toHaveBeenCalledOnce();
+
+			// 読み直しを待っているあいだに、配信でバージョン2まで進んだ。
+			server.handlers?.onCommit(same);
+			server.handlers?.onCommit(server.commitFromOther([insertX]));
+			release();
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(latest()).toEqual({ status: "saved", remote: [line("x"), line("a", "A2")] });
+		});
+
+		it("追いつくための読み直しより先のコミットがあると分かっていたら、そこに届くまで読み直す", async () => {
+			const server = createServer([line("a")]);
+			const { latest } = start(server);
+			server.commitFromOther([insertX]); // バージョン1。届かなかった
+			let release = () => {};
+			server.api.load.mockImplementationOnce(async () => {
+				const stale = server.snapshot();
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				return stale;
+			});
+			server.handlers?.onHello(1);
+			await vi.advanceTimersByTimeAsync(0);
+
+			// 読み直しを待っているあいだに、バージョン2は届かず、バージョン3だけが届いた。
+			server.commitFromOther([{ type: "update", id: line("a").id, text: "A2" }]);
+			server.handlers?.onCommit(
+				server.commitFromOther([{ type: "update", id: line("x").id, text: "X2" }]),
+			);
+			release();
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(server.api.load).toHaveBeenCalledTimes(2);
+			expect(latest()?.remote).toEqual([line("x", "X2"), line("a", "A2")]);
 		});
 
 		it("あいだのコミットを受け取りそこねていたら、読み直して追いつく", async () => {
@@ -382,7 +461,7 @@ describe("createPageSync", () => {
 			await vi.advanceTimersByTimeAsync(0);
 
 			expect(server.api.load).toHaveBeenCalledOnce();
-			expect(latest()).toMatchObject({ status: "saved", remote: { lines: [line("x")] } });
+			expect(latest()).toEqual({ status: "saved", remote: [line("x")] });
 		});
 
 		it("接続したときにサーバーのほうが進んでいたら、読み直して追いつく(つなぎ直したとき)", async () => {
@@ -393,7 +472,7 @@ describe("createPageSync", () => {
 			server.handlers?.onHello(server.snapshot().version);
 			await vi.advanceTimersByTimeAsync(0);
 
-			expect(latest()?.remote?.lines).toEqual([line("x"), line("a")]);
+			expect(latest()?.remote).toEqual([line("x"), line("a")]);
 		});
 
 		it("接続したときに同じバージョンなら、読み直さない", async () => {
@@ -416,7 +495,7 @@ describe("createPageSync", () => {
 			await vi.advanceTimersByTimeAsync(1000);
 
 			expect(server.api.load).toHaveBeenCalledTimes(2);
-			expect(latest()?.remote?.lines).toEqual([line("x"), line("a")]);
+			expect(latest()?.remote).toEqual([line("x"), line("a")]);
 		});
 
 		it("まだないページを開いているあいだに他の人が書いたら、仮のタイトルを捨てて、その内容を表示する", async () => {
@@ -427,7 +506,7 @@ describe("createPageSync", () => {
 			server.handlers?.onCommit(server.commitFromOther([insertX]));
 			await vi.advanceTimersByTimeAsync(60_000);
 
-			expect(latest()).toEqual({ status: "saved", remote: { lines: [line("x")], base: initial } });
+			expect(latest()).toEqual({ status: "saved", remote: [line("x")] });
 			expect(server.api.commit).not.toHaveBeenCalled();
 		});
 

@@ -1,5 +1,5 @@
 import type { Result } from "@amime/shared";
-import { type Change, parseCommitResult, parseSnapshot } from "@amime/sync";
+import { type Change, type ClientId, parseCommitResult, parseSnapshot } from "@amime/sync";
 import { PageApiError } from "./page-api-error.ts";
 import { connectPageSocket } from "./page-socket.ts";
 import type { PageApi } from "./page-sync.ts";
@@ -27,7 +27,7 @@ async function request<T>(
 const pagePath = (name: string): string => `/api/pages/${encodeURIComponent(name)}`;
 
 /** ページの WebSocket のURL。いま開いているページ(location)と同じ接続先にする。 */
-export function pageSocketUrl(location: URL | Location, name: string, client: string): string {
+export function pageSocketUrl(location: URL | Location, name: string, client: ClientId): string {
 	const protocol = location.protocol === "https:" ? "wss:" : "ws:";
 	return `${protocol}//${location.host}${pagePath(name)}/socket?client=${client}`;
 }
@@ -36,7 +36,7 @@ export function pageSocketUrl(location: URL | Location, name: string, client: st
  * 指定したページを読み書きするAPI。
  * client は、この端末(タブ)の識別子。自分のコミットが、自分の WebSocket に配信されないようにするために送る。
  */
-export function createPageApi(name: string, client: string): PageApi {
+export function createPageApi(name: string, client: ClientId): PageApi {
 	const url = pagePath(name);
 	return {
 		subscribe: (handlers) =>

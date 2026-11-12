@@ -232,3 +232,62 @@ describe("ページの WebSocket", () => {
 		expect(response.status).toBe(403);
 	});
 });
+
+describe("他のサイトからの要求", () => {
+	const foreign = { Origin: "https://evil.example" };
+	const change = { type: "insert", line: { id: "a", text: "a" }, after: null, before: null };
+
+	it("他のサイトのページからの書き込みは 403 で断り、何も保存しない", async () => {
+		const response = await exports.default.fetch(
+			"https://amime.test/api/pages/origin-post/commits",
+			{
+				method: "POST",
+				headers: foreign,
+				body: JSON.stringify({ changes: [change] }),
+			},
+		);
+
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: "cross-origin" });
+		expect(await (await get("/api/pages/origin-post")).json()).toMatchObject({ version: 0 });
+	});
+
+	it("他のサイトのページからの WebSocket の接続は 403 で断る(他のサイトに編集内容を読ませない)", async () => {
+		const response = await exports.default.fetch(
+			"https://amime.test/api/pages/origin-socket/socket?client=reader",
+			{ headers: { Upgrade: "websocket", ...foreign } },
+		);
+
+		expect(response.status).toBe(403);
+	});
+
+	it("同じサイトのページからの要求は受け付ける", async () => {
+		const same = { Origin: "https://amime.test" };
+
+		const commit = await exports.default.fetch("https://amime.test/api/pages/origin-same/commits", {
+			method: "POST",
+			headers: same,
+			body: JSON.stringify({ changes: [change] }),
+		});
+		const socket = await exports.default.fetch(
+			"https://amime.test/api/pages/origin-same/socket?client=reader",
+			{ headers: { Upgrade: "websocket", ...same } },
+		);
+
+		expect(commit.status).toBe(200);
+		expect(socket.status).toBe(101);
+	});
+
+	it("Origin が URL として読めない要求は断る", async () => {
+		const response = await exports.default.fetch(
+			"https://amime.test/api/pages/origin-bad/commits",
+			{
+				method: "POST",
+				headers: { Origin: "null" },
+				body: JSON.stringify({ changes: [change] }),
+			},
+		);
+
+		expect(response.status).toBe(403);
+	});
+});

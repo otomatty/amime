@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { createModel, reduceModel } from "./editor-model.ts";
 
 const line = (id: string, text: string): Line => ({ id: id as LineId, text });
-const texts = (lines: readonly Line[]) => lines.map((current) => current.text);
 const type = (text: string) =>
 	({
 		type: "edit",
@@ -70,7 +69,7 @@ describe("reduceModel", () => {
 		it("文書を置き換え、カーソルは同じ行についていく", () => {
 			const remote = [line("x", "他の人の行"), ...document];
 
-			const model = reduceModel(start(), { type: "replace", lines: remote, base: document });
+			const model = reduceModel(start(), { type: "replace", lines: remote });
 
 			expect(model.tracker.lines).toBe(remote);
 			expect(model.history.present).toEqual({
@@ -92,7 +91,7 @@ describe("reduceModel", () => {
 			});
 			const remote = [line("x", "他の人の行"), ...document];
 
-			const model = reduceModel(selecting, { type: "replace", lines: remote, base: document });
+			const model = reduceModel(selecting, { type: "replace", lines: remote });
 
 			expect(model.history.present).toMatchObject({
 				anchor: { line: 2, column: 0 },
@@ -111,7 +110,6 @@ describe("reduceModel", () => {
 			const model = reduceModel(selecting, {
 				type: "replace",
 				lines: document.slice(1),
-				base: document,
 			});
 
 			expect(model.history.present.anchor).toBeUndefined();
@@ -121,7 +119,7 @@ describe("reduceModel", () => {
 		it("カーソルのある行が消されていたら、同じ位置にある行へ移る。列は行の長さに収める", () => {
 			const remote = [line("a", "題"), line("c", "末")];
 
-			const model = reduceModel(start(), { type: "replace", lines: remote, base: document });
+			const model = reduceModel(start(), { type: "replace", lines: remote });
 
 			expect(model.history.present.cursor).toEqual({ line: 1, column: 1 });
 		});
@@ -130,7 +128,6 @@ describe("reduceModel", () => {
 			const model = reduceModel(start(), {
 				type: "replace",
 				lines: [line("a", "題")],
-				base: document,
 			});
 
 			expect(model.history.present.cursor).toEqual({ line: 0, column: 1 });
@@ -138,25 +135,16 @@ describe("reduceModel", () => {
 
 		it("置き換えの前の状態へは、取り消しで戻らない(他の人の変更を巻き戻さないため)", () => {
 			const edited = reduceModel(start(), type("!"));
-			const base = edited.tracker.lines;
-			const replaced = reduceModel(edited, { type: "replace", lines: base.slice(0, 2), base });
+			const replaced = reduceModel(edited, {
+				type: "replace",
+				lines: edited.tracker.lines.slice(0, 2),
+			});
 
 			expect(reduceModel(replaced, { type: "undo" })).toBe(replaced);
 		});
 
-		it("取り込みの計算のあとに打った文字があれば、置き換えた文書に載せ直す", () => {
-			const typed = reduceModel(start(), type("!"));
-			const remote = [line("x", "他の人の行"), ...document];
-
-			// base は、取り込みを計算した時点の文書(「!」を打つ前)。
-			const model = reduceModel(typed, { type: "replace", lines: remote, base: document });
-
-			expect(texts(model.tracker.lines)).toEqual(["他の人の行", "題", "本文!", "末尾"]);
-			expect(model.history.present.cursor).toEqual({ line: 2, column: 3 });
-		});
-
 		it("すべての行が消されていたら、空の1行を置く(編集欄は常に1行以上を持つ)", () => {
-			const model = reduceModel(start(), { type: "replace", lines: [], base: document });
+			const model = reduceModel(start(), { type: "replace", lines: [] });
 
 			expect(model.history.present).toEqual({ lines: [""], cursor: { line: 0, column: 0 } });
 			expect(model.tracker.lines).toEqual([line("p-0", "")]);

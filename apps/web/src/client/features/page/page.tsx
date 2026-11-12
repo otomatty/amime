@@ -3,8 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "../editor/editor.tsx";
 import { createIdPrefix } from "../editor/editor-model.ts";
 import { createPageApi } from "./api.ts";
+import { createChannel } from "./channel.ts";
+import { createClientId } from "./client-id.ts";
 import { PageApiError } from "./page-api-error.ts";
-import { createPageSync, type PageApi, type PageSyncState, type SyncStatus } from "./page-sync.ts";
+import { createPageSync, type PageApi, type SyncStatus } from "./page-sync.ts";
 import { titleFromName } from "./route.ts";
 import "./page.css";
 
@@ -34,7 +36,7 @@ const SETTLED: ReadonlySet<SyncStatus> = new Set(["new", "saved"]);
 /** 保存されるページ。読み込んでから編集欄を表示し、編集を保存する。 */
 export function Page({ name }: PageProps) {
 	// 端末(タブ)の識別子は、ページを開くたびに作る。
-	const api = useMemo(() => createPageApi(name, createIdPrefix()), [name]);
+	const api = useMemo(() => createPageApi(name, createClientId()), [name]);
 	const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
 	const [attempt, setAttempt] = useState(0);
 
@@ -95,14 +97,19 @@ function PageEditor({ title, snapshot, api }: PageEditorProps) {
 			snapshot.lines.length > 0 ? snapshot.lines : startTracking([title], createIdPrefix()).lines,
 		[snapshot, title],
 	);
-	const [state, setState] = useState<PageSyncState>({
-		status: snapshot.version === 0 ? "new" : "saved",
-		remote: null,
-	});
+	const [status, setStatus] = useState<SyncStatus>(snapshot.version === 0 ? "new" : "saved");
+	// 他の人の変更を取り込んだ文書を、編集欄へその場で届ける通り道。
+	const [remote] = useState(() => createChannel<readonly Line[]>());
 	const sync = useRef<ReturnType<typeof createPageSync> | null>(null);
 
 	useEffect(() => {
-		const current = createPageSync({ snapshot, initial, api, onState: setState });
+		const current = createPageSync({
+			snapshot,
+			initial,
+			api,
+			onStatus: setStatus,
+			onRemote: remote.emit,
+		});
 		sync.current = current;
 		// 通信が戻ったら、再試行を待たずにすぐ保存する。
 		const flush = () => current.flush();
@@ -112,9 +119,9 @@ function PageEditor({ title, snapshot, api }: PageEditorProps) {
 			current.dispose();
 			sync.current = null;
 		};
-	}, [snapshot, initial, api]);
+	}, [snapshot, initial, api, remote]);
 
-	const unsaved = !SETTLED.has(state.status);
+	const unsaved = !SETTLED.has(status);
 	useEffect(() => {
 		if (!unsaved) return;
 		// 未保存の変更があるあいだは、ページを離れる前にブラウザの確認を出す。
@@ -129,10 +136,10 @@ function PageEditor({ title, snapshot, api }: PageEditorProps) {
 
 	return (
 		<>
-			<p className="page-status" role="status" data-status={state.status}>
-				{STATUS_LABELS[state.status]}
+			<p className="page-status" role="status" data-status={status}>
+				{STATUS_LABELS[status]}
 			</p>
-			<Editor initialDocument={initial} remote={state.remote} onChange={handleChange} />
+			<Editor initialDocument={initial} remote={remote} onChange={handleChange} />
 		</>
 	);
 }

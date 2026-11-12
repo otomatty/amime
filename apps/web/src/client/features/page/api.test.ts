@@ -1,4 +1,4 @@
-import type { Change, LineId } from "@amime/sync";
+import type { Change, ClientId, LineId } from "@amime/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPageApi, pageSocketUrl } from "./api.ts";
 import { PageApiError } from "./page-api-error.ts";
@@ -19,11 +19,13 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
+const client = "tab-1" as ClientId;
+
 describe("pageSocketUrl", () => {
 	it("いま開いているページと同じ接続先の、WebSocket のURLを作る", () => {
 		const page = new URL("https://amime.example/notes/x");
 
-		expect(pageSocketUrl(page, "買い物/メモ", "tab-1")).toBe(
+		expect(pageSocketUrl(page, "買い物/メモ", client)).toBe(
 			`wss://amime.example/api/pages/${encodeURIComponent("買い物/メモ")}/socket?client=tab-1`,
 		);
 	});
@@ -31,14 +33,14 @@ describe("pageSocketUrl", () => {
 	it("http で開いているときは、暗号化しない接続にする(手元での開発)", () => {
 		const page = new URL("http://localhost:5173/");
 
-		expect(pageSocketUrl(page, "a", "tab-1")).toBe(
+		expect(pageSocketUrl(page, "a", client)).toBe(
 			"ws://localhost:5173/api/pages/a/socket?client=tab-1",
 		);
 	});
 });
 
 describe("createPageApi", () => {
-	const api = createPageApi("買い物/メモ", "tab-1");
+	const api = createPageApi("買い物/メモ", client);
 	const snapshot = { version: 2, lines: [{ id: "a", text: "題" }] };
 
 	describe("load", () => {
