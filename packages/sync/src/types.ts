@@ -71,3 +71,10 @@ export type ServerMessage =
 	| { readonly type: "hello"; readonly version: number }
 	/** 他の端末のコミットが効いたときに送る。 */
 	| ({ readonly type: "commit" } & CommitResult);
+
+/** 端末内に残す、未送信の変更の記録。 */
+export type PendingRecord = {
+	/** 残した時刻(ミリ秒)。 */
+	readonly savedAt: number;
+	readonly changes: readonly Change[];
+};

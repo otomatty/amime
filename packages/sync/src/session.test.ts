@@ -8,11 +8,13 @@ import {
 	edit,
 	failed,
 	hasUnsaved,
+	pendingChanges,
 	receive,
 	recover,
 	resync,
 	type Session,
 	send,
+	withPending,
 } from "./session.ts";
 import type { Change, CommitResult, Line, LineId } from "./types.ts";
 
@@ -199,22 +201,122 @@ describe("セッション(1つの端末から見たページの状態)", () => {
 			expect(next.local).toEqual([line("x"), ...typed]);
 		});
 
-		it("送ったあとで取り消して元に戻していても、未保存がないとは判断しない。読み直すと、サーバーの内容が画面に出る", () => {
-			const server = createServer(base);
-			const sending = mustSend(
-				edit(createSession({ version: 0, lines: base }), [line("a", "A2"), line("b")]),
-			);
-			server.commit(sending.changes); // 応答は届かなかった
-			const undone = edit(sending.session, base);
-
+		it("送ったあとで取り消して元に戻していたら、その取り消しも送る(サーバーに入っていても、いなくても)", () => {
+			const undoneAfterSending = () => {
+				const sending = mustSend(
+					edit(createSession({ version: 0, lines: base }), [line("a", "A2"), line("b")]),
+				);
+				return { changes: sending.changes, session: edit(sending.session, base) };
+			};
 			// 画面は確定した文書と同じだが、送った変更がサーバーに入ったかどうかが分からない。
-			expect(hasUnsaved(undone)).toBe(true);
-			const next = recover(undone, server.snapshot());
+			expect(hasUnsaved(undoneAfterSending().session)).toBe(true);
 
-			// 送った変更を取り消すつもりだったかどうかは分からないので、サーバーの内容に合わせる。
-			expect(next.local).toEqual([line("a", "A2"), line("b")]);
-			expect(hasUnsaved(next)).toBe(false);
+			// サーバーに入っていた場合: 画面は取り消したままで、取り消しを送る。
+			const applied = createServer(base);
+			applied.commit(undoneAfterSending().changes);
+			const afterApplied = recover(undoneAfterSending().session, applied.snapshot());
+			expect(afterApplied.local).toEqual(base);
+			expect(mustSend(afterApplied).changes).toEqual([{ type: "update", id: id("a"), text: "A" }]);
+
+			// サーバーに入っていなかった場合: 送るものはない。
+			const notApplied = recover(undoneAfterSending().session, createServer(base).snapshot());
+			expect(notApplied.local).toEqual(base);
+			expect(hasUnsaved(notApplied)).toBe(false);
 		});
+
+		it("足した行を送ったあとで、その行に書き足していたら、書き足した分も残る", () => {
+			const typedOnNewLine = () => {
+				const sending = mustSend(
+					edit(createSession({ version: 0, lines: base }), [...base, line("n", "書きかけ")]),
+				);
+				const local = [...base, line("n", "書きかけの続き")];
+				return { changes: sending.changes, local, session: edit(sending.session, local) };
+			};
+
+			// サーバーに入っていた場合: 行は既にあるので、本文の書き換えだけが未送信として残る。
+			const applied = createServer(base);
+			const { changes, local, session } = typedOnNewLine();
+			applied.commit(changes);
+			const afterApplied = recover(session, applied.snapshot());
+			expect(afterApplied.local).toEqual(local);
+			expect(mustSend(afterApplied).changes).toEqual([
+				{ type: "update", id: id("n"), text: "書きかけの続き" },
+			]);
+
+			// サーバーに入っていなかった場合: 行ごと、もう一度送る。
+			const notApplied = recover(typedOnNewLine().session, createServer(base).snapshot());
+			expect(notApplied.local).toEqual(local);
+		});
+	});
+});
+
+describe("pendingChanges / withPending(未送信の変更の取り出しと、載せ直し)", () => {
+	const snapshot = { version: 3, lines: [line("a"), line("b")] };
+
+	it("未送信の変更がなければ、空になる", () => {
+		expect(pendingChanges(createSession(snapshot))).toEqual([]);
+	});
+
+	it("まだ送っていない編集を、確定した文書からの変更として取り出す", () => {
+		const session = edit(createSession(snapshot), [line("a", "A2"), line("b"), line("n")]);
+
+		expect(pendingChanges(session)).toEqual([
+			{ type: "update", id: id("a"), text: "A2" },
+			{ type: "insert", line: line("n"), after: id("b"), before: null },
+		]);
+	});
+
+	it("送信中の変更も含める(サーバーに入ったかどうかは、応答が届くまで分からない)", () => {
+		const sending = mustSend(edit(createSession(snapshot), [line("a", "A2"), line("b")]));
+		const typedMore = edit(sending.session, [line("a", "A2"), line("b", "B2")]);
+
+		expect(pendingChanges(typedMore)).toEqual([
+			{ type: "update", id: id("a"), text: "A2" },
+			{ type: "update", id: id("b"), text: "B2" },
+		]);
+	});
+
+	it("足した行を送っているあいだにその行へ書き足した分は、行がサーバーに入っていても、いなくても載せ直せる", () => {
+		const sending = mustSend(
+			edit(createSession(snapshot), [...snapshot.lines, line("n", "書きかけ")]),
+		);
+		const typedMore = edit(sending.session, [...snapshot.lines, line("n", "書きかけの続き")]);
+		const pending = pendingChanges(typedMore);
+
+		// 送った順(行を足す → 本文を書き換える)で残す。
+		expect(pending).toEqual([
+			{ type: "insert", line: line("n", "書きかけ"), after: id("b"), before: null },
+			{ type: "update", id: id("n"), text: "書きかけの続き" },
+		]);
+		const expected = [...snapshot.lines, line("n", "書きかけの続き")];
+		expect(withPending([...snapshot.lines, line("n", "書きかけ")], [pending])).toEqual(expected);
+		expect(withPending(snapshot.lines, [pending])).toEqual(expected);
+	});
+
+	it("取り出した変更を、あとで読み込んだページに載せ直せる。そのあいだの他の人の変更は残る", () => {
+		const session = edit(createSession(snapshot), [line("a", "A2"), line("b"), line("n")]);
+		const later = [line("x"), line("a"), line("b")];
+
+		expect(withPending(later, [pendingChanges(session)])).toEqual([
+			line("x"),
+			line("a", "A2"),
+			line("b"),
+			line("n"),
+		]);
+	});
+
+	it("既にサーバーに入っていた変更は、載せ直しても二重にならない", () => {
+		const session = edit(createSession(snapshot), [line("a"), line("b"), line("n")]);
+		const later = [line("a"), line("b"), line("n")];
+
+		expect(withPending(later, [pendingChanges(session)])).toBe(later);
+	});
+
+	it("複数の記録は、渡した順に載せる", () => {
+		const first = [{ type: "update", id: id("a"), text: "1" }] as const;
+		const second = [{ type: "update", id: id("a"), text: "2" }] as const;
+
+		expect(withPending(snapshot.lines, [first, second])).toEqual([line("a", "2"), line("b")]);
 	});
 });
 

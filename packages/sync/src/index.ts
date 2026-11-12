@@ -5,6 +5,7 @@ export {
 	parseClientId,
 	parseCommitRequest,
 	parseCommitResult,
+	parsePendingRecord,
 	parseServerMessage,
 	parseSnapshot,
 } from "./schema.ts";
@@ -14,12 +15,14 @@ export {
 	edit,
 	failed,
 	hasUnsaved,
+	pendingChanges,
 	receive,
 	recover,
 	resync,
 	type Session,
 	sameLines,
 	send,
+	withPending,
 } from "./session.ts";
 export type {
 	Change,
@@ -29,5 +32,6 @@ export type {
 	Line,
 	LineId,
 	PageSnapshot,
+	PendingRecord,
 	ServerMessage,
 } from "./types.ts";

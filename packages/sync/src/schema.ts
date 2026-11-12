@@ -6,6 +6,7 @@ import type {
 	CommitResult,
 	LineId,
 	PageSnapshot,
+	PendingRecord,
 	ServerMessage,
 } from "./types.ts";
 
@@ -29,20 +30,30 @@ const LineIdSchema = v.pipe(
 	v.regex(IDENTIFIER),
 	v.transform((value) => value as LineId),
 );
-const TextSchema = v.pipe(
-	v.string(),
-	v.maxLength(MAX_LINE_LENGTH),
-	v.check((value) => !LINE_BREAK.test(value)),
-);
-const LineSchema = v.object({ id: LineIdSchema, text: TextSchema });
 const placement = { after: v.nullable(LineIdSchema), before: v.nullable(LineIdSchema) };
 
-const ChangeSchema = v.variant("type", [
-	v.object({ type: v.literal("insert"), line: LineSchema, ...placement }),
-	v.object({ type: v.literal("update"), id: LineIdSchema, text: TextSchema }),
-	v.object({ type: v.literal("delete"), id: LineIdSchema }),
-	v.object({ type: v.literal("move"), id: LineIdSchema, ...placement }),
-]);
+/** 本文の検査を指定して、変更の検査を作る。 */
+const changeSchema = <Text extends v.GenericSchema<unknown, string>>(text: Text) =>
+	v.variant("type", [
+		v.object({
+			type: v.literal("insert"),
+			line: v.object({ id: LineIdSchema, text }),
+			...placement,
+		}),
+		v.object({ type: v.literal("update"), id: LineIdSchema, text }),
+		v.object({ type: v.literal("delete"), id: LineIdSchema }),
+		v.object({ type: v.literal("move"), id: LineIdSchema, ...placement }),
+	]);
+
+const noLineBreak = v.check((value: string) => !LINE_BREAK.test(value));
+const TextSchema = v.pipe(v.string(), v.maxLength(MAX_LINE_LENGTH), noLineBreak);
+const LineSchema = v.object({ id: LineIdSchema, text: TextSchema });
+const ChangeSchema = changeSchema(TextSchema);
+/**
+ * 端末内に残した変更。本文の長さは制限しない。
+ * 編集欄は長さを制限していないので、送れない長さの行も残してあることがある。復元して、直してもらう。
+ */
+const StoredChangeSchema = changeSchema(v.pipe(v.string(), noLineBreak));
 const ChangesSchema = v.pipe(v.array(ChangeSchema), v.maxLength(MAX_CHANGES));
 const VersionSchema = v.pipe(v.number(), v.integer(), v.minValue(0));
 const SnapshotSchema = v.object({ version: VersionSchema, lines: v.array(LineSchema) });
@@ -57,6 +68,11 @@ const ClientIdSchema = v.pipe(
 const CommitRequestSchema = v.object({
 	changes: ChangesSchema,
 	client: v.optional(ClientIdSchema),
+});
+// 変更の数に上限は設けない。送るときに、1つのコミットに収まる分ずつに分ける。
+const PendingRecordSchema = v.object({
+	savedAt: v.pipe(v.number(), v.minValue(0)),
+	changes: v.array(StoredChangeSchema),
 });
 const ServerMessageSchema = v.variant("type", [
 	v.object({ type: v.literal("hello"), version: VersionSchema }),
@@ -76,15 +92,23 @@ export const parseCommitRequest = (input: unknown): Result<CommitRequest, "inval
 export const parseClientId = (input: unknown): Result<ClientId, "invalid"> =>
 	parse(ClientIdSchema, input);
 
-/** サーバーから WebSocket で届いたメッセージを検査する。 */
-export function parseServerMessage(input: unknown): Result<ServerMessage, "invalid"> {
+/** JSONの文字列として届いたものを、読み取ってから検査する。 */
+function parseJson<T>(schema: v.GenericSchema<unknown, T>, input: unknown): Result<T, "invalid"> {
 	if (typeof input !== "string") return err("invalid");
 	try {
-		return parse(ServerMessageSchema, JSON.parse(input));
+		return parse(schema, JSON.parse(input));
 	} catch {
 		return err("invalid");
 	}
 }
+
+/** サーバーから WebSocket で届いたメッセージを検査する。 */
+export const parseServerMessage = (input: unknown): Result<ServerMessage, "invalid"> =>
+	parseJson(ServerMessageSchema, input);
+
+/** 端末内に残してあった未送信の変更を検査する。 */
+export const parsePendingRecord = (input: unknown): Result<PendingRecord, "invalid"> =>
+	parseJson(PendingRecordSchema, input);
 
 /** サーバーから届いたページを検査する。 */
 export const parseSnapshot = (input: unknown): Result<PageSnapshot, "invalid"> =>

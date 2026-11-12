@@ -44,13 +44,23 @@ function createServer(initial: readonly Line[] = []) {
 /** 保存の状態と、編集欄に最後に渡された文書(まだ渡されていなければ null)。 */
 type Observed = { readonly status: SyncStatus; readonly remote: readonly Line[] | null };
 
-function start(server: ReturnType<typeof createServer>, initial?: readonly Line[]) {
+type StartOptions = {
+	/** 編集欄に最初に表示する文書。省くと、読み込んだページの行。 */
+	readonly initial?: readonly Line[];
+	/** initial が、まだないページの仮のタイトルか。 */
+	readonly placeholder?: boolean;
+};
+
+function start(server: ReturnType<typeof createServer>, options: StartOptions = {}) {
 	const states: Observed[] = [];
 	const remotes: (readonly Line[])[] = [];
+	const pendings: (readonly Change[])[] = [];
 	const sync = createPageSync({
 		snapshot: server.snapshot(),
-		initial: initial ?? server.snapshot().lines,
+		initial: options.initial ?? server.snapshot().lines,
+		placeholder: options.placeholder ?? false,
 		api: server.api,
+		onPending: (changes) => pendings.push(changes),
 		onStatus: (status) => states.push({ status, remote: remotes.at(-1) ?? null }),
 		onRemote: (lines) => remotes.push(lines),
 	});
@@ -58,7 +68,7 @@ function start(server: ReturnType<typeof createServer>, initial?: readonly Line[
 		const status = states.at(-1)?.status;
 		return status && { status, remote: remotes.at(-1) ?? null };
 	};
-	return { sync, states, remotes, latest };
+	return { sync, states, remotes, pendings, latest };
 }
 
 describe("createPageSync", () => {
@@ -207,20 +217,35 @@ describe("createPageSync", () => {
 			server.commitFromOther(changes); // サーバーには入ったが、応答は届かなかった
 			throw new PageApiError("failed");
 		});
-		const { sync, latest } = start(server);
-		const local = [line("a", "A2")];
-		sync.edit(local);
+		const { sync, latest, remotes } = start(server);
+		sync.edit([line("a", "A2"), line("n")]);
 		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
-		expect(latest()?.status).toBe("retrying");
-
-		// 取り消して元に戻しても、送った変更の行方が分かるまでは「保存済み」にしない。
-		sync.edit([line("a")]);
 		expect(latest()?.status).toBe("retrying");
 		await vi.advanceTimersByTimeAsync(1000);
 
 		expect(server.api.load).toHaveBeenCalledOnce();
 		expect(server.api.commit).toHaveBeenCalledTimes(1);
-		expect(latest()).toEqual({ status: "saved", remote: local });
+		expect(server.snapshot().lines).toEqual([line("a", "A2"), line("n")]);
+		expect(latest()?.status).toBe("saved");
+		expect(remotes).toEqual([]);
+	});
+
+	it("応答が届かないうちに取り消して元に戻していたら、行方が分かるまで保存済みにせず、取り消しも送る", async () => {
+		const server = createServer([line("a")]);
+		server.api.commit.mockImplementationOnce(async (changes) => {
+			server.commitFromOther(changes); // サーバーには入ったが、応答は届かなかった
+			throw new PageApiError("failed");
+		});
+		const { sync, latest } = start(server);
+		sync.edit([line("a", "A2")]);
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+		sync.edit([line("a")]);
+		expect(latest()?.status).toBe("retrying");
+		await vi.advanceTimersByTimeAsync(1000);
+
+		expect(server.snapshot().lines).toEqual([line("a")]);
+		expect(latest()).toEqual({ status: "saved", remote: null });
 	});
 
 	it("再試行のときの読み直しにも失敗したら、さらに間隔を延ばして再試行する", async () => {
@@ -239,12 +264,69 @@ describe("createPageSync", () => {
 		expect(latest()?.status).toBe("saved");
 	});
 
+	describe("未送信の変更を端末内に残す", () => {
+		it("編集するたびに、未送信の変更を知らせる。保存が終わると、空を知らせる", async () => {
+			const server = createServer([line("a")]);
+			const { sync, pendings } = start(server);
+
+			sync.edit([line("a", "A2")]);
+			expect(pendings.at(-1)).toEqual([{ type: "update", id: "a", text: "A2" }]);
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+			expect(pendings.at(-1)).toEqual([]);
+		});
+
+		it("保存に失敗しているあいだも、未送信の変更は知らせたまま", async () => {
+			const server = createServer([line("a")]);
+			server.failing = true;
+			const { sync, pendings } = start(server);
+
+			sync.edit([line("a", "A2")]);
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+			expect(pendings.at(-1)).toEqual([{ type: "update", id: "a", text: "A2" }]);
+		});
+
+		it("復元した変更を載せた文書から始めると、編集を待たずに保存する", async () => {
+			const server = createServer([line("a")]);
+			const restored = [line("a", "前回の入力")];
+			const { latest, pendings } = start(server, { initial: restored });
+
+			expect(latest()?.status).toBe("unsaved");
+			expect(pendings.at(-1)).toEqual([{ type: "update", id: "a", text: "前回の入力" }]);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(server.snapshot().lines).toEqual(restored);
+			expect(latest()?.status).toBe("saved");
+		});
+
+		it("まだないページの仮のタイトルは、未送信の変更として知らせない", () => {
+			const server = createServer();
+			const { latest, pendings } = start(server, {
+				initial: [line("t", "新しいページ")],
+				placeholder: true,
+			});
+
+			expect(latest()?.status).toBe("new");
+			expect(pendings.at(-1)).toEqual([]);
+		});
+
+		it("まだないページでも、復元した変更があれば保存する", async () => {
+			const server = createServer();
+			const restored = [line("t", "前回書いたタイトル")];
+			start(server, { initial: restored });
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(server.snapshot().lines).toEqual(restored);
+		});
+	});
+
 	describe("まだないページ", () => {
 		const initial = [line("t", "新しいページ")];
 
 		it("最初に表示した内容のままなら、保存しない(開いただけではページを作らない)", async () => {
 			const server = createServer();
-			const { sync, latest } = start(server, initial);
+			const { sync, latest } = start(server, { initial, placeholder: true });
 
 			// 1文字打って、保存が始まる前に取り消した。
 			sync.edit([line("t", "新しいページa")]);
@@ -258,7 +340,7 @@ describe("createPageSync", () => {
 
 		it("内容を変えると、最初に表示したタイトルの行も含めて保存する", async () => {
 			const server = createServer();
-			const { sync, latest } = start(server, initial);
+			const { sync, latest } = start(server, { initial, placeholder: true });
 
 			sync.edit([...initial, line("b", "本文")]);
 			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
@@ -269,7 +351,7 @@ describe("createPageSync", () => {
 
 		it("保存したあとは、最初の内容に戻しても、それを保存する", async () => {
 			const server = createServer();
-			const { sync, latest } = start(server, initial);
+			const { sync, latest } = start(server, { initial, placeholder: true });
 			sync.edit([...initial, line("b", "本文")]);
 			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
 
@@ -501,7 +583,7 @@ describe("createPageSync", () => {
 		it("まだないページを開いているあいだに他の人が書いたら、仮のタイトルを捨てて、その内容を表示する", async () => {
 			const server = createServer();
 			const initial = [line("t", "新しいページ")];
-			const { latest } = start(server, initial);
+			const { latest } = start(server, { initial, placeholder: true });
 
 			server.handlers?.onCommit(server.commitFromOther([insertX]));
 			await vi.advanceTimersByTimeAsync(60_000);

@@ -1,4 +1,4 @@
-import { type Line, type PageSnapshot, startTracking } from "@amime/sync";
+import { type Line, type PageSnapshot, startTracking, withPending } from "@amime/sync";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "../editor/editor.tsx";
 import { createIdPrefix } from "../editor/editor-model.ts";
@@ -7,6 +7,12 @@ import { createChannel } from "./channel.ts";
 import { createClientId } from "./client-id.ts";
 import { PageApiError } from "./page-api-error.ts";
 import { createPageSync, type PageApi, type SyncStatus } from "./page-sync.ts";
+import {
+	browserLocks,
+	browserStorage,
+	createPendingStore,
+	type PendingStore,
+} from "./pending-store.ts";
 import { titleFromName } from "./route.ts";
 import "./page.css";
 
@@ -17,7 +23,12 @@ type PageProps = {
 
 type Loaded =
 	| { readonly status: "loading" }
-	| { readonly status: "ready"; readonly snapshot: PageSnapshot }
+	| {
+			readonly status: "ready";
+			readonly snapshot: PageSnapshot;
+			/** 前回送れなかった変更を載せた文書。復元するものがなければ null。 */
+			readonly restored: readonly Line[] | null;
+	  }
 	| { readonly status: "error"; readonly kind: PageApiError["kind"] };
 
 const STATUS_LABELS: Record<SyncStatus, string> = {
@@ -36,17 +47,35 @@ const SETTLED: ReadonlySet<SyncStatus> = new Set(["new", "saved"]);
 /** 保存されるページ。読み込んでから編集欄を表示し、編集を保存する。 */
 export function Page({ name }: PageProps) {
 	// 端末(タブ)の識別子は、ページを開くたびに作る。
-	const api = useMemo(() => createPageApi(name, createClientId()), [name]);
+	const { api, pending } = useMemo(() => {
+		const client = createClientId();
+		return {
+			api: createPageApi(name, client),
+			pending: createPendingStore({
+				storage: browserStorage(),
+				locks: browserLocks(),
+				page: name,
+				client,
+			}),
+		};
+	}, [name]);
 	const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
 	const [attempt, setAttempt] = useState(0);
+
+	// このタブが開いているあいだ、このタブの未送信の変更を、他のタブに引き取らせない(ADR-0020)。
+	useEffect(() => pending.hold(), [pending]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt は、読み込みをやり直すためのきっかけとして使う。
 	useEffect(() => {
 		let cancelled = false;
 		setLoaded({ status: "loading" });
-		api.load().then(
-			(snapshot) => {
-				if (!cancelled) setLoaded({ status: "ready", snapshot });
+		// 前回送れなかった変更が端末内に残っていたら、引き取って、読み込んだページに載せる(ADR-0020)。
+		Promise.all([api.load(), pending.adopt()]).then(
+			([snapshot, records]) => {
+				if (cancelled) return;
+				const document = withPending(snapshot.lines, records);
+				const restored = document === snapshot.lines ? null : document;
+				setLoaded({ status: "ready", snapshot, restored });
 			},
 			(error: unknown) => {
 				const kind = error instanceof PageApiError ? error.kind : "failed";
@@ -56,7 +85,7 @@ export function Page({ name }: PageProps) {
 		return () => {
 			cancelled = true;
 		};
-	}, [api, attempt]);
+	}, [api, pending, attempt]);
 
 	if (loaded.status === "loading") {
 		return (
@@ -80,23 +109,33 @@ export function Page({ name }: PageProps) {
 			</p>
 		);
 	}
-	return <PageEditor title={titleFromName(name)} snapshot={loaded.snapshot} api={api} />;
+	return (
+		<PageEditor
+			title={titleFromName(name)}
+			snapshot={loaded.snapshot}
+			restored={loaded.restored}
+			api={api}
+			pending={pending}
+		/>
+	);
 }
 
 type PageEditorProps = {
 	/** まだないページを開いたときに、1行目に入れるタイトル。 */
 	readonly title: string;
 	readonly snapshot: PageSnapshot;
+	readonly restored: readonly Line[] | null;
 	readonly api: PageApi;
+	readonly pending: PendingStore;
 };
 
-function PageEditor({ title, snapshot, api }: PageEditorProps) {
-	// まだないページは、タイトルだけを入れた文書から始める。この内容のままなら保存しない。
-	const initial = useMemo(
-		() =>
-			snapshot.lines.length > 0 ? snapshot.lines : startTracking([title], createIdPrefix()).lines,
-		[snapshot, title],
-	);
+function PageEditor({ title, snapshot, restored, api, pending }: PageEditorProps) {
+	// まだないページは、タイトルだけを入れた仮の文書から始める。この内容のままなら保存しない。
+	const placeholder = restored === null && snapshot.lines.length === 0;
+	const initial = useMemo(() => {
+		if (restored !== null) return restored;
+		return placeholder ? startTracking([title], createIdPrefix()).lines : snapshot.lines;
+	}, [snapshot, restored, placeholder, title]);
 	const [status, setStatus] = useState<SyncStatus>(snapshot.version === 0 ? "new" : "saved");
 	// 他の人の変更を取り込んだ文書を、編集欄へその場で届ける通り道。
 	const [remote] = useState(() => createChannel<readonly Line[]>());
@@ -106,9 +145,12 @@ function PageEditor({ title, snapshot, api }: PageEditorProps) {
 		const current = createPageSync({
 			snapshot,
 			initial,
+			placeholder,
 			api,
 			onStatus: setStatus,
 			onRemote: remote.emit,
+			// まだサーバーに入っていない変更を、端末内に残す。タブを閉じても、次に開いたときに送れる。
+			onPending: pending.save,
 		});
 		sync.current = current;
 		// 通信が戻ったら、再試行を待たずにすぐ保存する。
@@ -119,7 +161,7 @@ function PageEditor({ title, snapshot, api }: PageEditorProps) {
 			current.dispose();
 			sync.current = null;
 		};
-	}, [snapshot, initial, api, remote]);
+	}, [snapshot, initial, placeholder, api, remote, pending]);
 
 	const unsaved = !SETTLED.has(status);
 	useEffect(() => {
@@ -139,6 +181,11 @@ function PageEditor({ title, snapshot, api }: PageEditorProps) {
 			<p className="page-status" role="status" data-status={status}>
 				{STATUS_LABELS[status]}
 			</p>
+			{restored !== null && (
+				<p className="page-notice" role="note">
+					前回、送信できなかった変更を復元しました。
+				</p>
+			)}
 			<Editor initialDocument={initial} remote={remote} onChange={handleChange} />
 		</>
 	);

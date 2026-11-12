@@ -8,6 +8,7 @@ import {
 	hasUnsaved,
 	type Line,
 	type PageSnapshot,
+	pendingChanges,
 	receive,
 	recover,
 	resync,
@@ -45,9 +46,14 @@ type PageSyncOptions = {
 	readonly snapshot: PageSnapshot;
 	/**
 	 * 編集欄に最初に表示する文書。保存されているページなら、読み込んだ行そのもの。
-	 * まだないページでは、タイトルだけを入れた文書。この内容のままなら保存しない。
+	 * 前回の未送信の変更を復元したときは、それを載せた文書(編集を待たずに保存する)。
 	 */
 	readonly initial: readonly Line[];
+	/**
+	 * initial が、まだないページに表示する仮の文書(タイトルだけ)か。
+	 * 仮の文書は、内容がそのままなら保存しない(開いただけではページを作らない)。
+	 */
+	readonly placeholder: boolean;
 	readonly api: PageApi;
 	/** 保存の状態を知らせる。 */
 	readonly onStatus: (status: SyncStatus) => void;
@@ -57,13 +63,26 @@ type PageSyncOptions = {
 	 * もとに作ったものになっている(置き換えで、編集欄の入力が失われることはない)。
 	 */
 	readonly onRemote: (lines: readonly Line[]) => void;
+	/**
+	 * まだサーバーに入っていない変更を知らせる。なくなったら、空を知らせる。
+	 * 端末内に残しておき、タブを閉じても次に開いたときに送れるようにするために使う(ADR-0020)。
+	 */
+	readonly onPending: (changes: readonly Change[]) => void;
 };
 
 /**
  * 1つのページの保存と、他の人の変更の受け取りを受け持つ。
  * 文書の状態と規則は @amime/sync のセッションにあり、ここは「いつ送るか、いつ読み直すか」だけを決める。
  */
-export function createPageSync({ snapshot, initial, api, onStatus, onRemote }: PageSyncOptions) {
+export function createPageSync({
+	snapshot,
+	initial,
+	placeholder,
+	api,
+	onStatus,
+	onRemote,
+	onPending,
+}: PageSyncOptions) {
 	let session: Session = edit(createSession(snapshot), initial);
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let retryDelay = FIRST_RETRY_MS;
@@ -80,7 +99,10 @@ export function createPageSync({ snapshot, initial, api, onStatus, onRemote }: P
 
 	/** まだ1度も保存されていないページで、最初に表示した内容のままか。開いただけではページを作らない。 */
 	const untouched = () =>
-		session.version === 0 && session.inflight === null && sameLines(session.local, initial);
+		placeholder &&
+		session.version === 0 &&
+		session.inflight === null &&
+		sameLines(session.local, initial);
 	const status = (): SyncStatus => {
 		if (untouched()) return "new";
 		if (!hasUnsaved(session)) return "saved";
@@ -95,7 +117,9 @@ export function createPageSync({ snapshot, initial, api, onStatus, onRemote }: P
 	const receiving = (): Session => (untouched() ? edit(session, session.confirmed) : session);
 	const behind = () => session.version < knownVersion;
 	const publish = () => {
-		if (!disposed) onStatus(status());
+		if (disposed) return;
+		onStatus(status());
+		onPending(untouched() ? [] : pendingChanges(session));
 	};
 
 	const schedule = (delay: number) => {
@@ -236,6 +260,10 @@ export function createPageSync({ snapshot, initial, api, onStatus, onRemote }: P
 			publish();
 		},
 	});
+
+	publish();
+	// 復元した変更を載せた文書から始めたときは、編集を待たずに保存する。
+	if (hasUnsaved(session) && !untouched()) schedule(0);
 
 	return {
 		/** 編集欄の文書が変わったときに呼ぶ。 */
