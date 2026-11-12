@@ -633,7 +633,31 @@ describe("parseLine: 行の役割ごとの解析", () => {
 		});
 
 		it("中身のない行は、空のセルを1つ持つ", () => {
-			expect(cells("  ")).toEqual([{ content: "", nodes: [] }]);
+			expect(cells(" ")).toEqual([{ content: "", nodes: [] }]);
+		});
+
+		it("インデントは、始まりの行より1つ深いところまで。その直後のタブは、空の先頭セルを作る", () => {
+			const raw = " \ta";
+
+			const parsed = parseLine(raw, role("table-row"));
+
+			expect(parsed).toEqual({
+				kind: "table-row",
+				indent: 1,
+				cells: [
+					{ content: { start: 1, end: 1 }, nodes: [] },
+					{ content: { start: 2, end: 3 }, nodes: [{ type: "text", start: 2, end: 3 }] },
+				],
+			});
+		});
+
+		it("始まりの行がタブでインデントされていても、1つ深いところまでがインデントになる", () => {
+			expect(cells("\t\ta\tb", 1).map((cell) => cell.content)).toEqual(["a", "b"]);
+			expect(cells("\t\t\ta\tb", 1).map((cell) => cell.content)).toEqual(["", "a", "b"]);
+		});
+
+		it("インデントより後ろの空白は、先頭のセルの中身になる", () => {
+			expect(cells("   a\tb").map((cell) => cell.content)).toEqual(["  a", "b"]);
 		});
 
 		it("セルの中では記法を解釈する", () => {

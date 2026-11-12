@@ -419,7 +419,7 @@ describe("EditorLine", () => {
 		});
 
 		it("インデントはセルとは別の枠に入れ、箇条書きの印を付けない", () => {
-			const element = renderShown("  a", ROW);
+			const element = renderShown("  a", { kind: "table-row", blockIndent: 1 });
 
 			expect(element.querySelectorAll(".indent-cell .indent")).toHaveLength(2);
 			expect(element.querySelector("[data-bullet]")).toBeNull();
@@ -456,8 +456,19 @@ describe("EditorLine", () => {
 			expect(range.toString()).toBe(before);
 		});
 
+		it("インデントの直後のタブは、空の先頭セルになる", () => {
+			expect(cellTexts(renderShown(" \ta", ROW))).toEqual(["", "a"]);
+		});
+
+		it("セルは、生のテキストでの範囲を属性に持つ(余白を押したときの位置決めに使う)", () => {
+			const cells = [...renderShown(" [a]\tb", ROW).querySelectorAll(".cell:not(.indent-cell)")];
+
+			expect(cells.map((cell) => cell.getAttribute("data-cell-start"))).toEqual(["1", "5"]);
+			expect(cells.map((cell) => cell.getAttribute("data-cell-end"))).toEqual(["4", "6"]);
+		});
+
 		it("カーソルはインデントの中にも描画できる", () => {
-			const element = renderEditing("  a", 1, null, ROW);
+			const element = renderEditing("  a", 1, null, { kind: "table-row", blockIndent: 1 });
 
 			expect(element.querySelector(".indent-cell [data-testid='caret']")).not.toBeNull();
 		});

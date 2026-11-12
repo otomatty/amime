@@ -331,7 +331,11 @@ function textLine(raw: string, indent: number, text: string): TextLine {
 	return { kind: "text", indent, nodes: [{ type: "quote", ...rest, content, children }] };
 }
 
-/** テーブルの行。インデントのあとをタブでセルに分け、セルごとに行内の記法を解析する。 */
+/**
+ * テーブルの行。インデントのあとをタブでセルに分け、セルごとに行内の記法を解析する。
+ * インデントは「始まりの行より1つ深いところまで」に限る。それより後ろのタブはセルの区切りなので、
+ * 行頭の空白をすべてインデントとみなすと、空の先頭セルを作れなくなる。
+ */
 function tableCells(raw: string, indent: number): TableCell[] {
 	const cells: TableCell[] = [];
 	let start = indent;
@@ -371,7 +375,8 @@ export function parseLine(raw: string, role: LineRole = TEXT_ROLE): ParsedLine {
 		};
 	}
 	if (role.kind === "table-row" && insideBlock) {
-		return { kind: "table-row", indent, cells: tableCells(raw, indent) };
+		const rowIndent = role.blockIndent + 1;
+		return { kind: "table-row", indent: rowIndent, cells: tableCells(raw, rowIndent) };
 	}
 
 	const head = matchBlockHead(text);

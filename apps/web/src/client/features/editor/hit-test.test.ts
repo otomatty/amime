@@ -23,13 +23,21 @@ describe("columnInCell", () => {
 	// セルの最初の文字。セルの範囲は 3〜7。
 	const first = { start: 3, end: 4, left: 100, width: 10, top: 0, height: 20 };
 
+	const cell = { start: 3, end: 7 };
+
 	it("最初の文字より左(セルの左の余白)を押したら、セルの先頭", () => {
-		expect(columnInCell(first, 7, 95)).toBe(3);
+		expect(columnInCell(first, cell, 95)).toBe(3);
+	});
+
+	it("セルが隠れた記法で始まっていても、左の余白を押したらセルの先頭(記法の前)", () => {
+		// 「[ab]」を装飾して表示しているセル。最初に見える文字 a は、セルの先頭より1つ後ろにある。
+		const firstVisible = { ...first, start: 4, end: 5 };
+		expect(columnInCell(firstVisible, cell, 95)).toBe(3);
 	});
 
 	it("それ以外の余白(文字の下や右)を押したら、セルの末尾", () => {
-		expect(columnInCell(first, 7, 100)).toBe(7);
-		expect(columnInCell(first, 7, 300)).toBe(7);
+		expect(columnInCell(first, cell, 100)).toBe(7);
+		expect(columnInCell(first, cell, 300)).toBe(7);
 	});
 });
 

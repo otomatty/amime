@@ -470,3 +470,54 @@ test.describe("コードブロックとテーブル", () => {
 		await expect(page.locator("code.command-line")).toHaveText("$ pnpm dev");
 	});
 });
+
+test.describe("テーブルの端の扱い", () => {
+	const TABLE_ROW_1 = 15; // 「 月	火	水」
+	const TABLE_ROW_2 = 16; // 「 [定例会議]	`deploy`	お休み」
+
+	test.beforeEach(async ({ page }) => {
+		await page.goto("/");
+	});
+
+	test("記法で始まるセルの左の余白を押すと、記法の前にカーソルが入る", async ({ page }) => {
+		const cell = lines(page).nth(TABLE_ROW_2).locator(".cell").nth(1); // 「[定例会議]」のセル
+		const box = await cell.boundingBox();
+		if (!box) throw new Error("cell is not visible");
+
+		await page.mouse.click(box.x + 2, box.y + box.height / 2);
+		await page.keyboard.type("x");
+
+		await expect(lines(page).nth(TABLE_ROW_2)).toHaveAttribute(
+			"data-text",
+			" x[定例会議]\t`deploy`\tお休み",
+		);
+	});
+
+	test("先頭のセルの頭で Tab を押すと、空の先頭セルができる", async ({ page }) => {
+		await clickLineEnd(page, TABLE_ROW_1);
+		await page.keyboard.press("Home");
+		await page.keyboard.press("ArrowRight"); // インデントの後ろ = 先頭のセルの頭
+
+		await page.keyboard.press("Tab");
+
+		const row = lines(page).nth(TABLE_ROW_1);
+		await expect(row).toHaveAttribute("data-text", " \t月\t火\t水");
+		await expect(row.locator(".cell-text")).toHaveCount(4);
+		await expect(row.locator(".cell-text").first()).toHaveText("");
+	});
+
+	test("空の先頭セルがある行で Enter を押しても、新しい行は先頭のセルから始まる", async ({
+		page,
+	}) => {
+		await clickLineEnd(page, TABLE_ROW_1);
+		await page.keyboard.press("Home");
+		await page.keyboard.press("ArrowRight");
+		await page.keyboard.press("Tab");
+		await page.keyboard.press("End");
+
+		await page.keyboard.press("Enter");
+		await page.keyboard.type("a");
+
+		await expect(lines(page).nth(TABLE_ROW_1 + 1)).toHaveAttribute("data-text", " a");
+	});
+});

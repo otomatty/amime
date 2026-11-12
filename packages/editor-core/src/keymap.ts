@@ -36,11 +36,15 @@ const PLAIN_KEYS = new Map<string, Command>([
 
 /** キーの働きを変える、カーソルのある行の状況。 */
 export type KeyContext = {
-	/** カーソルがテーブルの行にあるか。Tab がセルの区切り(タブ文字)の入力になる。 */
-	readonly inTableRow: boolean;
+	/**
+	 * カーソルがテーブルの行にあるときの、その行のインデントの文字数。テーブルの行でなければ null。
+	 * テーブルの行では、Tab がセルの区切り(タブ文字)の入力になり、
+	 * Enter で引き継ぐインデントがこの文字数までになる。
+	 */
+	readonly tableRowIndent: number | null;
 };
 
-const NO_CONTEXT: KeyContext = { inTableRow: false };
+const NO_CONTEXT: KeyContext = { tableRowIndent: null };
 
 const insertTab: Command = (state) => insertText(state, "\t");
 
@@ -55,6 +59,10 @@ const SHIFT_KEYS = new Map<string, Command>([
  */
 export function commandForKey(input: KeyInput, context: KeyContext = NO_CONTEXT): Command | null {
 	if (input.ctrl || input.alt || input.meta) return null;
-	if (context.inTableRow && input.key === "Tab" && !input.shift) return insertTab;
+	const { tableRowIndent } = context;
+	if (tableRowIndent !== null && input.key === "Tab" && !input.shift) return insertTab;
+	if (tableRowIndent !== null && input.key === "Enter") {
+		return (state) => splitLine(state, tableRowIndent);
+	}
 	return (input.shift ? SHIFT_KEYS : PLAIN_KEYS).get(input.key) ?? null;
 }

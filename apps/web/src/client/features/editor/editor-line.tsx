@@ -215,13 +215,18 @@ function renderNodes(ctx: RenderContext, nodes: readonly InlineNode[]): ReactNod
  * テーブルのセル。
  * セルの区切りのタブは描画しない。代わりに、セルの残りの幅を埋める要素(cell-fill)に
  * セルの末尾の位置を持たせる。行の余白を押したとき(hit-test の columnOnRow)に、
- * 空のセルも位置の候補になる。セルの中の余白を押したときは、data-cell-end を使って
+ * 空のセルも位置の候補になる。セルの中の余白を押したときは、data-cell-start / data-cell-end を使って
  * そのセルの中で位置を決める。
  */
 function tableCell(ctx: RenderContext, cell: TableCell): ReactNode {
 	const { content } = cell;
 	return (
-		<span className="cell" key={content.start} data-cell-end={content.end}>
+		<span
+			className="cell"
+			key={content.start}
+			data-cell-start={content.start}
+			data-cell-end={content.end}
+		>
 			<span className="cell-box">
 				<span className="cell-text">
 					{renderNodes(ctx, cell.nodes)}

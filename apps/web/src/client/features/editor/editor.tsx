@@ -50,6 +50,11 @@ export function Editor({ initialLines }: EditorProps) {
 	// 行の役割(タイトル、コードブロックの中身など)は、ページ全体の行の並びから決まる。
 	const roles = useMemo(() => classifyLines(state.lines), [state.lines]);
 	const groups = useMemo(() => groupLines(roles.map((role) => role.kind)), [roles]);
+	/** 指定した行がテーブルの行なら、そのインデントの文字数(始まりの行より1つ深いところまで)。 */
+	const tableRowIndentAt = (line: number): number | null => {
+		const role = roles[line];
+		return role?.kind === "table-row" ? role.blockIndent + 1 : null;
+	};
 	const rootRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	// 再描画を待たずに参照するため、変換中かどうかは ref にも持つ。
@@ -119,7 +124,7 @@ export function Editor({ initialLines }: EditorProps) {
 				alt: event.altKey,
 				meta: event.metaKey,
 			},
-			{ inTableRow: roles[state.cursor.line]?.kind === "table-row" },
+			{ tableRowIndent: tableRowIndentAt(state.cursor.line) },
 		);
 		if (!command) return;
 		event.preventDefault();
