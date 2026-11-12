@@ -592,6 +592,30 @@ describe("Editor", () => {
 		});
 	});
 
+	describe("行の識別", () => {
+		it("上に行が増えても、元の行は同じ要素のまま下へずれる(行をIDで識別する)", () => {
+			render(<Editor initialLines={["題", "本文"]} />);
+			const body = screen.getAllByTestId("line")[1];
+			clickChar(0, 0);
+
+			press("Enter");
+
+			expect(lines()).toEqual(["", "題", "本文"]);
+			expect(screen.getAllByTestId("line")[2]).toBe(body);
+		});
+
+		it("行を動かしても、要素は行についていく", () => {
+			render(<Editor initialLines={["題", "A", "B"]} />);
+			const moved = screen.getAllByTestId("line")[2];
+			clickChar(2, 0);
+
+			press("ArrowUp", { ctrlKey: true });
+
+			expect(lines()).toEqual(["題", "B", "A"]);
+			expect(screen.getAllByTestId("line")[1]).toBe(moved);
+		});
+	});
+
 	describe("行とかたまりを動かす", () => {
 		const outline = ["題", "A", " a1", "B", " b1"];
 

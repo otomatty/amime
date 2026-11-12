@@ -19,6 +19,7 @@ import {
 	undo,
 } from "@amime/editor-core";
 import { classifyLines } from "@amime/parser";
+import { type LineTracker, startTracking, trackLines } from "@amime/sync";
 import {
 	type ClipboardEvent,
 	type CompositionEvent,
@@ -79,7 +80,21 @@ const keyInput = (event: KeyboardEvent): KeyInput => ({
 	meta: event.metaKey,
 });
 
-function reducer(history: History, action: Action): History {
+/** 編集の履歴と、行IDの割り当て。 */
+type EditorModel = {
+	readonly history: History;
+	readonly tracker: LineTracker;
+};
+
+/** この端末が作る行IDの接頭辞。編集欄ごとに違う値にする。 */
+const createIdPrefix = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 12);
+
+function createModel(lines: readonly string[]): EditorModel {
+	const history = createHistory(initialState(lines));
+	return { history, tracker: startTracking(history.present.lines, createIdPrefix()) };
+}
+
+function nextHistory(history: History, action: Action): History {
 	switch (action.type) {
 		case "edit":
 			return applyEdit(history, action.command, action);
@@ -90,14 +105,19 @@ function reducer(history: History, action: Action): History {
 	}
 }
 
+function reducer(model: EditorModel, action: Action): EditorModel {
+	const history = nextHistory(model.history, action);
+	if (history === model.history) return model;
+	// 行IDは、編集の前後の本文を見比べて割り当てる。編集の操作そのものは本文だけを扱う(ADR-0016)。
+	return { history, tracker: trackLines(model.tracker, history.present.lines) };
+}
+
 /**
  * 行エディタ。表示は自前で描画し、文字入力は画面に見えない textarea で受け取る(ADR-0010)。
  * 編集の規則はすべて @amime/editor-core にあり、ここはイベントを操作に変換するだけ。
  */
 export function Editor({ initialLines }: EditorProps) {
-	const [history, dispatch] = useReducer(reducer, initialLines, (lines) =>
-		createHistory(initialState(lines)),
-	);
+	const [{ history, tracker }, dispatch] = useReducer(reducer, initialLines, createModel);
 	const state = history.present;
 	const [composing, setComposing] = useState<string | null>(null);
 	const [focused, setFocused] = useState(false);
@@ -313,8 +333,8 @@ export function Editor({ initialLines }: EditorProps) {
 					const selected = lineSelection(selection, index, text.length);
 					return (
 						<EditorLine
-							// 行IDは同期を実装するP2で導入する。それまでは行番号で識別する。
-							key={index}
+							// 行IDで識別する。行が増減したり動いたりしても、同じ行は同じ要素のまま保たれる。
+							key={tracker.lines[index]?.id}
 							index={index}
 							text={text}
 							kind={role?.kind ?? "text"}
@@ -331,7 +351,7 @@ export function Editor({ initialLines }: EditorProps) {
 				if (!group.table) return lines;
 				// テーブルの行は1つの枠で囲み、列の幅をそろえる。
 				return (
-					<div className="table-block" key={`table-${group.start}`}>
+					<div className="table-block" key={`table-${tracker.lines[group.start]?.id}`}>
 						{lines}
 					</div>
 				);

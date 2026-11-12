@@ -15,7 +15,6 @@
 	"dependencies": {
 		"@amime/editor-core": "workspace:*",
 		"@amime/parser": "workspace:*",
-		"@amime/shared": "workspace:*",
 		"@amime/sync": "workspace:*",
 		"hono": "^4.13.18",
 		"react": "^19.3.1",

@@ -1,6 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { ok, type Result } from "@amime/shared";
-import { type ApplyError, applyChanges, type Change, type Line, type LineId } from "@amime/sync";
+import { applyChanges, type Change, type Line, type LineId } from "@amime/sync";
 
 type LineRow = { id: string; text: string };
 
@@ -8,6 +7,11 @@ type PageSnapshot = {
 	/** コミットが成功するたびに1ずつ増える。 */
 	readonly version: number;
 	readonly lines: readonly Line[];
+};
+
+type CommitResult = {
+	readonly version: number;
+	readonly applied: readonly Change[];
 };
 
 /**
@@ -34,17 +38,20 @@ export class PageDO extends DurableObject {
 		return { version: this.#version(), lines: this.#lines() };
 	}
 
-	/** 変更をまとめて適用する。1つでも適用できなければ何も保存しない。 */
-	commit(changes: readonly Change[]): Result<{ version: number }, ApplyError> {
-		const applied = applyChanges(this.#lines(), changes);
-		if (!applied.ok) return applied;
+	/**
+	 * 変更をまとめて適用する。対象の行がなくなっている変更は、その変更だけを捨てる(ADR-0016)。
+	 * 実際に効いた変更と、適用後のバージョンを返す。何も効かなければ、バージョンは進まない。
+	 */
+	commit(changes: readonly Change[]): CommitResult {
+		const { lines, applied } = applyChanges(this.#lines(), changes);
+		if (applied.length === 0) return { version: this.#version(), applied };
 
 		const version = this.#version() + 1;
 		const { sql } = this.ctx.storage;
 		this.ctx.storage.transactionSync(() => {
 			// P0では全行を書き直す。行数に比例するため、P2で差分書き込みに置き換える(ADR-0006)。
 			sql.exec("DELETE FROM lines");
-			applied.value.forEach((line, position) => {
+			lines.forEach((line, position) => {
 				sql.exec(
 					"INSERT INTO lines (position, id, text) VALUES (?, ?, ?)",
 					position,
@@ -57,7 +64,7 @@ export class PageDO extends DurableObject {
 				version,
 			);
 		});
-		return ok({ version });
+		return { version, applied };
 	}
 
 	#lines(): Line[] {
