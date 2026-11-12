@@ -1,6 +1,14 @@
 import { applyChanges, diffLines } from "./changes.ts";
 import { MAX_CHANGES, MAX_COMMIT_TEXT_LENGTH } from "./schema.ts";
-import type { Change, CommitResult, Line, PageSnapshot } from "./types.ts";
+import type {
+	Change,
+	Commit,
+	CommitId,
+	CommitResult,
+	Line,
+	PageSnapshot,
+	PendingEntry,
+} from "./types.ts";
 
 /**
  * 1つの端末から見た、ページの状態(ADR-0016)。
@@ -11,8 +19,11 @@ export type Session = {
 	readonly version: number;
 	/** サーバーが確定した文書。 */
 	readonly confirmed: readonly Line[];
-	/** 送信して、応答を待っている変更。送信中でなければ null。 */
-	readonly inflight: readonly Change[] | null;
+	/**
+	 * 送信して、応答を受け取っていないコミット。送信中でなければ null。
+	 * 応答が届かなかったときは、同じコミットを同じIDで送り直す。サーバーは二重に適用しない(ADR-0021)。
+	 */
+	readonly inflight: Commit | null;
 	/** 画面の文書。確定した文書に、自分の未確定の変更を適用したもの。 */
 	readonly local: readonly Line[];
 };
@@ -61,22 +72,23 @@ function firstCommit(changes: readonly Change[]): readonly Change[] {
 }
 
 /**
- * 送信を始める。送る変更は、確定した文書と画面の文書の差分。
+ * 送信を始める。送る変更は、確定した文書と画面の文書の差分。id は、このコミットのID。
  * 差分が1つのコミットに収まらなければ、収まる分だけを送る(残りは、次の送信で送られる)。
  * 送信中か、送る変更がなければ null。1度に送るコミットは1つだけ。
  */
-export function send(session: Session): { session: Session; changes: readonly Change[] } | null {
+export function send(session: Session, id: CommitId): { session: Session; commit: Commit } | null {
 	if (session.inflight !== null) return null;
 	const changes = firstCommit(diffLines(session.confirmed, session.local));
 	if (changes.length === 0) return null;
-	return { session: { ...session, inflight: changes }, changes };
+	const commit = { id, changes };
+	return { session: { ...session, inflight: commit }, commit };
 }
 
 /** 送信中の変更が、すべてサーバーに入ったとしたときの文書。 */
 const sent = (session: Session): readonly Line[] =>
 	session.inflight === null
 		? session.confirmed
-		: applyChanges(session.confirmed, session.inflight).lines;
+		: applyChanges(session.confirmed, session.inflight.changes).lines;
 
 /**
  * 確定した文書を新しいものに進め、画面の文書を作り直す。
@@ -116,7 +128,7 @@ export function acknowledge(session: Session, result: CommitResult): Session | n
  * 送信中の変更と、まだ送っていない編集は、その上に載せ直す。送信中の状態は変えない。
  *
  * 既に反映してあるバージョンなら、何もしない。あいだのバージョンが抜けていたら null を返す。
- * そのときは、ページを読み直して recover(送信中なら、応答を待ってから)を呼ぶ。
+ * そのときは、送信中のコミットの応答を受け取ってから、ページを読み直して resync を呼ぶ。
  */
 export function receive(session: Session, event: CommitResult): Session | null {
 	if (event.version <= session.version) return session;
@@ -131,55 +143,32 @@ export function receive(session: Session, event: CommitResult): Session | null {
 
 /**
  * 読み直したページを確定した文書にする。まだ送っていない編集は、その上に載せ直す。
- * 送信中の変更は、サーバーに入っている(読み直したページに含まれている)ものとして扱う。
+ * 送信中のコミットは、サーバーに入っている(読み直したページに含まれている)ものとして扱う。
+ * 送信中のコミットがサーバーに入ったかどうか分からないあいだは、呼ばないこと(先に、同じコミットを送り直す)。
  */
 export function resync(session: Session, snapshot: PageSnapshot): Session {
 	return rebase(session, snapshot.version, snapshot.lines, sent(session));
 }
 
 /**
- * 自分の変更を、送った順に並べる。送信中の変更が先で、そのあとに書き足した分が続く。
- * この順に載せ直せば、送信中の変更がサーバーに入っていても、いなくても、同じ結果になる。
- * 入っていた変更は、もう一度適用しても何も起こさない(ADR-0016)。
- * 足した行を送ったあとでその行に書き足した分も、行を足す変更とは別の変更として残る。
- */
-function ownChanges(session: Session): readonly Change[] {
-	return [...(session.inflight ?? []), ...diffLines(sent(session), session.local)];
-}
-
-/**
- * 応答が届かなかった送信のあとで、読み直したページを確定した文書にする。
- * 送信中の変更がサーバーに入ったかどうかは分からないので、自分の変更を、送った順にすべて載せ直す。
- */
-export function recover(session: Session, snapshot: PageSnapshot): Session {
-	const local = applyChanges(snapshot.lines, ownChanges(session)).lines;
-	return {
-		version: snapshot.version,
-		confirmed: snapshot.lines,
-		inflight: null,
-		local: sameLines(local, session.local) ? session.local : local,
-	};
-}
-
-/**
  * サーバーに断られた送信をやめる。サーバーには入っていないことが分かっているときにだけ使う。
- * 変更は画面の文書に残っているので、次の送信でもう一度送られる。
+ * 変更は画面の文書に残っているので、次の送信で(新しいコミットとして)もう一度送られる。
  */
 export function failed(session: Session): Session {
 	return { ...session, inflight: null };
 }
 
 /**
- * まだサーバーに入っていない(かもしれない)自分の変更を、送った順に取り出す。
- * 送信中の変更も含める。端末内に残しておき、次に開いたときに withPending で載せ直すために使う。
+ * まだサーバーに入っていない(かもしれない)自分の変更を取り出す。
+ * 端末内に残しておき、次に開いたときに載せ直すために使う(ADR-0020)。
  */
-export function pendingChanges(session: Session): readonly Change[] {
-	return ownChanges(session);
+export function pendingChanges(session: Session): PendingEntry {
+	return { inflight: session.inflight, changes: diffLines(sent(session), session.local) };
 }
 
 /**
  * 残しておいた未送信の変更を、読み込んだページに載せ直す。records は、載せる順に渡す。
- * 既にサーバーに入っていた変更は、もう一度適用しても何も起こさない(ADR-0016)。
+ * 送信中だったコミットは、先に同じIDで送り直しておくこと(ここで載せるのは、まだ送っていなかった変更だけ)。
  */
 export function withPending(
 	lines: readonly Line[],

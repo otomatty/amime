@@ -17,7 +17,6 @@ export {
 	hasUnsaved,
 	pendingChanges,
 	receive,
-	recover,
 	resync,
 	type Session,
 	sameLines,
@@ -27,11 +26,14 @@ export {
 export type {
 	Change,
 	ClientId,
+	Commit,
+	CommitId,
 	CommitRequest,
 	CommitResult,
 	Line,
 	LineId,
 	PageSnapshot,
+	PendingEntry,
 	PendingRecord,
 	ServerMessage,
 } from "./types.ts";

@@ -3,6 +3,8 @@ import {
 	applyChanges,
 	type Change,
 	type ClientId,
+	type Commit,
+	type CommitId,
 	type CommitResult,
 	type Line,
 	type LineId,
@@ -12,6 +14,13 @@ import {
 import { generateKeyBetween } from "fractional-indexing";
 
 type LineRow = { id: string; text: string };
+
+/**
+ * 覚えておくコミットのIDの数(ページごと)。
+ * これより前のコミットを送り直されると、もう1度適用してしまう。送り直しは、ふつう数秒から数分のうちに来る。
+ * 端末内に残した変更の復元(最長30日後。ADR-0020)でも、そのあいだのコミットがこの数を超えなければ見分けられる。
+ */
+const REMEMBERED_COMMITS = 10_000;
 
 /** WebSocket の終了コード: 方針に反するメッセージを受け取った。 */
 const WS_POLICY_VIOLATION = 1008;
@@ -38,6 +47,10 @@ export class PageDO extends DurableObject {
 			CREATE TABLE IF NOT EXISTS meta (
 				key TEXT PRIMARY KEY,
 				value INTEGER NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS commits (
+				id TEXT PRIMARY KEY,
+				version INTEGER NOT NULL
 			);
 		`);
 		// 接続が生きているかをクライアントが確かめるための応答。休止中でも、起こされずに返る。
@@ -68,15 +81,16 @@ export class PageDO extends DurableObject {
 	}
 
 	/**
-	 * 変更をまとめて適用する。対象の行がなくなっている変更は、その変更だけを捨てる(ADR-0016)。
+	 * コミットを適用する。対象の行がなくなっている変更は、その変更だけを捨てる(ADR-0016)。
 	 * 実際に効いた変更と、適用後のバージョンを返す。何も効かなければ、バージョンは進まない。
 	 * 効いた変更は、接続している他の端末に配信する。client は、送った端末の識別子。
 	 */
-	commit(changes: readonly Change[], client?: ClientId): CommitResult {
-		const { applied } = applyChanges(this.#lines(), changes);
-		if (applied.length === 0) return { version: this.#version(), applied };
+	commit(commit: Commit, client?: ClientId): CommitResult {
+		// 同じコミットを送り直してきた(前の応答が届かなかった)。もう適用してあるので、何もしない(ADR-0021)。
+		if (this.#seen(commit.id)) return { version: this.#version(), applied: [], duplicate: true };
 
-		const version = this.#version() + 1;
+		const { applied } = applyChanges(this.#lines(), commit.changes);
+		const version = this.#version() + (applied.length > 0 ? 1 : 0);
 		this.ctx.storage.transactionSync(() => {
 			// 効いた変更は、位置が実際の前後の行に書き直してある。順に書けば、保存した内容も同じ結果になる。
 			for (const change of applied) this.#write(change);
@@ -84,7 +98,11 @@ export class PageDO extends DurableObject {
 				"INSERT INTO meta (key, value) VALUES ('version', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
 				version,
 			);
+			// 何も効かなかったコミットも覚えておく。送り直しで、あとから効いてしまわないようにする。
+			this.#remember(commit.id, version);
 		});
+		if (applied.length === 0) return { version, applied };
+
 		// 保存してから配信する。送った本人は応答で結果を受け取るので、本人の接続には送らない。
 		const skipped = new Set(client === undefined ? [] : this.ctx.getWebSockets(client));
 		for (const socket of this.ctx.getWebSockets()) {
@@ -99,6 +117,21 @@ export class PageDO extends DurableObject {
 		} catch {
 			// 閉じかけの接続には送れない。受け取れなかった端末は、つなぎ直したときに読み直す。
 		}
+	}
+
+	/** このIDのコミットを、以前に受け付けたか。 */
+	#seen(id: CommitId): boolean {
+		return this.ctx.storage.sql.exec("SELECT 1 FROM commits WHERE id = ?", id).toArray().length > 0;
+	}
+
+	/** 受け付けたコミットのIDを覚える。覚えておくのは、新しいものから REMEMBERED_COMMITS 件まで。 */
+	#remember(id: CommitId, version: number): void {
+		const { sql } = this.ctx.storage;
+		sql.exec("INSERT INTO commits (id, version) VALUES (?, ?)", id, version);
+		sql.exec(
+			"DELETE FROM commits WHERE rowid <= (SELECT MAX(rowid) FROM commits) - ?",
+			REMEMBERED_COMMITS,
+		);
 	}
 
 	/** 変更を1つ、保存した内容に書き込む。書き換えるのは、その変更の対象の行だけ。 */

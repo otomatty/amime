@@ -1,5 +1,5 @@
 import type { Result } from "@amime/shared";
-import { type Change, type ClientId, parseCommitResult, parseSnapshot } from "@amime/sync";
+import { type ClientId, type Commit, parseCommitResult, parseSnapshot } from "@amime/sync";
 import { PageApiError } from "./page-api-error.ts";
 import { connectPageSocket } from "./page-socket.ts";
 import type { PageApi } from "./page-sync.ts";
@@ -42,13 +42,13 @@ export function createPageApi(name: string, client: ClientId): PageApi {
 		subscribe: (handlers) =>
 			connectPageSocket({ url: pageSocketUrl(window.location, name, client), handlers }),
 		load: () => request(url, undefined, parseSnapshot),
-		commit: (changes: readonly Change[]) =>
+		commit: (commit: Commit) =>
 			request(
 				`${url}/commits`,
 				{
 					method: "POST",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ changes, client }),
+					body: JSON.stringify({ ...commit, client }),
 				},
 				parseCommitResult,
 			),

@@ -1,4 +1,13 @@
-import { applyChanges, type Change, type Line, type LineId } from "@amime/sync";
+import {
+	applyChanges,
+	type Change,
+	type Commit,
+	type CommitId,
+	type CommitResult,
+	type Line,
+	type LineId,
+	type PendingEntry,
+} from "@amime/sync";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PageApiError } from "./page-api-error.ts";
 import type { PageSocketHandlers } from "./page-socket.ts";
@@ -9,12 +18,21 @@ const line = (id: string, text: string = id.toUpperCase()): Line => ({ id: id as
 /** サーバーの代わり。コミットを受け取った順に適用する。失敗させることもできる。 */
 function createServer(initial: readonly Line[] = []) {
 	let state = { version: 0, lines: initial };
+	const seen = new Set<string>();
 	const server = {
 		failing: false,
 		commits: [] as (readonly Change[])[],
 		/** 接続している端末に届ける先。接続していなければ null。 */
 		handlers: null as PageSocketHandlers | null,
 		snapshot: () => state,
+		/** コミットを受け付ける。同じIDのコミットは、1度しか適用しない。 */
+		accept(commit: Commit): CommitResult {
+			if (seen.has(commit.id)) return { version: state.version, applied: [], duplicate: true };
+			seen.add(commit.id);
+			const result = applyChanges(state.lines, commit.changes);
+			if (result.applied.length > 0) state = { version: state.version + 1, lines: result.lines };
+			return { version: state.version, applied: result.applied };
+		},
 		/** 他の人のコミットを入れる。配信はしない(届け方は、テストごとに決める)。 */
 		commitFromOther(changes: readonly Change[]) {
 			const result = applyChanges(state.lines, changes);
@@ -29,12 +47,10 @@ function createServer(initial: readonly Line[] = []) {
 				};
 			}),
 			load: vi.fn(async () => state),
-			commit: vi.fn(async (changes: readonly Change[]) => {
+			commit: vi.fn(async (commit: Commit): Promise<CommitResult> => {
 				if (server.failing) throw new Error("offline");
-				server.commits.push(changes);
-				const result = applyChanges(state.lines, changes);
-				if (result.applied.length > 0) state = { version: state.version + 1, lines: result.lines };
-				return { version: state.version, applied: result.applied };
+				server.commits.push(commit.changes);
+				return server.accept(commit);
 			}),
 		},
 	};
@@ -54,13 +70,18 @@ type StartOptions = {
 function start(server: ReturnType<typeof createServer>, options: StartOptions = {}) {
 	const states: Observed[] = [];
 	const remotes: (readonly Line[])[] = [];
-	const pendings: (readonly Change[])[] = [];
+	const pendings: PendingEntry[] = [];
+	let commitSerial = 0;
 	const sync = createPageSync({
 		snapshot: server.snapshot(),
 		initial: options.initial ?? server.snapshot().lines,
 		placeholder: options.placeholder ?? false,
 		api: server.api,
-		onPending: (changes) => pendings.push(changes),
+		onPending: (pending) => pendings.push(pending),
+		createCommitId: () => {
+			commitSerial += 1;
+			return `commit-${commitSerial}` as CommitId;
+		},
 		onStatus: (status) => states.push({ status, remote: remotes.at(-1) ?? null }),
 		onRemote: (lines) => remotes.push(lines),
 	});
@@ -111,12 +132,11 @@ describe("createPageSync", () => {
 	it("保存中に書き足した分は、保存が終わりしだい続けて保存する", async () => {
 		const server = createServer([line("a")]);
 		let release = () => {};
-		server.api.commit.mockImplementationOnce(async (changes) => {
+		server.api.commit.mockImplementationOnce(async (commit) => {
 			await new Promise<void>((resolve) => {
 				release = resolve;
 			});
-			server.commitFromOther(changes);
-			return { version: 1, applied: changes };
+			return server.accept(commit);
 		});
 		const { sync, latest } = start(server);
 		sync.edit([line("a", "A2")]);
@@ -211,31 +231,64 @@ describe("createPageSync", () => {
 		expect(latest()?.status).toBe("saved");
 	});
 
-	it("応答が届かなかったコミットがサーバーに入っていたら、再試行で二重に送らず、読み直して追いつく", async () => {
-		const server = createServer([line("a")]);
-		server.api.commit.mockImplementationOnce(async (changes) => {
-			server.commitFromOther(changes); // サーバーには入ったが、応答は届かなかった
+	/** サーバーには入ったが、応答は届かなかったことにする。 */
+	const lostResponse = (server: ReturnType<typeof createServer>) =>
+		server.api.commit.mockImplementationOnce(async (commit) => {
+			server.accept(commit);
 			throw new PageApiError("failed");
 		});
+
+	it("応答が届かなかったコミットは、同じコミットを同じIDで送り直す。サーバーに入っていたら、読み直して追いつく", async () => {
+		const server = createServer([line("a")]);
+		lostResponse(server);
 		const { sync, latest, remotes } = start(server);
 		sync.edit([line("a", "A2"), line("n")]);
 		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
 		expect(latest()?.status).toBe("retrying");
 		await vi.advanceTimersByTimeAsync(1000);
 
+		const [first, second] = server.api.commit.mock.calls.map(([commit]) => commit);
+		expect(second).toBe(first);
 		expect(server.api.load).toHaveBeenCalledOnce();
-		expect(server.api.commit).toHaveBeenCalledTimes(1);
-		expect(server.snapshot().lines).toEqual([line("a", "A2"), line("n")]);
+		expect(server.snapshot()).toEqual({ version: 1, lines: [line("a", "A2"), line("n")] });
 		expect(latest()?.status).toBe("saved");
 		expect(remotes).toEqual([]);
 	});
 
+	it("応答が届かなかったコミットがサーバーに入っていなかったら、送り直しで入る(読み直さない)", async () => {
+		const server = createServer([line("a")]);
+		server.api.commit.mockRejectedValueOnce(new PageApiError("failed"));
+		const { sync, latest } = start(server);
+		sync.edit([line("a", "A2")]);
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + 1000);
+
+		expect(server.snapshot().lines).toEqual([line("a", "A2")]);
+		expect(server.api.load).not.toHaveBeenCalled();
+		expect(latest()?.status).toBe("saved");
+	});
+
+	it("応答が届かないうちに書き足した分は、送り直しのあとで、別のコミットとして送る", async () => {
+		const server = createServer([line("a")]);
+		lostResponse(server);
+		const { sync, latest } = start(server);
+		sync.edit([line("a", "A2")]);
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+		sync.edit([line("a", "A2"), line("n", "書き足した行")]);
+		await vi.advanceTimersByTimeAsync(1000);
+
+		expect(server.snapshot().lines).toEqual([line("a", "A2"), line("n", "書き足した行")]);
+		expect(server.api.commit.mock.calls.map(([commit]) => commit.id)).toEqual([
+			"commit-1",
+			"commit-1",
+			"commit-2",
+		]);
+		expect(latest()?.status).toBe("saved");
+	});
+
 	it("応答が届かないうちに取り消して元に戻していたら、行方が分かるまで保存済みにせず、取り消しも送る", async () => {
 		const server = createServer([line("a")]);
-		server.api.commit.mockImplementationOnce(async (changes) => {
-			server.commitFromOther(changes); // サーバーには入ったが、応答は届かなかった
-			throw new PageApiError("failed");
-		});
+		lostResponse(server);
 		const { sync, latest } = start(server);
 		sync.edit([line("a", "A2")]);
 		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
@@ -248,19 +301,20 @@ describe("createPageSync", () => {
 		expect(latest()).toEqual({ status: "saved", remote: null });
 	});
 
-	it("再試行のときの読み直しにも失敗したら、さらに間隔を延ばして再試行する", async () => {
+	it("送り直したあとの読み直しに失敗したら、もう1度送り直して、読み直す", async () => {
 		const server = createServer([line("a")]);
-		server.failing = true;
+		lostResponse(server);
 		server.api.load.mockRejectedValueOnce(new PageApiError("failed"));
 		const { sync, latest } = start(server);
 		sync.edit([line("a", "A2")]);
 		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + 1000);
 		expect(latest()?.status).toBe("retrying");
 
-		server.failing = false;
 		await vi.advanceTimersByTimeAsync(2000);
 
-		expect(server.snapshot().lines).toEqual([line("a", "A2")]);
+		expect(server.api.commit).toHaveBeenCalledTimes(3);
+		expect(server.api.load).toHaveBeenCalledTimes(2);
+		expect(server.snapshot()).toEqual({ version: 1, lines: [line("a", "A2")] });
 		expect(latest()?.status).toBe("saved");
 	});
 
@@ -270,10 +324,13 @@ describe("createPageSync", () => {
 			const { sync, pendings } = start(server);
 
 			sync.edit([line("a", "A2")]);
-			expect(pendings.at(-1)).toEqual([{ type: "update", id: "a", text: "A2" }]);
+			expect(pendings.at(-1)).toEqual({
+				inflight: null,
+				changes: [{ type: "update", id: "a", text: "A2" }],
+			});
 			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
 
-			expect(pendings.at(-1)).toEqual([]);
+			expect(pendings.at(-1)).toEqual({ inflight: null, changes: [] });
 		});
 
 		it("保存に失敗しているあいだも、未送信の変更は知らせたまま", async () => {
@@ -284,7 +341,11 @@ describe("createPageSync", () => {
 			sync.edit([line("a", "A2")]);
 			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
 
-			expect(pendings.at(-1)).toEqual([{ type: "update", id: "a", text: "A2" }]);
+			// 送ったコミットは、IDと一緒に残す。次に開いたタブが、同じIDで送り直せる。
+			expect(pendings.at(-1)).toEqual({
+				inflight: { id: "commit-1", changes: [{ type: "update", id: "a", text: "A2" }] },
+				changes: [],
+			});
 		});
 
 		it("復元した変更を載せた文書から始めると、編集を待たずに保存する", async () => {
@@ -293,7 +354,10 @@ describe("createPageSync", () => {
 			const { latest, pendings } = start(server, { initial: restored });
 
 			expect(latest()?.status).toBe("unsaved");
-			expect(pendings.at(-1)).toEqual([{ type: "update", id: "a", text: "前回の入力" }]);
+			expect(pendings.at(-1)).toEqual({
+				inflight: null,
+				changes: [{ type: "update", id: "a", text: "前回の入力" }],
+			});
 			await vi.advanceTimersByTimeAsync(0);
 
 			expect(server.snapshot().lines).toEqual(restored);
@@ -308,7 +372,7 @@ describe("createPageSync", () => {
 			});
 
 			expect(latest()?.status).toBe("new");
-			expect(pendings.at(-1)).toEqual([]);
+			expect(pendings.at(-1)).toEqual({ inflight: null, changes: [] });
 		});
 
 		it("まだないページでも、復元した変更があれば保存する", async () => {
@@ -436,11 +500,11 @@ describe("createPageSync", () => {
 			const server = createServer([line("a")]);
 			let respond = () => {};
 			server.api.commit.mockImplementationOnce(
-				(changes) =>
+				(commit) =>
 					new Promise((resolve) => {
 						// 他の人のコミットが先にサーバーに入り、そのあとで自分のコミットが入った。
 						const other = server.commitFromOther([insertX]);
-						const mine = server.commitFromOther(changes);
+						const mine = server.accept(commit);
 						server.handlers?.onCommit(other);
 						respond = () => resolve(mine);
 					}),

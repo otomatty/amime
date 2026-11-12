@@ -63,8 +63,8 @@ const pages = new Hono<AppEnv>()
 		async (c) => {
 			const commit = parseCommitRequest(await readJson(c.req.raw));
 			if (!commit.ok) return c.json({ error: "invalid-commit" }, 400);
-			const { changes, client } = commit.value;
-			return c.json(await pageStub(c.req.param("page")).commit(changes, client));
+			const { id, changes, client } = commit.value;
+			return c.json(await pageStub(c.req.param("page")).commit({ id, changes }, client));
 		},
 	)
 	// 他の端末のコミットを受け取るための WebSocket(ADR-0018)。

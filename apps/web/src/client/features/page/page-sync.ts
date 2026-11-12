@@ -1,6 +1,7 @@
 import {
 	acknowledge,
-	type Change,
+	type Commit,
+	type CommitId,
 	type CommitResult,
 	createSession,
 	edit,
@@ -8,9 +9,9 @@ import {
 	hasUnsaved,
 	type Line,
 	type PageSnapshot,
+	type PendingEntry,
 	pendingChanges,
 	receive,
-	recover,
 	resync,
 	type Session,
 	sameLines,
@@ -37,7 +38,7 @@ export type SyncStatus = "new" | "saved" | "unsaved" | "saving" | "retrying" | "
 
 export type PageApi = {
 	readonly load: () => Promise<PageSnapshot>;
-	readonly commit: (changes: readonly Change[]) => Promise<CommitResult>;
+	readonly commit: (commit: Commit) => Promise<CommitResult>;
 	/** 他の端末のコミットを受け取り始める。返した関数を呼ぶと、受け取りをやめる。 */
 	readonly subscribe: (handlers: PageSocketHandlers) => () => void;
 };
@@ -67,8 +68,12 @@ type PageSyncOptions = {
 	 * まだサーバーに入っていない変更を知らせる。なくなったら、空を知らせる。
 	 * 端末内に残しておき、タブを閉じても次に開いたときに送れるようにするために使う(ADR-0020)。
 	 */
-	readonly onPending: (changes: readonly Change[]) => void;
+	readonly onPending: (pending: PendingEntry) => void;
+	/** コミットのIDを作る。 */
+	readonly createCommitId: () => CommitId;
 };
+
+const NOTHING_PENDING: PendingEntry = { inflight: null, changes: [] };
 
 /**
  * 1つのページの保存と、他の人の変更の受け取りを受け持つ。
@@ -82,13 +87,14 @@ export function createPageSync({
 	onStatus,
 	onRemote,
 	onPending,
+	createCommitId,
 }: PageSyncOptions) {
 	let session: Session = edit(createSession(snapshot), initial);
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let retryDelay = FIRST_RETRY_MS;
 	let failure: "none" | "failed" | "rejected" = "none";
-	/** 応答が届かなかった送信がある。サーバーに入ったかどうかが分からないので、次に送る前に読み直す。 */
-	let uncertain = false;
+	/** 送信中のコミットを作ったときの、画面の文書。断られたあとで、内容が直されたかどうかを見るのに使う。 */
+	let sentLocal: readonly Line[] | null = null;
 	/**
 	 * サーバーにあると分かっている、いちばん新しいバージョン。
 	 * 自分の持つバージョンがこれより古ければ、他の人のコミットを受け取りそこねているので、読み直して追いつく。
@@ -119,7 +125,7 @@ export function createPageSync({
 	const publish = () => {
 		if (disposed) return;
 		onStatus(status());
-		onPending(untouched() ? [] : pendingChanges(session));
+		onPending(untouched() ? NOTHING_PENDING : pendingChanges(session));
 	};
 
 	const schedule = (delay: number) => {
@@ -140,7 +146,7 @@ export function createPageSync({
 	};
 
 	/** 送った内容をサーバーに断られた。断られるまでのあいだに内容が直されていたら、続けて保存する。 */
-	const rejected = (sentLocal: readonly Line[]): boolean => {
+	const rejected = (): boolean => {
 		const corrected = session.local !== sentLocal;
 		session = failed(session);
 		failure = corrected ? "none" : "rejected";
@@ -149,46 +155,45 @@ export function createPageSync({
 	};
 
 	/**
-	 * 読み直して、サーバーに追いつく。読み直したページのほうが古ければ(待っているあいだに、
-	 * 配信でそれより先まで進んでいたら)、何もせず false を返す。
+	 * 読み直して、サーバーに追いつく。送信中のコミットがないときにだけ呼ぶ。
+	 * 読み直したページのほうが古ければ(待っているあいだに、配信でそれより先まで進んでいたら)、
+	 * 何もせず false を返す。
 	 */
 	async function catchUp(): Promise<boolean> {
 		const latest = await api.load();
 		if (latest.version < session.version) return false;
-		if (uncertain || latest.version > session.version) settle(recover(receiving(), latest));
-		uncertain = false;
+		// 待っているあいだに送信が始まることはない(保存を進めるのは、1度に1つだけ)。
+		if (latest.version > session.version) settle(resync(receiving(), latest));
 		// 読み直したページより先のコミットがあると分かっていれば、まだ遅れている。もう1度読み直す。
 		return !behind();
 	}
 
 	/** 送信への応答を反映する。他の人の変更が先に入っていたら、読み直して載せ直す。 */
 	async function confirm(result: CommitResult): Promise<void> {
-		const acknowledged = acknowledge(session, result);
+		const acknowledged = result.duplicate ? null : acknowledge(session, result);
 		if (acknowledged !== null) {
 			settle(acknowledged);
 			return;
 		}
 		knownVersion = Math.max(knownVersion, result.version);
-		if (result.applied.length === 0) {
+		if (result.applied.length === 0 && !result.duplicate) {
 			// 何も効かなかったので、サーバーの文書は自分のコミットでは変わっていない。送信中の状態だけをやめる。
 			// 遅れている分は、このあとの読み直し(catchUp)で追いつく。
 			settle(acknowledge(session, { version: session.version, applied: [] }) ?? session);
 			return;
 		}
-		// 自分のコミットは result.version として入った。配信は自分のコミットを届けないので、
-		// 配信だけではこのバージョンに届かない。読み直したページは、必ずいまの文書より新しい。
+		// 自分のコミットは、サーバーに入っている(いま入ったか、送り直す前に入っていた)。
+		// 読み直したページには、それが含まれている。
 		const latest = await api.load();
 		if (latest.version < result.version) throw new PageApiError("failed");
 		settle(resync(session, latest));
 	}
 
 	/** 失敗を記録する。続けてもう1回進めるべきなら true を返す。 */
-	function fail(error: unknown, sentLocal: readonly Line[] | null): boolean {
-		if (sentLocal !== null && error instanceof PageApiError && error.kind === "rejected") {
-			return rejected(sentLocal);
-		}
-		// 送信中に失敗したら、サーバーに入ったかどうかが分からない。次に送る前に読み直す。
-		uncertain = uncertain || session.inflight !== null;
+	function fail(error: unknown, committing: boolean): boolean {
+		if (committing && error instanceof PageApiError && error.kind === "rejected") return rejected();
+		// 送信中のコミットは、そのまま残す。サーバーに入ったかどうかは分からないので、
+		// 次は、同じコミットを同じIDで送り直す。サーバーは、二重に適用しない(ADR-0021)。
 		failure = "failed";
 		publish();
 		schedule(retryDelay);
@@ -197,26 +202,39 @@ export function createPageSync({
 	}
 
 	/**
+	 * 次に送るコミットを決める。応答を受け取っていないコミットがあれば、それを送り直す。
+	 * なければ、新しいコミットを作る。送るものがなければ null。
+	 */
+	async function nextCommit(): Promise<Commit | "retry" | null> {
+		if (session.inflight !== null) return session.inflight;
+		if (behind() && !(await catchUp())) return "retry";
+		const sending = disposed || untouched() ? null : send(session, createCommitId());
+		if (sending === null) return null;
+		session = sending.session;
+		sentLocal = session.local;
+		return sending.commit;
+	}
+
+	/**
 	 * 保存を1回分進める。続けてもう1回進めるべきなら true を返す。
 	 * await のあとでは、待っているあいだに編集されたり配信が届いたりしているかもしれないので、
 	 * 必ずその時点の session を使う。
 	 */
 	async function step(): Promise<boolean> {
-		let sentLocal: readonly Line[] | null = null;
+		let committing = false;
 		try {
-			if ((uncertain || behind()) && !(await catchUp())) return true;
-			const sending = disposed || untouched() ? null : send(session);
-			if (sending === null) {
+			const commit = await nextCommit();
+			if (commit === "retry") return true;
+			if (commit === null) {
 				failure = "none";
 				publish();
 				return false;
 			}
-			session = sending.session;
 			publish();
 
-			sentLocal = session.local;
-			const result = await api.commit(sending.changes);
-			sentLocal = null;
+			committing = true;
+			const result = await api.commit(commit);
+			committing = false;
 			await confirm(result);
 			failure = "none";
 			retryDelay = FIRST_RETRY_MS;
@@ -224,7 +242,7 @@ export function createPageSync({
 			// 保存中に書き足した分があれば、続けて保存する。
 			return true;
 		} catch (error) {
-			return fail(error, sentLocal);
+			return fail(error, committing);
 		}
 	}
 

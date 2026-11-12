@@ -2,6 +2,7 @@ import { err, ok, type Result } from "@amime/shared";
 import * as v from "valibot";
 import type {
 	ClientId,
+	CommitId,
 	CommitRequest,
 	CommitResult,
 	LineId,
@@ -58,7 +59,13 @@ const ChangesSchema = v.pipe(v.array(ChangeSchema), v.maxLength(MAX_CHANGES));
 const VersionSchema = v.pipe(v.number(), v.integer(), v.minValue(0));
 const SnapshotSchema = v.object({ version: VersionSchema, lines: v.array(LineSchema) });
 const commitResult = { version: VersionSchema, applied: v.array(ChangeSchema) };
-const CommitResultSchema = v.object(commitResult);
+const CommitResultSchema = v.object({ ...commitResult, duplicate: v.optional(v.boolean()) });
+// コミットのIDも外部から届く文字列。形を検査したうえで、ここでブランド型にする。
+const CommitIdSchema = v.pipe(
+	v.string(),
+	v.regex(IDENTIFIER),
+	v.transform((value) => value as CommitId),
+);
 // 端末の識別子も外部から届く文字列。形を検査したうえで、ここでブランド型にする。
 const ClientIdSchema = v.pipe(
 	v.string(),
@@ -66,13 +73,20 @@ const ClientIdSchema = v.pipe(
 	v.transform((value) => value as ClientId),
 );
 const CommitRequestSchema = v.object({
+	id: CommitIdSchema,
 	changes: ChangesSchema,
 	client: v.optional(ClientIdSchema),
 });
-// 変更の数に上限は設けない。送るときに、1つのコミットに収まる分ずつに分ける。
+// 変更の数と本文の長さに上限は設けない(送るときに、サーバーが検査する)。
+const StoredChangesSchema = v.array(StoredChangeSchema);
 const PendingRecordSchema = v.object({
 	savedAt: v.pipe(v.number(), v.minValue(0)),
-	changes: v.array(StoredChangeSchema),
+	entries: v.array(
+		v.object({
+			inflight: v.nullable(v.object({ id: CommitIdSchema, changes: StoredChangesSchema })),
+			changes: StoredChangesSchema,
+		}),
+	),
 });
 const ServerMessageSchema = v.variant("type", [
 	v.object({ type: v.literal("hello"), version: VersionSchema }),

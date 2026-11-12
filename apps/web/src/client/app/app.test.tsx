@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./app.tsx";
 
@@ -22,14 +22,16 @@ describe("App", () => {
 		expect(screen.getByText(/この画面は試し書き用です/)).toBeDefined();
 	});
 
-	it("トップ以外のパスでは、その名前のページを読み込む", () => {
+	it("トップ以外のパスでは、その名前のページを読み込む", async () => {
 		const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
 		vi.stubGlobal("fetch", fetchMock);
 		window.history.replaceState(null, "", `/${encodeURIComponent("メモ")}`);
 
 		render(<App />);
 
-		expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${encodeURIComponent("メモ")}`, undefined);
+		await waitFor(() =>
+			expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${encodeURIComponent("メモ")}`, undefined),
+		);
 		expect(screen.getByRole("status").textContent).toBe("読み込んでいます…");
 	});
 });
