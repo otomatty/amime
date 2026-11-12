@@ -19,3 +19,11 @@
 	margin-left: 0.5rem;
 	font: inherit;
 }
+
+.page-notice {
+	margin: 0 0 0.75rem;
+	padding: 0.4rem 0.75rem;
+	border-left: 3px solid var(--color-warning);
+	color: var(--color-muted);
+	font-size: 0.8rem;
+}

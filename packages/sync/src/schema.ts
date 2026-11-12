@@ -6,6 +6,7 @@ import type {
 	CommitResult,
 	LineId,
 	PageSnapshot,
+	PendingRecord,
 	ServerMessage,
 } from "./types.ts";
 
@@ -58,6 +59,11 @@ const CommitRequestSchema = v.object({
 	changes: ChangesSchema,
 	client: v.optional(ClientIdSchema),
 });
+// 変更の数に上限は設けない。送るときに、1つのコミットに収まる分ずつに分ける。
+const PendingRecordSchema = v.object({
+	savedAt: v.pipe(v.number(), v.minValue(0)),
+	changes: v.array(ChangeSchema),
+});
 const ServerMessageSchema = v.variant("type", [
 	v.object({ type: v.literal("hello"), version: VersionSchema }),
 	v.object({ type: v.literal("commit"), ...commitResult }),
@@ -76,15 +82,23 @@ export const parseCommitRequest = (input: unknown): Result<CommitRequest, "inval
 export const parseClientId = (input: unknown): Result<ClientId, "invalid"> =>
 	parse(ClientIdSchema, input);
 
-/** サーバーから WebSocket で届いたメッセージを検査する。 */
-export function parseServerMessage(input: unknown): Result<ServerMessage, "invalid"> {
+/** JSONの文字列として届いたものを、読み取ってから検査する。 */
+function parseJson<T>(schema: v.GenericSchema<unknown, T>, input: unknown): Result<T, "invalid"> {
 	if (typeof input !== "string") return err("invalid");
 	try {
-		return parse(ServerMessageSchema, JSON.parse(input));
+		return parse(schema, JSON.parse(input));
 	} catch {
 		return err("invalid");
 	}
 }
+
+/** サーバーから WebSocket で届いたメッセージを検査する。 */
+export const parseServerMessage = (input: unknown): Result<ServerMessage, "invalid"> =>
+	parseJson(ServerMessageSchema, input);
+
+/** 端末内に残してあった未送信の変更を検査する。 */
+export const parsePendingRecord = (input: unknown): Result<PendingRecord, "invalid"> =>
+	parseJson(PendingRecordSchema, input);
 
 /** サーバーから届いたページを検査する。 */
 export const parseSnapshot = (input: unknown): Result<PageSnapshot, "invalid"> =>

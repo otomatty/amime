@@ -8,11 +8,13 @@ import {
 	edit,
 	failed,
 	hasUnsaved,
+	pendingChanges,
 	receive,
 	recover,
 	resync,
 	type Session,
 	send,
+	withPending,
 } from "./session.ts";
 import type { Change, CommitResult, Line, LineId } from "./types.ts";
 
@@ -215,6 +217,59 @@ describe("セッション(1つの端末から見たページの状態)", () => {
 			expect(next.local).toEqual([line("a", "A2"), line("b")]);
 			expect(hasUnsaved(next)).toBe(false);
 		});
+	});
+});
+
+describe("pendingChanges / withPending(未送信の変更の取り出しと、載せ直し)", () => {
+	const snapshot = { version: 3, lines: [line("a"), line("b")] };
+
+	it("未送信の変更がなければ、空になる", () => {
+		expect(pendingChanges(createSession(snapshot))).toEqual([]);
+	});
+
+	it("まだ送っていない編集を、確定した文書からの変更として取り出す", () => {
+		const session = edit(createSession(snapshot), [line("a", "A2"), line("b"), line("n")]);
+
+		expect(pendingChanges(session)).toEqual([
+			{ type: "update", id: id("a"), text: "A2" },
+			{ type: "insert", line: line("n"), after: id("b"), before: null },
+		]);
+	});
+
+	it("送信中の変更も含める(サーバーに入ったかどうかは、応答が届くまで分からない)", () => {
+		const sending = mustSend(edit(createSession(snapshot), [line("a", "A2"), line("b")]));
+		const typedMore = edit(sending.session, [line("a", "A2"), line("b", "B2")]);
+
+		expect(pendingChanges(typedMore)).toEqual([
+			{ type: "update", id: id("a"), text: "A2" },
+			{ type: "update", id: id("b"), text: "B2" },
+		]);
+	});
+
+	it("取り出した変更を、あとで読み込んだページに載せ直せる。そのあいだの他の人の変更は残る", () => {
+		const session = edit(createSession(snapshot), [line("a", "A2"), line("b"), line("n")]);
+		const later = [line("x"), line("a"), line("b")];
+
+		expect(withPending(later, [pendingChanges(session)])).toEqual([
+			line("x"),
+			line("a", "A2"),
+			line("b"),
+			line("n"),
+		]);
+	});
+
+	it("既にサーバーに入っていた変更は、載せ直しても二重にならない", () => {
+		const session = edit(createSession(snapshot), [line("a"), line("b"), line("n")]);
+		const later = [line("a"), line("b"), line("n")];
+
+		expect(withPending(later, [pendingChanges(session)])).toBe(later);
+	});
+
+	it("複数の記録は、渡した順に載せる", () => {
+		const first = [{ type: "update", id: id("a"), text: "1" }] as const;
+		const second = [{ type: "update", id: id("a"), text: "2" }] as const;
+
+		expect(withPending(snapshot.lines, [first, second])).toEqual([line("a", "2"), line("b")]);
 	});
 });
 

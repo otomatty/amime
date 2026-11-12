@@ -21,7 +21,18 @@ const type = (text: string) =>
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
+	window.localStorage.clear();
 });
+
+/** 以前のタブが端末内に残した、未送信の変更。 */
+function leavePending(page: string, changes: unknown[]) {
+	window.localStorage.setItem(
+		`amime:pending:${encodeURIComponent(page)}:closed-tab`,
+		JSON.stringify({ savedAt: Date.now(), changes }),
+	);
+}
+const pendingRecords = () =>
+	Object.values({ ...window.localStorage }).map((value) => JSON.parse(String(value)).changes);
 
 describe("Page", () => {
 	const saved = { version: 1, lines: [{ id: "a", text: "買い物" }] };
@@ -125,6 +136,82 @@ describe("Page", () => {
 		type("牛乳");
 
 		await waitFor(() => expect(status()).toMatch(/保存できない内容があります/));
+	});
+
+	describe("未送信の変更", () => {
+		const echo = (_url: string, init?: RequestInit) => {
+			if (init?.method !== "POST") return json(saved);
+			return json({ version: 2, applied: JSON.parse(String(init.body)).changes });
+		};
+
+		it("書いた内容は、保存が終わるまで端末内に残し、保存が終わったら消す", async () => {
+			let respond = () => {};
+			stubFetch((url, init) => {
+				if (init?.method !== "POST") return json(saved);
+				return new Promise((resolve) => {
+					respond = () => resolve(echo(url, init));
+				});
+			});
+			render(<Page name="買い物" />);
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+
+			fireEvent.mouseDown(screen.getByTestId("line"));
+			type("牛乳");
+
+			expect(pendingRecords()).toEqual([[{ type: "update", id: "a", text: "買い物牛乳" }]]);
+			await waitFor(() => expect(status()).toBe("保存しています…"));
+			respond();
+			await waitFor(() => expect(status()).toBe("保存済み"));
+			expect(pendingRecords()).toEqual([]);
+		});
+
+		it("前回送れなかった変更が残っていたら、復元して表示し、そのまま保存する", async () => {
+			leavePending("買い物", [{ type: "update", id: "a", text: "買い物 前回の入力" }]);
+			const fetchMock = stubFetch(echo);
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(lines()).toEqual(["買い物 前回の入力"]));
+			expect(screen.getByRole("note").textContent).toMatch(
+				/前回、送信できなかった変更を復元しました/,
+			);
+			await waitFor(() => expect(status()).toBe("保存済み"));
+			const commit = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+			expect(JSON.parse(String(commit?.[1]?.body))).toMatchObject({
+				changes: [{ type: "update", id: "a", text: "買い物 前回の入力" }],
+			});
+			expect(pendingRecords()).toEqual([]);
+		});
+
+		it("まだ保存されていないページに書いた内容も、復元して保存する", async () => {
+			const title = {
+				type: "insert",
+				line: { id: "t", text: "前回書いた題" },
+				after: null,
+				before: null,
+			};
+			leavePending("新しいページ", [title]);
+			const fetchMock = stubFetch((_url, init) =>
+				init?.method === "POST"
+					? json({ version: 1, applied: [title] })
+					: json({ version: 0, lines: [] }),
+			);
+
+			render(<Page name="新しいページ" />);
+
+			await waitFor(() => expect(lines()).toEqual(["前回書いた題"]));
+			await waitFor(() => expect(status()).toBe("保存済み"));
+			expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true);
+		});
+
+		it("復元するものがなければ、復元の案内は出さない", async () => {
+			stubFetch(echo);
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			expect(screen.queryByRole("note")).toBeNull();
+		});
 	});
 
 	it("他の人のコミットが届くと、その場で画面に反映する", async () => {

@@ -5,6 +5,7 @@ import {
 	parseClientId,
 	parseCommitRequest,
 	parseCommitResult,
+	parsePendingRecord,
 	parseServerMessage,
 	parseSnapshot,
 } from "./schema.ts";
@@ -133,5 +134,28 @@ describe("parseCommitResult", () => {
 
 	it("形が違えば受け付けない", () => {
 		expect(parseCommitResult({ version: 3 })).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parsePendingRecord", () => {
+	it("端末内に残した未送信の変更(JSONの文字列)を受け付ける", () => {
+		const record = { savedAt: 1000, changes: [update, remove] };
+
+		expect(parsePendingRecord(JSON.stringify(record))).toEqual({ ok: true, value: record });
+	});
+
+	it("変更の数が多くても受け付ける(送るときに分ける)", () => {
+		const changes = Array.from({ length: MAX_CHANGES + 1 }, () => remove);
+
+		expect(parsePendingRecord(JSON.stringify({ savedAt: 1, changes })).ok).toBe(true);
+	});
+
+	it.each([
+		["JSONでない", "{"],
+		["時刻がない", JSON.stringify({ changes: [] })],
+		["形の違う変更", JSON.stringify({ savedAt: 1, changes: [{ type: "delete" }] })],
+		["文字列でない", null],
+	])("%s記録は受け付けない", (_name, input) => {
+		expect(parsePendingRecord(input)).toEqual({ ok: false, error: "invalid" });
 	});
 });
