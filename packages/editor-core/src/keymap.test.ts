@@ -55,6 +55,49 @@ describe("commandForKey", () => {
 		},
 	);
 
+	describe("テーブルの行の中", () => {
+		const row = state(["t", " ab"], 1, 2);
+		const inTableRow = { tableRowIndent: 1 };
+
+		it("Tab はインデントではなく、タブ文字を入れて新しいセルを作る", () => {
+			expect(commandForKey(key("Tab"), inTableRow)?.(row)).toEqual(state(["t", " a\tb"], 1, 3));
+		});
+
+		it("Shift+Tab は、ほかの行と同じくインデントを浅くする", () => {
+			expect(commandForKey(key("Tab", { shift: true }), inTableRow)?.(row)).toEqual(
+				state(["t", "ab"], 1, 1),
+			);
+		});
+
+		it("ほかのキーの働きは変わらない", () => {
+			expect(commandForKey(key("Enter"), inTableRow)?.(row)).toEqual(
+				state(["t", " a", " b"], 2, 1),
+			);
+		});
+
+		it("Enter で行を分けたとき、新しい行はテーブルのインデントだけを引き継ぐ(空の先頭セルを巻き込まない)", () => {
+			const emptyFirstCell = state(["t", " \ta"], 1, 3);
+
+			expect(commandForKey(key("Enter"), inTableRow)?.(emptyFirstCell)).toEqual(
+				state(["t", " \ta", " "], 2, 1),
+			);
+		});
+
+		it("インデントの途中で Enter を押したら、カーソルより前のぶんだけを引き継ぐ", () => {
+			const deep = { tableRowIndent: 2 };
+
+			expect(commandForKey(key("Enter"), deep)?.(state(["t", "  a"], 1, 1))).toEqual(
+				state(["t", " ", "  a"], 2, 1),
+			);
+		});
+
+		it("テーブルの行でなければ、Tab はインデントのまま", () => {
+			expect(commandForKey(key("Tab"), { tableRowIndent: null })?.(row)).toEqual(
+				state(["t", "  ab"], 1, 3),
+			);
+		});
+	});
+
 	it("Shift+矢印(範囲選択)はまだ扱わない", () => {
 		expect(handleKey(base, key("ArrowLeft", { shift: true }))).toBeNull();
 	});

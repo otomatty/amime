@@ -12,6 +12,14 @@ const SAMPLE_LINES = [
 	"[* 太字] [/ 斜体] [- 打ち消し] [_ 下線] [[強調]] `code`",
 	" 行を押すと、その行だけ記法がそのまま見えます",
 	"> 引用もできます [Cloudflare https://www.cloudflare.com/]",
+	"code:hello.js",
+	" function hello() {",
+	"   return items[0]; // [リンク] にはならない",
+	" }",
+	"table:今週の予定",
+	" 月\t火\t水",
+	" [定例会議]\t`deploy`\tお休み",
+	"$ pnpm dev",
 ];
 
 export function App() {

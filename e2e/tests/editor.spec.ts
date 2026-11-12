@@ -344,3 +344,180 @@ test.describe("日本語入力(IME)", () => {
 		expect(Math.abs((input?.y ?? 0) - (caret?.y ?? 999))).toBeLessThan(16);
 	});
 });
+
+test.describe("コードブロックとテーブル", () => {
+	const CODE_HEAD = 10; // 「code:hello.js」
+	const CODE_BODY = 12; // 「   return items[0]; // [リンク] にはならない」
+	const TABLE_HEAD = 14; // 「table:今週の予定」
+	const TABLE_ROW_1 = 15; // 「 月	火	水」
+	const TABLE_ROW_2 = 16; // 「 [定例会議]	`deploy`	お休み」
+
+	test.beforeEach(async ({ page }) => {
+		await page.goto("/");
+	});
+
+	test("コードブロックの始まりの行は名前だけを表示し、押すと code: も見える", async ({ page }) => {
+		const head = lines(page).nth(CODE_HEAD);
+		await expect(head).toHaveText("hello.js");
+
+		await clickLineEnd(page, CODE_HEAD);
+
+		await expect(head).toHaveText("code:hello.js");
+	});
+
+	test("コードブロックの中身は等幅の文字で、記法を解釈せずに表示する", async ({ page }) => {
+		const body = lines(page).nth(CODE_BODY);
+
+		await expect(body).toHaveAttribute("data-kind", "code-body");
+		await expect(body.locator(".code-text")).toHaveText(
+			"  return items[0]; // [リンク] にはならない",
+		);
+		await expect(body.getByRole("link")).toHaveCount(0);
+		await expect(body.locator(".code-text")).toHaveCSS("font-family", /monospace/);
+	});
+
+	test("コードの字下げは、そのままの幅で表示される", async ({ page }) => {
+		const first = await lines(page)
+			.nth(CODE_BODY - 1)
+			.locator(".char")
+			.first()
+			.boundingBox();
+		const nested = await lines(page).nth(CODE_BODY).locator(".char").nth(2).boundingBox(); // 「r」
+
+		expect(nested?.x).toBeGreaterThan(first?.x ?? Number.POSITIVE_INFINITY);
+	});
+
+	test("コードブロックの下で字下げをやめると、普通の行に戻る", async ({ page }) => {
+		await clickLineEnd(page, CODE_BODY + 1); // 「 }」
+		await page.keyboard.press("Enter");
+		await page.keyboard.type("x");
+		await expect(lines(page).nth(CODE_BODY + 2)).toHaveAttribute("data-kind", "code-body");
+
+		await page.keyboard.press("Shift+Tab");
+
+		await expect(lines(page).nth(CODE_BODY + 2)).toHaveAttribute("data-kind", "text");
+	});
+
+	test("テーブルは、行が違っても列の位置がそろう", async ({ page }) => {
+		await expect(lines(page).nth(TABLE_HEAD)).toHaveText("今週の予定");
+		const lefts = async (row: number) =>
+			lines(page)
+				.nth(row)
+				.locator(".cell-text")
+				.evaluateAll((cells) => cells.map((cell) => Math.round(cell.getBoundingClientRect().left)));
+
+		const first = await lefts(TABLE_ROW_1);
+		const second = await lefts(TABLE_ROW_2);
+
+		expect(first).toHaveLength(3);
+		expect(second).toEqual(first);
+		expect(first[1]).toBeGreaterThan(first[0] ?? Number.POSITIVE_INFINITY);
+	});
+
+	test("テーブルのセルの中でも、記法が表示される", async ({ page }) => {
+		const row = lines(page).nth(TABLE_ROW_2);
+
+		await expect(row.getByRole("link", { name: "定例会議" })).toBeVisible();
+		await expect(row.locator("code")).toHaveText("deploy");
+	});
+
+	test("セルの左の余白を押すと、そのセルの先頭にカーソルが入る", async ({ page }) => {
+		const cell = lines(page).nth(TABLE_ROW_1).locator(".cell").nth(2); // 「火」のセル
+		const box = await cell.boundingBox();
+		if (!box) throw new Error("cell is not visible");
+
+		await page.mouse.click(box.x + 2, box.y + box.height / 2);
+		await page.keyboard.type("毎");
+
+		await expect(lines(page).nth(TABLE_ROW_1)).toHaveAttribute("data-text", " 月\t毎火\t水");
+	});
+
+	test("セルの余白を押すと、そのセルの末尾にカーソルが入る", async ({ page }) => {
+		// 1行目の1列目「月」は、2行目の「定例会議」より短いので、右に余白がある。
+		const cell = lines(page).nth(TABLE_ROW_1).locator(".cell").nth(1);
+		const box = await cell.boundingBox();
+		if (!box) throw new Error("cell is not visible");
+
+		await page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
+		await page.keyboard.type("曜");
+
+		await expect(lines(page).nth(TABLE_ROW_1)).toHaveAttribute("data-text", " 月曜\t火\t水");
+	});
+
+	test("テーブルの行で Tab を押すと、新しいセルができる", async ({ page }) => {
+		await clickLineEnd(page, TABLE_ROW_1);
+
+		await page.keyboard.press("Tab");
+		await page.keyboard.type("木");
+
+		await expect(lines(page).nth(TABLE_ROW_1)).toHaveAttribute("data-text", " 月\t火\t水\t木");
+		await expect(lines(page).nth(TABLE_ROW_1).locator(".cell-text")).toHaveCount(4);
+	});
+
+	test("テーブルの行で Enter を押すと、次の行もテーブルの行になる", async ({ page }) => {
+		await clickLineEnd(page, TABLE_ROW_2);
+
+		await page.keyboard.press("Enter");
+		await page.keyboard.type("a");
+
+		const added = lines(page).nth(TABLE_ROW_2 + 1);
+		await expect(added).toHaveAttribute("data-kind", "table-row");
+		await expect(added).toHaveAttribute("data-text", " a");
+		await expect(added.getByTestId("caret")).toHaveCount(1);
+	});
+
+	test("$ で始まる行は、コマンドとして表示する", async ({ page }) => {
+		await expect(page.locator("code.command-line")).toHaveText("$ pnpm dev");
+	});
+});
+
+test.describe("テーブルの端の扱い", () => {
+	const TABLE_ROW_1 = 15; // 「 月	火	水」
+	const TABLE_ROW_2 = 16; // 「 [定例会議]	`deploy`	お休み」
+
+	test.beforeEach(async ({ page }) => {
+		await page.goto("/");
+	});
+
+	test("記法で始まるセルの左の余白を押すと、記法の前にカーソルが入る", async ({ page }) => {
+		const cell = lines(page).nth(TABLE_ROW_2).locator(".cell").nth(1); // 「[定例会議]」のセル
+		const box = await cell.boundingBox();
+		if (!box) throw new Error("cell is not visible");
+
+		await page.mouse.click(box.x + 2, box.y + box.height / 2);
+		await page.keyboard.type("x");
+
+		await expect(lines(page).nth(TABLE_ROW_2)).toHaveAttribute(
+			"data-text",
+			" x[定例会議]\t`deploy`\tお休み",
+		);
+	});
+
+	test("先頭のセルの頭で Tab を押すと、空の先頭セルができる", async ({ page }) => {
+		await clickLineEnd(page, TABLE_ROW_1);
+		await page.keyboard.press("Home");
+		await page.keyboard.press("ArrowRight"); // インデントの後ろ = 先頭のセルの頭
+
+		await page.keyboard.press("Tab");
+
+		const row = lines(page).nth(TABLE_ROW_1);
+		await expect(row).toHaveAttribute("data-text", " \t月\t火\t水");
+		await expect(row.locator(".cell-text")).toHaveCount(4);
+		await expect(row.locator(".cell-text").first()).toHaveText("");
+	});
+
+	test("空の先頭セルがある行で Enter を押しても、新しい行は先頭のセルから始まる", async ({
+		page,
+	}) => {
+		await clickLineEnd(page, TABLE_ROW_1);
+		await page.keyboard.press("Home");
+		await page.keyboard.press("ArrowRight");
+		await page.keyboard.press("Tab");
+		await page.keyboard.press("End");
+
+		await page.keyboard.press("Enter");
+		await page.keyboard.type("a");
+
+		await expect(lines(page).nth(TABLE_ROW_1 + 1)).toHaveAttribute("data-text", " a");
+	});
+});

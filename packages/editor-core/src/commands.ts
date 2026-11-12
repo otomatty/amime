@@ -25,12 +25,19 @@ export function insertText(state: EditorState, text: string): EditorState {
 	};
 }
 
-/** カーソル位置で行を分割する。新しい行は、カーソルより前にあるインデントを引き継ぐ。 */
-export function splitLine(state: EditorState): EditorState {
+/**
+ * カーソル位置で行を分割する。新しい行は、カーソルより前にあるインデントを引き継ぐ。
+ * maxInherited を渡すと、引き継ぐインデントをその文字数までに限る
+ * (テーブルの行で、インデントに続くセルの区切りのタブまで引き継がないようにする)。
+ */
+export function splitLine(
+	state: EditorState,
+	maxInherited = Number.POSITIVE_INFINITY,
+): EditorState {
 	const { line, column } = state.cursor;
 	const current = lineAtCursor(state);
 	const head = current.slice(0, column);
-	const inherited = head.slice(0, parseIndent(head).indent);
+	const inherited = head.slice(0, Math.min(parseIndent(head).indent, maxInherited));
 	return {
 		lines: state.lines.toSpliced(line, 1, head, inherited + current.slice(column)),
 		cursor: { line: line + 1, column: inherited.length },

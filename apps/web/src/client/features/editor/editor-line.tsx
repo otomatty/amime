@@ -1,11 +1,22 @@
 import { segmentGraphemes } from "@amime/editor-core";
-import { type InlineNode, type ParsedLine, parseIndent, parseLine, type Span } from "@amime/parser";
+import {
+	type InlineNode,
+	type LineKind,
+	type ParsedLine,
+	parseLine,
+	type Span,
+	type TableCell,
+} from "@amime/parser";
 import { type CSSProperties, Fragment, memo, type ReactNode } from "react";
 import { pageHref, projectHref } from "./links.ts";
 
 type EditorLineProps = {
-	/** ページ内での行番号(0始まり)。0 はタイトル行。 */
+	/** ページ内での行番号(0始まり)。 */
 	readonly index: number;
+	/** ページの中でのこの行の役割(classifyLines の結果)。 */
+	readonly kind: LineKind;
+	/** この行が属するブロックの、始まりの行のインデント。 */
+	readonly blockIndent: number;
 	/** 行頭の空白を含む、行の生のテキスト。 */
 	readonly text: string;
 	/** この行を編集中のときの、カーソルの文字位置。編集中でなければ null。 */
@@ -67,14 +78,14 @@ function chars(ctx: RenderContext, span: Span, className = "char"): ReactNode[] 
 	));
 }
 
-/** 行頭の空白。文字としては見せず、1段ぶんの幅を持つ要素にする。 */
-function indents(ctx: RenderContext, indent: number): ReactNode[] {
+/** 行頭の空白。文字としては見せず、1段ぶんの幅を持つ要素にする。bullet なら最後の1つに箇条書きの印を付ける。 */
+function indents(ctx: RenderContext, indent: number, bullet: boolean): ReactNode[] {
 	return pieces(ctx, { start: 0, end: indent }).map((piece) => (
 		<Fragment key={piece.start}>
 			{piece.start === ctx.caretColumn && ctx.caret}
 			<span
 				className="indent"
-				data-bullet={piece.end === indent ? "" : undefined}
+				data-bullet={bullet && piece.end === indent ? "" : undefined}
 				data-column={piece.start}
 				data-end={piece.end}
 			/>
@@ -200,26 +211,70 @@ function renderNodes(ctx: RenderContext, nodes: readonly InlineNode[]): ReactNod
 	return nodes.map((node) => <Fragment key={node.start}>{renderNode(ctx, node)}</Fragment>);
 }
 
-/** タイトル行は記法を解釈しない。インデント以降の全体を、ただの文字列として扱う。 */
-function parseTitle(text: string): ParsedLine {
-	const { indent } = parseIndent(text);
-	return { indent, nodes: [{ type: "text", start: indent, end: text.length }] };
+/**
+ * テーブルのセル。
+ * セルの区切りのタブは描画しない。代わりに、セルの残りの幅を埋める要素(cell-fill)に
+ * セルの末尾の位置を持たせる。行の余白を押したとき(hit-test の columnOnRow)に、
+ * 空のセルも位置の候補になる。セルの中の余白を押したときは、data-cell-start / data-cell-end を使って
+ * そのセルの中で位置を決める。
+ */
+function tableCell(ctx: RenderContext, cell: TableCell): ReactNode {
+	const { content } = cell;
+	return (
+		<span
+			className="cell"
+			key={content.start}
+			data-cell-start={content.start}
+			data-cell-end={content.end}
+		>
+			<span className="cell-box">
+				<span className="cell-text">
+					{renderNodes(ctx, cell.nodes)}
+					{ctx.caretColumn === content.end && ctx.caret}
+				</span>
+				<span className="cell-fill" data-column={content.end} data-end={content.end} />
+			</span>
+		</span>
+	);
+}
+
+/** インデントより後ろの、行の中身。 */
+function lineBody(ctx: RenderContext, parsed: ParsedLine): ReactNode {
+	switch (parsed.kind) {
+		case "title":
+		case "text":
+			return renderNodes(ctx, parsed.nodes);
+		case "code-head":
+		case "table-head":
+			return (
+				<span className="block-label">
+					{notation(ctx, parsed.prefix)}
+					{chars(ctx, parsed.name)}
+				</span>
+			);
+		case "code-body":
+			return <span className="code-text">{chars(ctx, parsed.content)}</span>;
+		case "table-row":
+			return parsed.cells.map((cell) => tableCell(ctx, cell));
+	}
 }
 
 /**
  * 1行を描画する。
  * 編集中の行(カーソルのある行)は、記法の記号も含めて生のテキストをそのまま見せる。
  * それ以外の行は記号を隠し、リンクや装飾として見せる(ADR-0012)。
+ * コードブロックとテーブルの行は、役割に応じた形で描画する(ADR-0013)。
  */
 export const EditorLine = memo(function EditorLine({
 	index,
 	text,
+	kind,
+	blockIndent,
 	caretColumn,
 	composing,
 }: EditorLineProps) {
-	const isTitle = index === 0;
-	const { indent, nodes } = isTitle ? parseTitle(text) : parseLine(text);
-	const style = { "--indent": indent } as CSSProperties;
+	const parsed = parseLine(text, { kind, blockIndent });
+	const style = { "--indent": parsed.indent } as CSSProperties;
 
 	const caret = (
 		<>
@@ -231,25 +286,25 @@ export const EditorLine = memo(function EditorLine({
 			<span className="caret" data-testid="caret" />
 		</>
 	);
-	const ctx: RenderContext = {
-		text,
-		caretColumn,
-		caret,
-		editing: caretColumn !== null,
-	};
+	const ctx: RenderContext = { text, caretColumn, caret, editing: caretColumn !== null };
+	const isRow = parsed.kind === "table-row";
+	// コードとテーブルの行は箇条書きではないので、印を付けない。
+	const indentSpans = indents(ctx, parsed.indent, !isRow && parsed.kind !== "code-body");
 
 	return (
 		<div
-			className={isTitle ? "line title" : "line"}
+			className="line"
 			data-testid="line"
 			data-line={index}
-			data-indent={indent}
+			data-kind={parsed.kind}
+			data-indent={parsed.indent}
 			data-text={text}
 			style={style}
 		>
-			{indents(ctx, indent)}
-			{renderNodes(ctx, nodes)}
-			{caretColumn === text.length && caret}
+			{isRow ? <span className="cell indent-cell">{indentSpans}</span> : indentSpans}
+			{lineBody(ctx, parsed)}
+			{/* テーブルの行では、行末のカーソルは最後のセルが描画する。 */}
+			{!isRow && caretColumn === text.length && caret}
 		</div>
 	);
 });

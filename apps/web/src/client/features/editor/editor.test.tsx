@@ -147,6 +147,69 @@ describe("Editor", () => {
 		});
 	});
 
+	describe("コードブロックとテーブル", () => {
+		const kindsOf = () =>
+			screen.getAllByTestId("line").map((element) => element.getAttribute("data-kind"));
+
+		it("行の役割を、ページ全体の並びから決めて表示する", () => {
+			render(<Editor initialLines={["t", "code:a.js", " x", "table:b", " 1\t2", "end"]} />);
+
+			expect(kindsOf()).toEqual([
+				"title",
+				"code-head",
+				"code-body",
+				"table-head",
+				"table-row",
+				"text",
+			]);
+		});
+
+		it("編集で行の並びが変わると、後ろの行の役割も変わる", () => {
+			render(<Editor initialLines={["t", "code:a.js", "x"]} />);
+			expect(kindsOf()[2]).toBe("text");
+
+			fireEvent.mouseDown(screen.getAllByTestId("line")[2] as HTMLElement);
+			press("Tab");
+
+			expect(lines()[2]).toBe(" x");
+			expect(kindsOf()[2]).toBe("code-body");
+		});
+
+		it("テーブルの行は、列をそろえるための1つの枠にまとめる", () => {
+			render(<Editor initialLines={["t", "table:a", " 1\t2", " 3\t4", "end"]} />);
+
+			const rows = screen.getAllByTestId("line").slice(2, 4);
+			const block = rows[0]?.closest(".table-block");
+			expect(block).not.toBeNull();
+			expect(rows[1]?.closest(".table-block")).toBe(block);
+			expect(block?.querySelectorAll("[data-testid='line']")).toHaveLength(2);
+		});
+
+		it("セルの文字以外のところを押すと、そのセルの末尾にカーソルが入る", () => {
+			render(<Editor initialLines={["t", "table:a", " xy\tz"]} />);
+			const firstCell = screen
+				.getAllByTestId("line")[2]
+				?.querySelectorAll(".cell:not(.indent-cell)")[0];
+
+			fireEvent.mouseDown(firstCell as Element);
+			type("!");
+
+			expect(lines()[2]).toBe(" xy!\tz");
+		});
+
+		it("テーブルの行で Tab を押すと、タブ文字が入って新しいセルができる", () => {
+			render(<Editor initialLines={["t", "table:a", " x"]} />);
+			clickChar(2, 1);
+			press("ArrowRight");
+
+			press("Tab");
+			type("y");
+
+			expect(lines()[2]).toBe(" x\ty");
+			expect(caret()).toEqual({ line: 2, column: 4 });
+		});
+	});
+
 	describe("文字入力", () => {
 		it("打った文字がカーソル位置に入り、入力欄は空に戻る", () => {
 			render(<Editor initialLines={["ac"]} />);

@@ -1,4 +1,5 @@
 import type { Cursor } from "@amime/editor-core";
+import type { Span } from "@amime/parser";
 
 /** 画面上の1文字の位置。 */
 export type CharBox = {
@@ -20,6 +21,15 @@ export function columnFromPoint(char: CharBox, clientX: number): number {
 /** 押した高さと文字の矩形との縦の距離。矩形の中なら 0。 */
 const verticalDistance = (char: CharBox, clientY: number): number =>
 	Math.max(char.top - clientY, clientY - (char.top + char.height), 0);
+
+/**
+ * テーブルのセルの中で、文字以外のところを押したときの列を求める。
+ * セルの最初に見えている文字より左(左の余白)ならセルの先頭、それ以外(文字の下や右の余白)ならセルの末尾。
+ * 先頭と末尾は、見えている文字の位置ではなくセルの範囲から決める(セルの端の記法が隠れていても正しい位置になる)。
+ */
+export function columnInCell(firstVisible: CharBox, cell: Span, clientX: number): number {
+	return clientX < firstVisible.left ? cell.start : cell.end;
+}
 
 /** 「行末」を表す文字位置。setCursor が実際の行の長さに収める。 */
 export const LINE_END = Number.MAX_SAFE_INTEGER;
@@ -85,6 +95,17 @@ export function cursorFromPoint(target: Element, clientX: number, clientY: numbe
 
 	const char = target.closest("[data-column]");
 	if (char) return { line: lineIndex, column: columnFromPoint(measure(char), clientX) };
+
+	// テーブルのセルの余白。行全体ではなく、押したセルの中で位置を決める。
+	const cell = target.closest("[data-cell-start]");
+	const firstInCell = cell?.querySelector("[data-column]");
+	if (cell && firstInCell) {
+		const range = {
+			start: Number(cell.getAttribute("data-cell-start")),
+			end: Number(cell.getAttribute("data-cell-end")),
+		};
+		return { line: lineIndex, column: columnInCell(measure(firstInCell), range, clientX) };
+	}
 
 	const chars = Array.from(line.querySelectorAll("[data-column]"), measure);
 	return { line: lineIndex, column: columnOnRow(chars, clientX, clientY) };
