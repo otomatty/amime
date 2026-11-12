@@ -179,6 +179,45 @@ test.describe("同時編集", () => {
 		await expectLines(other, [name, "上に足した行", "最初の行!"]);
 	});
 
+	test("他の人の変更が届いたあとでも、自分の入力だけを取り消せる。やり直しもできる", async ({
+		page,
+		context,
+	}) => {
+		const { name, other } = await openInTwoTabs(page, context);
+		await clickLineEnd(page, 0);
+		await page.keyboard.type("!");
+
+		await clickLineEnd(other, 1);
+		await other.keyboard.press("Enter");
+		await other.keyboard.type("別のタブの行");
+		await expectLines(page, [`${name}!`, "最初の行", "別のタブの行"]);
+
+		// 自分の「!」だけが消える。別のタブが足した行は残る。
+		await page.keyboard.press("ControlOrMeta+z");
+		await expectLines(page, [name, "最初の行", "別のタブの行"]);
+		await expectLines(other, [name, "最初の行", "別のタブの行"]);
+
+		await page.keyboard.press("ControlOrMeta+Shift+z");
+		await expectLines(page, [`${name}!`, "最初の行", "別のタブの行"]);
+		await expectLines(other, [`${name}!`, "最初の行", "別のタブの行"]);
+	});
+
+	test("消した行を取り消しで戻すと、他のタブにも同じ行として戻る", async ({ page, context }) => {
+		const { name, other } = await openInTwoTabs(page, context);
+		await clickLineEnd(page, 1);
+
+		// 「最初の行」を選択して消し、行ごとなくす。続けて押した Backspace は、1回の取り消しにまとまる。
+		await page.keyboard.press("Shift+Home");
+		await page.keyboard.press("Backspace");
+		await page.keyboard.press("Backspace");
+		await expectLines(other, [name]);
+
+		await page.keyboard.press("ControlOrMeta+z");
+
+		await expectLines(page, [name, "最初の行"]);
+		await expectLines(other, [name, "最初の行"]);
+	});
+
 	test("まだないページを開いているあいだに他の人が書くと、その内容が表示される", async ({
 		page,
 		context,

@@ -82,9 +82,8 @@ export function Editor({ initialLines, initialDocument, remote, onChange }: Edit
 	const [store] = useState(() =>
 		createEditorStore(createModel({ initialLines, initialDocument }, createIdPrefix())),
 	);
-	const { history, tracker } = useSyncExternalStore(store.subscribe, store.getModel);
+	const { present: state, tracker } = useSyncExternalStore(store.subscribe, store.getModel);
 	const { dispatch } = store;
-	const state = history.present;
 
 	// 呼び出し側が渡す関数が変わっても、登録はし直さず、いつも最新のものを呼ぶ。
 	const latestOnChange = useRef(onChange);

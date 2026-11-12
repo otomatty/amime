@@ -1,6 +1,6 @@
 # ADR-0018: 他の人の変更の配信(WebSocket)
 
-- 状態: 採用(Cloudflare 上での動作は未確認。手元の Workers ランタイムで確認した)
+- 状態: 採用(Cloudflare 上での動作は未確認。手元の Workers ランタイムで確認した。取り消しの履歴が消える制約は [ADR-0019](0019-undo-own-edits.md) で解消)
 - 日付: 2026-11-12
 - 関連: [ADR-0006](0006-sync-model.md)、[ADR-0016](0016-changes-and-line-ids.md)、[ADR-0017](0017-page-storage-and-api.md)(「他の人の変更は、自分が保存するときに初めて画面に入る」という制約を、このADRで解消する)
 
