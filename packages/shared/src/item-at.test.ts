@@ -7,6 +7,10 @@ describe("itemAt", () => {
 		expect(itemAt(["a", "b"], 1)).toBe("b");
 	});
 
+	it("null の要素も返す", () => {
+		expect(itemAt([null], 0)).toBeNull();
+	});
+
 	it("範囲外なら InvariantError を投げる", () => {
 		expect(() => itemAt(["a"], 1)).toThrow(InvariantError);
 		expect(() => itemAt(["a"], -1)).toThrow("index -1 is out of range");

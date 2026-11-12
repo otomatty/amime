@@ -43,7 +43,8 @@ function applyChange(lines: Line[], change: Change): Change | null {
 		case "move": {
 			const from = indexOfLine(lines, change.id);
 			if (from === -1) return null;
-			const [line] = lines.splice(from, 1) as [Line];
+			const line = itemAt(lines, from);
+			lines.splice(from, 1);
 			const to = placeIndex(lines, change);
 			lines.splice(to, 0, line);
 			return to === from ? null : { type: "move", id: change.id, ...neighbours(lines, to) };

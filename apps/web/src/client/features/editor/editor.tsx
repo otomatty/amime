@@ -351,7 +351,8 @@ export function Editor({ initialLines }: EditorProps) {
 				if (!group.table) return lines;
 				// テーブルの行は1つの枠で囲み、列の幅をそろえる。
 				return (
-					<div className="table-block" key={`table-${tracker.lines[group.start]?.id}`}>
+					// テーブルの始まりの行(まとまりの直前の行)で識別する。中の行を並べ替えても、枠は作り直されない。
+					<div className="table-block" key={`table-${tracker.lines[group.start - 1]?.id}`}>
 						{lines}
 					</div>
 				);

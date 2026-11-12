@@ -616,6 +616,19 @@ describe("Editor", () => {
 		});
 	});
 
+	describe("テーブルの行の識別", () => {
+		it("テーブルの先頭の行を動かしても、他の行は同じ要素のまま保たれる", () => {
+			render(<Editor initialLines={["題", "table:t", " A", " B"]} />);
+			const second = screen.getAllByTestId("line")[3];
+			clickChar(2, 0);
+
+			press("ArrowDown", { ctrlKey: true });
+
+			expect(lines()).toEqual(["題", "table:t", " B", " A"]);
+			expect(screen.getAllByTestId("line")[2]).toBe(second);
+		});
+	});
+
 	describe("行とかたまりを動かす", () => {
 		const outline = ["題", "A", " a1", "B", " b1"];
 
