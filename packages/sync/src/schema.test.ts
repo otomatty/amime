@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
 	MAX_CHANGES,
 	MAX_LINE_LENGTH,
-	parseChanges,
+	parseClientId,
+	parseCommitRequest,
 	parseCommitResult,
+	parseServerMessage,
 	parseSnapshot,
 } from "./schema.ts";
 
@@ -12,7 +14,67 @@ const update = { type: "update", id: "c1-0", text: "題2" };
 const remove = { type: "delete", id: "c1-0" };
 const move = { type: "move", id: "c1-0", after: "c1-1", before: null };
 
-describe("parseChanges", () => {
+const parseChanges = (input: unknown) => {
+	const parsed = parseCommitRequest({ changes: input });
+	return parsed.ok ? { ok: true, value: parsed.value.changes } : parsed;
+};
+
+describe("parseCommitRequest", () => {
+	it("送った端末の識別子を受け付ける。なくてもよい", () => {
+		expect(parseCommitRequest({ changes: [remove], client: "tab-1" })).toEqual({
+			ok: true,
+			value: { changes: [remove], client: "tab-1" },
+		});
+		expect(parseCommitRequest({ changes: [remove] })).toEqual({
+			ok: true,
+			value: { changes: [remove] },
+		});
+	});
+
+	it.each([
+		["オブジェクトでない", [remove]],
+		["changes がない", { client: "tab-1" }],
+		["端末の識別子に使えない文字がある", { changes: [], client: "a b" }],
+	])("%s入力は受け付けない", (_name, input) => {
+		expect(parseCommitRequest(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parseClientId", () => {
+	it("英数字と _ - からなる 64 文字までの識別子を受け付ける", () => {
+		expect(parseClientId("tab_1-a")).toEqual({ ok: true, value: "tab_1-a" });
+	});
+
+	it.each([[""], ["a b"], ["a".repeat(65)], [null]])("%j は受け付けない", (input) => {
+		expect(parseClientId(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parseServerMessage", () => {
+	it("接続したときのあいさつ(いまのバージョン)を受け付ける", () => {
+		expect(parseServerMessage('{"type":"hello","version":3}')).toEqual({
+			ok: true,
+			value: { type: "hello", version: 3 },
+		});
+	});
+
+	it("他の人のコミットを受け付ける", () => {
+		const message = { type: "commit", version: 4, applied: [update] };
+
+		expect(parseServerMessage(JSON.stringify(message))).toEqual({ ok: true, value: message });
+	});
+
+	it.each([
+		["JSONでない", "pong"],
+		["知らない種類", '{"type":"bye"}'],
+		["形が違う", '{"type":"commit","version":4}'],
+		["文字列でない", new ArrayBuffer(1)],
+	])("%sメッセージは受け付けない", (_name, input) => {
+		expect(parseServerMessage(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("変更の検査", () => {
 	it("4種類の変更を受け付ける", () => {
 		const changes = [insert, update, remove, move];
 

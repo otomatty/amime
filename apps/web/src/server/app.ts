@@ -1,6 +1,6 @@
 import { exports } from "cloudflare:workers";
 import { toTitleLc } from "@amime/shared";
-import { parseChanges } from "@amime/sync";
+import { parseClientId, parseCommitRequest } from "@amime/sync";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 
@@ -17,6 +17,15 @@ const MAX_COMMIT_BYTES = 2 * 1024 * 1024;
  */
 const pageStub = (name: string) => exports.PageDO.getByName(`default/${toTitleLc(name)}`);
 
+/** Origin ヘッダーの指すサイトが、要求を受けたこのサイトと同じか(スキーム・ホスト・ポートがすべて同じ)。 */
+function sameSite(origin: string, url: string): boolean {
+	try {
+		return new URL(origin).origin === new URL(url).origin;
+	} catch {
+		return false;
+	}
+}
+
 async function readJson(request: Request): Promise<unknown> {
 	try {
 		return await request.json();
@@ -30,6 +39,12 @@ const pages = new Hono<AppEnv>()
 	.use(async (c, next) => {
 		// 認証(P4)が入るまで、公開環境ではページを読み書きできないようにする(ADR-0009、ADR-0017)。
 		if (c.env.PAGE_API !== "enabled") return c.json({ error: "page-api-disabled" }, 403);
+		// 他のサイトのページからの要求を断る。ブラウザは、他のサイトへの要求に Origin を付ける。
+		// WebSocket は他のサイトからでも接続でき、書き込みも形式によっては送れてしまうので、ここで止める。
+		const origin = c.req.header("origin");
+		if (origin !== undefined && !sameSite(origin, c.req.url)) {
+			return c.json({ error: "cross-origin" }, 403);
+		}
 		c.header("cache-control", "no-store");
 		return next();
 	})
@@ -46,14 +61,21 @@ const pages = new Hono<AppEnv>()
 			onError: (c) => c.json({ error: "commit-too-large" }, 413),
 		}),
 		async (c) => {
-			const body = await readJson(c.req.raw);
-			const changes = parseChanges(
-				typeof body === "object" && body !== null && "changes" in body ? body.changes : null,
-			);
-			if (!changes.ok) return c.json({ error: "invalid-commit" }, 400);
-			return c.json(await pageStub(c.req.param("page")).commit(changes.value));
+			const commit = parseCommitRequest(await readJson(c.req.raw));
+			if (!commit.ok) return c.json({ error: "invalid-commit" }, 400);
+			const { changes, client } = commit.value;
+			return c.json(await pageStub(c.req.param("page")).commit(changes, client));
 		},
-	);
+	)
+	// 他の端末のコミットを受け取るための WebSocket(ADR-0018)。
+	.get("/:page/socket", async (c) => {
+		// 検査は Worker の側で済ませ、正しい要求だけを Durable Object に渡す。
+		if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
+			return c.json({ error: "upgrade-required" }, 426);
+		}
+		if (!parseClientId(c.req.query("client")).ok) return c.json({ error: "invalid-client" }, 400);
+		return pageStub(c.req.param("page")).fetch(c.req.raw);
+	});
 
 /** HTTP API。パスはすべて /api 配下に置き、それ以外は静的アセット(SPA)が応答する。 */
 export const app = new Hono<AppEnv>()

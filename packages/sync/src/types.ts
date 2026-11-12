@@ -51,3 +51,23 @@ export type CommitResult = {
 	/** 実際に効いた変更。 */
 	readonly applied: readonly Change[];
 };
+
+/** 端末(タブ)を識別するID。自分のコミットを、自分の接続に配信しないために使う。 */
+export type ClientId = string & { readonly __brand: "ClientId" };
+
+/** クライアントが送るコミット。 */
+export type CommitRequest = {
+	readonly changes: readonly Change[];
+	/**
+	 * 送った端末(タブ)の識別子。サーバーは、同じ識別子で接続している WebSocket にはこのコミットを配信しない
+	 * (送った本人は、応答で結果を受け取るため)。
+	 */
+	readonly client?: ClientId | undefined;
+};
+
+/** サーバーが WebSocket で送るメッセージ。 */
+export type ServerMessage =
+	/** 接続した直後に送る。クライアントは、自分の持つバージョンより進んでいたら読み直す。 */
+	| { readonly type: "hello"; readonly version: number }
+	/** 他の端末のコミットが効いたときに送る。 */
+	| ({ readonly type: "commit" } & CommitResult);

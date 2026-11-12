@@ -1,6 +1,7 @@
 import type { Result } from "@amime/shared";
-import { type Change, parseCommitResult, parseSnapshot } from "@amime/sync";
+import { type Change, type ClientId, parseCommitResult, parseSnapshot } from "@amime/sync";
 import { PageApiError } from "./page-api-error.ts";
+import { connectPageSocket } from "./page-socket.ts";
 import type { PageApi } from "./page-sync.ts";
 
 const STATUS_FORBIDDEN = 403;
@@ -23,10 +24,23 @@ async function request<T>(
 	return parsed.value;
 }
 
-/** 指定したページを読み書きするAPI。 */
-export function createPageApi(name: string): PageApi {
-	const url = `/api/pages/${encodeURIComponent(name)}`;
+const pagePath = (name: string): string => `/api/pages/${encodeURIComponent(name)}`;
+
+/** ページの WebSocket のURL。いま開いているページ(location)と同じ接続先にする。 */
+export function pageSocketUrl(location: URL | Location, name: string, client: ClientId): string {
+	const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+	return `${protocol}//${location.host}${pagePath(name)}/socket?client=${client}`;
+}
+
+/**
+ * 指定したページを読み書きするAPI。
+ * client は、この端末(タブ)の識別子。自分のコミットが、自分の WebSocket に配信されないようにするために送る。
+ */
+export function createPageApi(name: string, client: ClientId): PageApi {
+	const url = pagePath(name);
 	return {
+		subscribe: (handlers) =>
+			connectPageSocket({ url: pageSocketUrl(window.location, name, client), handlers }),
 		load: () => request(url, undefined, parseSnapshot),
 		commit: (changes: readonly Change[]) =>
 			request(
@@ -34,7 +48,7 @@ export function createPageApi(name: string): PageApi {
 				{
 					method: "POST",
 					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ changes }),
+					body: JSON.stringify({ changes, client }),
 				},
 				parseCommitResult,
 			),

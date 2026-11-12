@@ -1,6 +1,13 @@
 import { err, ok, type Result } from "@amime/shared";
 import * as v from "valibot";
-import type { Change, CommitResult, LineId, PageSnapshot } from "./types.ts";
+import type {
+	ClientId,
+	CommitRequest,
+	CommitResult,
+	LineId,
+	PageSnapshot,
+	ServerMessage,
+} from "./types.ts";
 
 /** 1行の本文の長さの上限(UTF-16 の符号単位)。 */
 export const MAX_LINE_LENGTH = 20_000;
@@ -12,13 +19,14 @@ export const MAX_CHANGES = 2_000;
  */
 export const MAX_COMMIT_TEXT_LENGTH = 300_000;
 
-const LINE_ID = /^[\w-]{1,64}$/;
+/** 行IDと、端末の識別子に使える形。 */
+const IDENTIFIER = /^[\w-]{1,64}$/;
 const LINE_BREAK = /[\r\n]/;
 
 // 行IDは外部から届く文字列。形を検査したうえで、ここでブランド型にする。
 const LineIdSchema = v.pipe(
 	v.string(),
-	v.regex(LINE_ID),
+	v.regex(IDENTIFIER),
 	v.transform((value) => value as LineId),
 );
 const TextSchema = v.pipe(
@@ -38,16 +46,45 @@ const ChangeSchema = v.variant("type", [
 const ChangesSchema = v.pipe(v.array(ChangeSchema), v.maxLength(MAX_CHANGES));
 const VersionSchema = v.pipe(v.number(), v.integer(), v.minValue(0));
 const SnapshotSchema = v.object({ version: VersionSchema, lines: v.array(LineSchema) });
-const CommitResultSchema = v.object({ version: VersionSchema, applied: v.array(ChangeSchema) });
+const commitResult = { version: VersionSchema, applied: v.array(ChangeSchema) };
+const CommitResultSchema = v.object(commitResult);
+// 端末の識別子も外部から届く文字列。形を検査したうえで、ここでブランド型にする。
+const ClientIdSchema = v.pipe(
+	v.string(),
+	v.regex(IDENTIFIER),
+	v.transform((value) => value as ClientId),
+);
+const CommitRequestSchema = v.object({
+	changes: ChangesSchema,
+	client: v.optional(ClientIdSchema),
+});
+const ServerMessageSchema = v.variant("type", [
+	v.object({ type: v.literal("hello"), version: VersionSchema }),
+	v.object({ type: v.literal("commit"), ...commitResult }),
+]);
 
 function parse<T>(schema: v.GenericSchema<unknown, T>, input: unknown): Result<T, "invalid"> {
 	const result = v.safeParse(schema, input);
 	return result.success ? ok(result.output) : err("invalid");
 }
 
-/** 外部から届いた変更の列(コミットの中身)を検査する。 */
-export const parseChanges = (input: unknown): Result<readonly Change[], "invalid"> =>
-	parse(ChangesSchema, input);
+/** 外部から届いたコミット(変更の列と、送った端末の識別子)を検査する。 */
+export const parseCommitRequest = (input: unknown): Result<CommitRequest, "invalid"> =>
+	parse(CommitRequestSchema, input);
+
+/** 外部から届いた端末の識別子を検査する。 */
+export const parseClientId = (input: unknown): Result<ClientId, "invalid"> =>
+	parse(ClientIdSchema, input);
+
+/** サーバーから WebSocket で届いたメッセージを検査する。 */
+export function parseServerMessage(input: unknown): Result<ServerMessage, "invalid"> {
+	if (typeof input !== "string") return err("invalid");
+	try {
+		return parse(ServerMessageSchema, JSON.parse(input));
+	} catch {
+		return err("invalid");
+	}
+}
 
 /** サーバーから届いたページを検査する。 */
 export const parseSnapshot = (input: unknown): Result<PageSnapshot, "invalid"> =>

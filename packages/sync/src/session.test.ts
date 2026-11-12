@@ -8,12 +8,13 @@ import {
 	edit,
 	failed,
 	hasUnsaved,
+	receive,
 	recover,
 	resync,
 	type Session,
 	send,
 } from "./session.ts";
-import type { Change, Line, LineId } from "./types.ts";
+import type { Change, CommitResult, Line, LineId } from "./types.ts";
 
 const id = (value: string): LineId => value as LineId;
 const line = (lineId: string, text: string = lineId.toUpperCase()): Line => ({
@@ -217,6 +218,64 @@ describe("セッション(1つの端末から見たページの状態)", () => {
 	});
 });
 
+describe("receive(他の人のコミットの受け取り)", () => {
+	const snapshot = { version: 3, lines: [line("a"), line("b")] };
+	const fromOther = (version: number, ...applied: Change[]) => ({ version, applied });
+	const insertX: Change = { type: "insert", line: line("x"), after: null, before: null };
+
+	it("次のバージョンのコミットを、確定した文書と画面の文書の両方に反映する", () => {
+		const next = receive(createSession(snapshot), fromOther(4, insertX));
+
+		expect(next).toMatchObject({ version: 4, inflight: null });
+		expect(next?.confirmed).toEqual([line("x"), line("a"), line("b")]);
+		expect(next?.local).toEqual([line("x"), line("a"), line("b")]);
+		expect(next && hasUnsaved(next)).toBe(false);
+	});
+
+	it("まだ送っていない自分の編集は、受け取ったあとも残る", () => {
+		const session = edit(createSession(snapshot), [line("a"), line("b", "B2")]);
+
+		const next = receive(session, fromOther(4, insertX));
+
+		expect(next?.local).toEqual([line("x"), line("a"), line("b", "B2")]);
+		expect(next && mustSend(next).changes).toEqual([{ type: "update", id: id("b"), text: "B2" }]);
+	});
+
+	it("送信中に受け取ったら、送信中のままにして、あとから届く応答をそのまま反映できる", () => {
+		const sending = mustSend(edit(createSession(snapshot), [line("a"), line("b", "B2")]));
+
+		// 他の人のコミット(バージョン4)が先にサーバーに入り、自分のコミットはバージョン5になった。
+		const received = receive(sending.session, fromOther(4, insertX));
+		expect(received?.inflight).toBe(sending.changes);
+		expect(received?.local).toEqual([line("x"), line("a"), line("b", "B2")]);
+
+		const next = received && acknowledge(received, { version: 5, applied: sending.changes });
+		expect(next).toMatchObject({ version: 5, inflight: null });
+		expect(next?.confirmed).toEqual([line("x"), line("a"), line("b", "B2")]);
+		expect(next && hasUnsaved(next)).toBe(false);
+	});
+
+	it("他の人が消した行への自分の編集は、画面からも消える(削除が勝つ)", () => {
+		const session = edit(createSession(snapshot), [line("a"), line("b", "B2")]);
+
+		const next = receive(session, fromOther(4, { type: "delete", id: id("b") }));
+
+		expect(next?.local).toEqual([line("a")]);
+		expect(next && hasUnsaved(next)).toBe(false);
+	});
+
+	it("既に反映してあるバージョンのコミットは無視する", () => {
+		const session = createSession(snapshot);
+
+		expect(receive(session, fromOther(3, insertX))).toBe(session);
+		expect(receive(session, fromOther(2, insertX))).toBe(session);
+	});
+
+	it("あいだのバージョンが抜けていたら、反映せず、読み直しを求める", () => {
+		expect(receive(createSession(snapshot), fromOther(5, insertX))).toBeNull();
+	});
+});
+
 describe("1つのコミットに収まらない変更", () => {
 	/** 送信と受け付けを、送るものがなくなるまで繰り返す。送ったコミットを返す。 */
 	function saveAll(start: Session, server: ReturnType<typeof createServer>) {
@@ -263,6 +322,7 @@ describe("1つのコミットに収まらない変更", () => {
 });
 
 describe("複数の端末が同じページを編集したとき", () => {
+	const CLIENTS = [0, 1, 2] as const;
 	type Step =
 		| {
 				readonly type: "edit";
@@ -270,16 +330,18 @@ describe("複数の端末が同じページを編集したとき", () => {
 				readonly seed: number;
 				readonly text: string;
 		  }
-		| { readonly type: "save"; readonly client: number };
+		/** send: 送信する / respond: 送信への応答が届く / deliver: 他の人のコミットが1つ届く */
+		| { readonly type: "send" | "respond" | "deliver"; readonly client: number };
 
+	const client = fc.constantFrom(...CLIENTS);
 	const step: fc.Arbitrary<Step> = fc.oneof(
 		fc.record({
 			type: fc.constant("edit" as const),
-			client: fc.integer({ min: 0, max: 2 }),
+			client,
 			seed: fc.nat(),
 			text: fc.constantFrom("x", "y", "z"),
 		}),
-		fc.record({ type: fc.constant("save" as const), client: fc.integer({ min: 0, max: 2 }) }),
+		fc.record({ type: fc.constantFrom("send", "respond", "deliver"), client }),
 	);
 
 	/** seed から決まる編集(行の追加・書き換え・削除・移動)を、画面の文書に行う。 */
@@ -293,47 +355,99 @@ describe("複数の端末が同じページを編集したとき", () => {
 		return [...local.toSpliced(index, 1), target];
 	}
 
-	it("全員が保存し終えて読み直せば、全員の画面がサーバーの文書と同じになる", () => {
+	/**
+	 * サーバーと3つの端末を模した世界。
+	 * 送信への応答と、他の人のコミットの配信は、別々の経路で届く。どちらが先に届くかは決まっていない。
+	 */
+	function createWorld() {
+		const server = createServer([line("a"), line("b"), line("c")]);
+		const sessions = CLIENTS.map(() => createSession(server.snapshot()));
+		const responses: (CommitResult | null)[] = CLIENTS.map(() => null);
+		const inboxes: CommitResult[][] = CLIENTS.map(() => []);
+		/** 配信に抜けがあったが、送信中だったので読み直しを後回しにしている端末。 */
+		const behind = new Set<number>();
+		const sessionOf = (who: number): Session => {
+			const session = sessions[who];
+			if (session === undefined) throw new Error("no such client");
+			return session;
+		};
+
+		const world = {
+			server,
+			sessionOf,
+			edit(who: number, seed: number, text: string, newId: LineId) {
+				const session = sessionOf(who);
+				sessions[who] = edit(session, editLocal(session.local, seed, text, newId));
+			},
+			send(who: number) {
+				const sending = send(sessionOf(who));
+				if (sending === null) return;
+				sessions[who] = sending.session;
+				const result = server.commit(sending.changes);
+				responses[who] = result;
+				if (result.applied.length === 0) return;
+				// 効いたコミットは、送った本人以外の全員に配信される。
+				for (const other of CLIENTS) if (other !== who) inboxes[other]?.push(result);
+			},
+			respond(who: number) {
+				const result = responses[who];
+				if (result === null || result === undefined) return;
+				responses[who] = null;
+				const session = sessionOf(who);
+				const next = acknowledge(session, result) ?? resync(session, server.snapshot());
+				sessions[who] = behind.delete(who) ? recover(next, server.snapshot()) : next;
+			},
+			deliver(who: number) {
+				const event = inboxes[who]?.shift();
+				if (event === undefined) return;
+				const session = sessionOf(who);
+				const next = receive(session, event);
+				// 抜けがあったら読み直す。送信中なら、応答が届いてから読み直す。
+				if (next !== null) sessions[who] = next;
+				else if (session.inflight === null) sessions[who] = recover(session, server.snapshot());
+				else behind.add(who);
+			},
+			/** 届いていないものをすべて届け、残った変更を保存し終える。 */
+			settle(who: number) {
+				for (let round = 0; round < 4; round += 1) {
+					world.respond(who);
+					while ((inboxes[who]?.length ?? 0) > 0) world.deliver(who);
+					world.send(who);
+				}
+				world.respond(who);
+			},
+		};
+		return world;
+	}
+
+	it("応答と配信がどんな順で届いても、全員が保存し終えれば、全員の画面がサーバーの文書と同じになる", () => {
 		fc.assert(
-			fc.property(fc.array(step, { maxLength: 30 }), (steps) => {
-				const server = createServer([line("a"), line("b"), line("c")]);
-				const sessions = [0, 1, 2].map(() => createSession(server.snapshot()));
-				const sessionOf = (client: number): Session => {
-					const session = sessions[client];
-					if (session === undefined) throw new Error("no such client");
-					return session;
-				};
-				const save = (client: number) => {
-					const sending = send(sessionOf(client));
-					if (sending === null) return;
-					const result = server.commit(sending.changes);
-					sessions[client] =
-						acknowledge(sending.session, result) ?? resync(sending.session, server.snapshot());
-				};
+			fc.property(fc.array(step, { maxLength: 40 }), (steps) => {
+				const world = createWorld();
 
 				steps.forEach((current, serial) => {
-					if (current.type === "save") {
-						save(current.client);
-						return;
+					if (current.type === "edit") {
+						const newId = id(`c${current.client}-${serial}`);
+						world.edit(current.client, current.seed, current.text, newId);
+					} else {
+						world[current.type](current.client);
 					}
-					const session = sessionOf(current.client);
-					const newId = id(`c${current.client}-${serial}`);
-					const local = editLocal(session.local, current.seed, current.text, newId);
-					sessions[current.client] = edit(session, local);
 				});
 
-				// 残った変更を保存する。保存は、読み直しを挟んでも数回で必ず終わる。
-				for (const client of [0, 1, 2]) {
-					for (let attempt = 0; attempt < 3; attempt += 1) save(client);
-					expect(hasUnsaved(sessionOf(client))).toBe(false);
+				for (const who of CLIENTS) {
+					world.settle(who);
+					expect(hasUnsaved(world.sessionOf(who))).toBe(false);
 				}
-				for (const client of [0, 1, 2]) {
-					const latest = resync(sessionOf(client), server.snapshot());
-					expect(latest.local).toEqual(server.snapshot().lines);
+				// 最後に保存した人のコミットを、全員が受け取る。
+				for (const who of CLIENTS) {
+					world.settle(who);
+					const latest = recover(world.sessionOf(who), world.server.snapshot());
+					expect(latest.local).toEqual(world.server.snapshot().lines);
+					expect(world.sessionOf(who).local).toEqual(world.server.snapshot().lines);
 					expect(hasUnsaved(latest)).toBe(false);
 				}
 			}),
-			{ numRuns: 300 },
+			{ numRuns: 500 },
 		);
 	});
 });

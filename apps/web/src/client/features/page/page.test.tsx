@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Page } from "./page.tsx";
 
@@ -69,7 +69,7 @@ describe("Page", () => {
 		expect(status()).toBe("未保存の変更があります");
 		await waitFor(() => expect(status()).toBe("保存済み"));
 		const commit = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
-		expect(JSON.parse(String(commit?.[1]?.body))).toEqual({
+		expect(JSON.parse(String(commit?.[1]?.body))).toMatchObject({
 			changes: [{ type: "update", id: "a", text: "買い物牛乳" }],
 		});
 	});
@@ -125,6 +125,74 @@ describe("Page", () => {
 		type("牛乳");
 
 		await waitFor(() => expect(status()).toMatch(/保存できない内容があります/));
+	});
+
+	it("他の人のコミットが届くと、その場で画面に反映する", async () => {
+		const sockets: EventTarget[] = [];
+		class CapturedSocket extends EventTarget {
+			static readonly OPEN = 1;
+			readonly readyState = 1;
+			constructor() {
+				super();
+				sockets.push(this);
+			}
+			send() {}
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", CapturedSocket);
+		stubFetch(() => json(saved));
+		render(<Page name="買い物" />);
+		await waitFor(() => expect(lines()).toEqual(["買い物"]));
+
+		const commit = {
+			type: "commit",
+			version: 2,
+			applied: [
+				{ type: "insert", line: { id: "x", text: "他の人の行" }, after: "a", before: null },
+			],
+		};
+		act(() => {
+			sockets.at(-1)?.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(commit) }));
+		});
+
+		expect(lines()).toEqual(["買い物", "他の人の行"]);
+		expect(status()).toBe("保存済み");
+	});
+
+	it("コミットが続けて届いても、すべての行が画面に残り、自分からは何も送らない", async () => {
+		const sockets: EventTarget[] = [];
+		class CapturedSocket extends EventTarget {
+			static readonly OPEN = 1;
+			readonly readyState = 1;
+			constructor() {
+				super();
+				sockets.push(this);
+			}
+			send() {}
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", CapturedSocket);
+		const fetchMock = stubFetch(() => json(saved));
+		render(<Page name="買い物" />);
+		await waitFor(() => expect(lines()).toEqual(["買い物"]));
+		const insert = (version: number, id: string, after: string) => ({
+			type: "commit",
+			version,
+			applied: [{ type: "insert", line: { id, text: id }, after, before: null }],
+		});
+
+		// 画面を描き直す間もなく、2つのコミットが続けて届く。
+		act(() => {
+			for (const commit of [insert(2, "x", "a"), insert(3, "y", "x")]) {
+				sockets
+					.at(-1)
+					?.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(commit) }));
+			}
+		});
+		await new Promise((resolve) => setTimeout(resolve, 400));
+
+		expect(lines()).toEqual(["買い物", "x", "y"]);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("保存に失敗したら、再試行することを表示する", async () => {
