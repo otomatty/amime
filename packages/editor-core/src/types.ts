@@ -9,4 +9,9 @@ export type Cursor = {
 export type EditorState = {
 	readonly lines: readonly string[];
 	readonly cursor: Cursor;
+	/**
+	 * 範囲選択の始点。選択していなければ持たない。
+	 * 選択範囲は anchor と cursor のあいだで、どちらが文書の前にあってもよい。
+	 */
+	readonly anchor?: Cursor;
 };

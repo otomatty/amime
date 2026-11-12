@@ -128,3 +128,42 @@ describe("setCursor", () => {
 		expect(setCursor(before, { line: 0, column: 1 }).lines).toBe(before.lines);
 	});
 });
+
+describe("範囲を選択しているときの移動", () => {
+	const selecting = (lines: string[], anchor: [number, number], cursor: [number, number]) => ({
+		lines,
+		anchor: { line: anchor[0], column: anchor[1] },
+		cursor: { line: cursor[0], column: cursor[1] },
+	});
+
+	it("左へ動くと、選択をやめてカーソルを選択の始まりに置く", () => {
+		expect(moveLeft(selecting(["abcd", "ef"], [1, 1], [0, 1]))).toEqual(
+			state(["abcd", "ef"], 0, 1),
+		);
+		expect(moveLeft(selecting(["abcd"], [0, 1], [0, 3]))).toEqual(state(["abcd"], 0, 1));
+	});
+
+	it("右へ動くと、選択をやめてカーソルを選択の終わりに置く", () => {
+		expect(moveRight(selecting(["abcd", "ef"], [1, 1], [0, 1]))).toEqual(
+			state(["abcd", "ef"], 1, 1),
+		);
+	});
+
+	it.each([
+		["上", moveUp],
+		["下", moveDown],
+		["行頭", moveToLineStart],
+		["行末", moveToLineEnd],
+	])("%sへ動くと、選択をやめてカーソルの位置から動く", (_name, motion) => {
+		const moved = motion(selecting(["abcd", "efgh", "ijkl"], [0, 0], [1, 2]));
+
+		expect(moved.anchor).toBeUndefined();
+		expect(moved.cursor).toEqual(motion(state(["abcd", "efgh", "ijkl"], 1, 2)).cursor);
+	});
+
+	it("指定した位置へ動くと、選択をやめる", () => {
+		const moved = setCursor(selecting(["abcd"], [0, 0], [0, 2]), { line: 0, column: 3 });
+
+		expect(moved).toEqual(state(["abcd"], 0, 3));
+	});
+});

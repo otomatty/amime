@@ -193,3 +193,78 @@ describe("outdentLine", () => {
 		expect(outdentLine(before)).toBe(before);
 	});
 });
+
+describe("範囲を選択しているときの編集", () => {
+	const selecting = (
+		lines: string[],
+		anchor: [number, number],
+		cursor: [number, number],
+	): EditorState => ({
+		lines,
+		anchor: { line: anchor[0], column: anchor[1] },
+		cursor: { line: cursor[0], column: cursor[1] },
+	});
+
+	it("文字を入れると、選択した範囲と置き換わる", () => {
+		expect(insertText(selecting(["abcd"], [0, 1], [0, 3]), "X")).toEqual(state(["aXd"], 0, 2));
+	});
+
+	it("複数行の選択も、入れた文字列と置き換わる", () => {
+		expect(insertText(selecting(["ab", "cd", "ef"], [2, 1], [0, 1]), "X\nY")).toEqual(
+			state(["aX", "Yf"], 1, 1),
+		);
+	});
+
+	it("空文字列を入れても、選択した範囲は消えない", () => {
+		const before = selecting(["abcd"], [0, 1], [0, 3]);
+		expect(insertText(before, "")).toBe(before);
+	});
+
+	it("改行すると、選択した範囲を消してから行を分ける", () => {
+		expect(splitLine(selecting([" abcd"], [0, 2], [0, 4]))).toEqual(state([" a", " d"], 1, 1));
+	});
+
+	it.each([
+		["Backspace", deleteBackward],
+		["Delete", deleteForward],
+	])("%s は、選択した範囲だけを消す(その前後の文字は消さない)", (_name, command) => {
+		expect(command(selecting(["abcd"], [0, 1], [0, 3]))).toEqual(state(["ad"], 0, 1));
+	});
+
+	describe("インデント", () => {
+		it("選択した範囲にかかるすべての行を1段深くし、選択も一緒にずらす", () => {
+			expect(indentLine(selecting(["a", "bc", "de", "f"], [1, 1], [2, 1]))).toEqual(
+				selecting(["a", " bc", " de", "f"], [1, 2], [2, 2]),
+			);
+		});
+
+		it("選択が行頭で終わっているとき、その行は対象にしない", () => {
+			expect(indentLine(selecting(["ab", "cd", "ef"], [0, 0], [2, 0]))).toEqual(
+				selecting([" ab", " cd", "ef"], [0, 1], [2, 0]),
+			);
+		});
+
+		it("1行の中の選択でも、その行を深くして選択を保つ", () => {
+			expect(indentLine(selecting(["abc"], [0, 2], [0, 1]))).toEqual(
+				selecting([" abc"], [0, 3], [0, 2]),
+			);
+		});
+
+		it("選択した範囲にかかるすべての行を1段浅くする。インデントのない行はそのまま", () => {
+			expect(outdentLine(selecting([" a", "b", "  c"], [0, 2], [2, 3]))).toEqual(
+				selecting(["a", "b", " c"], [0, 1], [2, 2]),
+			);
+		});
+
+		it("浅くできる行が1つもなければ、何も変えない", () => {
+			const before = selecting(["a", "b"], [0, 0], [1, 1]);
+			expect(outdentLine(before)).toBe(before);
+		});
+
+		it("浅くした行の行頭にあった選択の端は、行頭に留まる", () => {
+			expect(outdentLine(selecting([" a", " b"], [0, 0], [1, 2]))).toEqual(
+				selecting(["a", "b"], [0, 0], [1, 1]),
+			);
+		});
+	});
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandForKey, type KeyInput } from "./keymap.ts";
+import { bindingForKey, type Command, type KeyContext, type KeyInput } from "./keymap.ts";
 import type { EditorState } from "./types.ts";
 
 const state = (lines: string[], line: number, column: number): EditorState => ({
@@ -16,7 +16,13 @@ const key = (name: string, modifiers: Partial<Omit<KeyInput, "key">> = {}): KeyI
 	...modifiers,
 });
 
-describe("commandForKey", () => {
+/** 割り当てが状態を変える操作なら、その操作を返す。 */
+function commandForKey(input: KeyInput, context: KeyContext = {}): Command | null {
+	const binding = bindingForKey(input, context);
+	return binding?.type === "command" ? binding.command : null;
+}
+
+describe("bindingForKey", () => {
 	const base = state(["ab", " cd"], 1, 2);
 	const handleKey = (target: EditorState, input: KeyInput): EditorState | null =>
 		commandForKey(input)?.(target) ?? null;
@@ -98,7 +104,108 @@ describe("commandForKey", () => {
 		});
 	});
 
-	it("Shift+矢印(範囲選択)はまだ扱わない", () => {
-		expect(handleKey(base, key("ArrowLeft", { shift: true }))).toBeNull();
+	describe("範囲選択", () => {
+		const selecting = (anchorColumn: number, line: number, column: number): EditorState => ({
+			lines: ["ab", " cd"],
+			anchor: { line: 1, column: anchorColumn },
+			cursor: { line, column },
+		});
+
+		it.each([
+			["ArrowLeft", selecting(2, 1, 1)],
+			["ArrowRight", selecting(2, 1, 3)],
+			["ArrowUp", selecting(2, 0, 2)],
+			["Home", selecting(2, 1, 0)],
+			["End", selecting(2, 1, 3)],
+		])("Shift+%s は、いまの位置を始点にして選択を広げる", (name, expected) => {
+			expect(handleKey(base, key(name, { shift: true }))).toEqual(expected);
+		});
+
+		it("Shift+ArrowDown は、最後の行では行末まで選択する", () => {
+			expect(handleKey(base, key("ArrowDown", { shift: true }))).toEqual(selecting(2, 1, 3));
+		});
+
+		it("Ctrl+A は、すべてを選択する", () => {
+			expect(handleKey(base, key("a", { ctrl: true }))).toEqual({
+				lines: ["ab", " cd"],
+				anchor: { line: 0, column: 0 },
+				cursor: { line: 1, column: 3 },
+			});
+		});
+
+		it("テーブルの行でも、複数行を選択しているときの Tab はインデントになる", () => {
+			const selection: EditorState = {
+				lines: ["t", " a", " b"],
+				anchor: { line: 1, column: 1 },
+				cursor: { line: 2, column: 2 },
+			};
+
+			expect(commandForKey(key("Tab"), { tableRowIndent: 1 })?.(selection)?.lines).toEqual([
+				"t",
+				"  a",
+				"  b",
+			]);
+		});
+	});
+
+	describe("取り消しとやり直し", () => {
+		it("Ctrl+Z は取り消し、Ctrl+Shift+Z と Ctrl+Y はやり直し", () => {
+			expect(bindingForKey(key("z", { ctrl: true }))).toEqual({ type: "undo" });
+			expect(bindingForKey(key("Z", { ctrl: true, shift: true }))).toEqual({ type: "redo" });
+			expect(bindingForKey(key("y", { ctrl: true }))).toEqual({ type: "redo" });
+		});
+	});
+
+	describe("Mac", () => {
+		const mac = { mac: true };
+
+		it("Command キーとの組み合わせを使う", () => {
+			expect(bindingForKey(key("z", { meta: true }), mac)).toEqual({ type: "undo" });
+			expect(bindingForKey(key("z", { meta: true, shift: true }), mac)).toEqual({ type: "redo" });
+			expect(commandForKey(key("a", { meta: true }), mac)?.(base).anchor).toEqual({
+				line: 0,
+				column: 0,
+			});
+		});
+
+		it("Command+Y はやり直しにしない(ブラウザに任せる)", () => {
+			expect(bindingForKey(key("y", { meta: true }), mac)).toBeNull();
+		});
+
+		it("Control キーとの組み合わせは扱わない", () => {
+			expect(bindingForKey(key("z", { ctrl: true }), mac)).toBeNull();
+			expect(bindingForKey(key("a", { ctrl: true }), mac)).toBeNull();
+		});
+	});
+
+	it("Mac 以外では、Meta キーとの組み合わせは扱わない", () => {
+		expect(bindingForKey(key("z", { meta: true }))).toBeNull();
+	});
+
+	it.each(["c", "x", "v"])(
+		"Ctrl+%s(コピー・切り取り・貼り付け)は扱わず、ブラウザに任せる",
+		(name) => {
+			expect(bindingForKey(key(name, { ctrl: true }))).toBeNull();
+		},
+	);
+
+	it("Ctrl+Shift+A のような、割り当てのない組み合わせは扱わない", () => {
+		expect(bindingForKey(key("A", { ctrl: true, shift: true }))).toBeNull();
+	});
+
+	describe("取り消しの単位にまとめる編集の種類", () => {
+		const groupOf = (name: string) => {
+			const binding = bindingForKey(key(name));
+			return binding?.type === "command" ? binding.group : undefined;
+		};
+
+		it("Backspace と Delete は、続けて押したぶんをそれぞれ1つにまとめる", () => {
+			expect(groupOf("Backspace")).toBe("delete-backward");
+			expect(groupOf("Delete")).toBe("delete-forward");
+		});
+
+		it.each(["Enter", "Tab", "ArrowLeft"])("%s はまとめない", (name) => {
+			expect(groupOf(name)).toBeNull();
+		});
 	});
 });
