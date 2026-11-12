@@ -9,6 +9,7 @@ export {
 	hasUnsaved,
 	resync,
 	type Session,
+	sameLines,
 	send,
 } from "./session.ts";
 export type { Change, CommitResult, Line, LineId, PageSnapshot } from "./types.ts";

@@ -1,7 +1,9 @@
-import type { Line, PageSnapshot } from "@amime/sync";
+import { type Line, type PageSnapshot, startTracking } from "@amime/sync";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "../editor/editor.tsx";
-import { createPageApi, PageApiError } from "./api.ts";
+import { createIdPrefix } from "../editor/editor-model.ts";
+import { createPageApi } from "./api.ts";
+import { PageApiError } from "./page-api-error.ts";
 import { createPageSync, type PageApi, type PageSyncState, type SyncStatus } from "./page-sync.ts";
 import { titleFromName } from "./route.ts";
 import "./page.css";
@@ -17,11 +19,17 @@ type Loaded =
 	| { readonly status: "error"; readonly kind: PageApiError["kind"] };
 
 const STATUS_LABELS: Record<SyncStatus, string> = {
+	new: "新しいページです。書き始めると保存されます",
 	saved: "保存済み",
 	unsaved: "未保存の変更があります",
 	saving: "保存しています…",
 	retrying: "保存できませんでした。自動で再試行します",
+	rejected:
+		"保存できない内容があります。1行が20,000文字を超えていないか確かめてください。直すと保存されます",
 };
+
+/** 保存を待っている変更がない状態。ページを離れても何も失われない。 */
+const SETTLED: ReadonlySet<SyncStatus> = new Set(["new", "saved"]);
 
 /** 保存されるページ。読み込んでから編集欄を表示し、編集を保存する。 */
 export function Page({ name }: PageProps) {
@@ -80,13 +88,20 @@ type PageEditorProps = {
 };
 
 function PageEditor({ title, snapshot, api }: PageEditorProps) {
-	const [state, setState] = useState<PageSyncState>({ status: "saved", remote: null });
-	// まだないページは、書き始めるまで保存しない(開いただけではページを作らない)。
-	const [started, setStarted] = useState(snapshot.version > 0);
+	// まだないページは、タイトルだけを入れた文書から始める。この内容のままなら保存しない。
+	const initial = useMemo(
+		() =>
+			snapshot.lines.length > 0 ? snapshot.lines : startTracking([title], createIdPrefix()).lines,
+		[snapshot, title],
+	);
+	const [state, setState] = useState<PageSyncState>({
+		status: snapshot.version === 0 ? "new" : "saved",
+		remote: null,
+	});
 	const sync = useRef<ReturnType<typeof createPageSync> | null>(null);
 
 	useEffect(() => {
-		const current = createPageSync({ snapshot, api, onState: setState });
+		const current = createPageSync({ snapshot, initial, api, onState: setState });
 		sync.current = current;
 		// 通信が戻ったら、再試行を待たずにすぐ保存する。
 		const flush = () => current.flush();
@@ -96,9 +111,9 @@ function PageEditor({ title, snapshot, api }: PageEditorProps) {
 			current.dispose();
 			sync.current = null;
 		};
-	}, [snapshot, api]);
+	}, [snapshot, initial, api]);
 
-	const unsaved = state.status !== "saved";
+	const unsaved = !SETTLED.has(state.status);
 	useEffect(() => {
 		if (!unsaved) return;
 		// 未保存の変更があるあいだは、ページを離れる前にブラウザの確認を出す。
@@ -108,21 +123,15 @@ function PageEditor({ title, snapshot, api }: PageEditorProps) {
 	}, [unsaved]);
 
 	const handleChange = useCallback((lines: readonly Line[]) => {
-		setStarted(true);
 		sync.current?.edit(lines);
 	}, []);
 
 	return (
 		<>
 			<p className="page-status" role="status" data-status={state.status}>
-				{started ? STATUS_LABELS[state.status] : "新しいページです。書き始めると保存されます"}
+				{STATUS_LABELS[state.status]}
 			</p>
-			<Editor
-				initialDocument={snapshot.lines}
-				initialLines={[title]}
-				remote={state.remote}
-				onChange={handleChange}
-			/>
+			<Editor initialDocument={initial} remote={state.remote} onChange={handleChange} />
 		</>
 	);
 }

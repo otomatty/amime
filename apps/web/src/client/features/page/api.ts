@@ -1,23 +1,11 @@
 import type { Result } from "@amime/shared";
 import { type Change, parseCommitResult, parseSnapshot } from "@amime/sync";
+import { PageApiError } from "./page-api-error.ts";
 import type { PageApi } from "./page-sync.ts";
 
-/**
- * ページのAPIの失敗。
- * - disabled: この環境ではページのAPIが無効(認証が入るまでの公開環境)
- * - failed: 通信やサーバーの失敗、想定と違う応答
- */
-export class PageApiError extends Error {
-	override readonly name = "PageApiError";
-	readonly kind: "disabled" | "failed";
-
-	constructor(kind: "disabled" | "failed") {
-		super(`page api ${kind}`);
-		this.kind = kind;
-	}
-}
-
 const STATUS_FORBIDDEN = 403;
+/** 送った内容に問題があるときの応答(形が正しくない、大きすぎる)。 */
+const STATUS_REJECTED: ReadonlySet<number | undefined> = new Set([400, 413]);
 
 /** APIを呼び、応答の本文を検査して返す。失敗はすべて PageApiError にする。 */
 async function request<T>(
@@ -27,6 +15,7 @@ async function request<T>(
 ): Promise<T> {
 	const response = await fetch(url, init).catch(() => null);
 	if (response?.status === STATUS_FORBIDDEN) throw new PageApiError("disabled");
+	if (STATUS_REJECTED.has(response?.status)) throw new PageApiError("rejected");
 	if (!response?.ok) throw new PageApiError("failed");
 
 	const parsed = parse(await response.json().catch(() => null));

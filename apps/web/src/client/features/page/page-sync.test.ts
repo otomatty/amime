@@ -1,5 +1,6 @@
 import { applyChanges, type Change, type Line, type LineId } from "@amime/sync";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PageApiError } from "./page-api-error.ts";
 import { createPageSync, type PageSyncState, SAVE_DELAY_MS } from "./page-sync.ts";
 
 const line = (id: string, text: string = id.toUpperCase()): Line => ({ id: id as LineId, text });
@@ -30,10 +31,11 @@ function createServer(initial: readonly Line[] = []) {
 	return server;
 }
 
-function start(server: ReturnType<typeof createServer>) {
+function start(server: ReturnType<typeof createServer>, initial?: readonly Line[]) {
 	const states: PageSyncState[] = [];
 	const sync = createPageSync({
 		snapshot: server.snapshot(),
+		initial: initial ?? server.snapshot().lines,
 		api: server.api,
 		onState: (state) => states.push(state),
 	});
@@ -114,6 +116,94 @@ describe("createPageSync", () => {
 		expect(latest()).toEqual({
 			status: "saved",
 			remote: { lines: [line("x"), line("a", "A2")], base: local },
+		});
+	});
+
+	it("読み直しを待っているあいだに書いた分も、取り込みのときに失わない", async () => {
+		const server = createServer([line("a")]);
+		const { sync, latest } = start(server);
+		server.commitFromOther([{ type: "insert", line: line("x"), after: null, before: null }]);
+		let release = () => {};
+		server.api.load.mockImplementationOnce(async () => {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			return server.snapshot();
+		});
+		sync.edit([line("a", "A2")]);
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+		// 読み直しの応答を待っているあいだに、さらに書く。
+		const typedDuringReload = [line("a", "A2"), line("b")];
+		sync.edit(typedDuringReload);
+		release();
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+		expect(latest()?.remote).toEqual({
+			lines: [line("x"), line("a", "A2"), line("b")],
+			base: typedDuringReload,
+		});
+		expect(server.snapshot().lines).toEqual([line("x"), line("a", "A2"), line("b")]);
+		expect(latest()?.status).toBe("saved");
+	});
+
+	it("サーバーに断られた変更は、同じ内容を送り直さない。内容を直すと、もう一度保存を試みる", async () => {
+		const server = createServer([line("a")]);
+		server.api.commit.mockRejectedValueOnce(new PageApiError("rejected"));
+		const { sync, latest } = start(server);
+
+		sync.edit([line("a", "長すぎる行")]);
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+		expect(latest()?.status).toBe("rejected");
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(server.api.commit).toHaveBeenCalledTimes(1);
+
+		sync.edit([line("a", "短い行")]);
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+		expect(server.snapshot().lines).toEqual([line("a", "短い行")]);
+		expect(latest()?.status).toBe("saved");
+	});
+
+	describe("まだないページ", () => {
+		const initial = [line("t", "新しいページ")];
+
+		it("最初に表示した内容のままなら、保存しない(開いただけではページを作らない)", async () => {
+			const server = createServer();
+			const { sync, latest } = start(server, initial);
+
+			// 1文字打って、保存が始まる前に取り消した。
+			sync.edit([line("t", "新しいページa")]);
+			expect(latest()?.status).toBe("unsaved");
+			sync.edit([line("t", "新しいページ")]);
+			await vi.advanceTimersByTimeAsync(60_000);
+
+			expect(latest()?.status).toBe("new");
+			expect(server.api.commit).not.toHaveBeenCalled();
+		});
+
+		it("内容を変えると、最初に表示したタイトルの行も含めて保存する", async () => {
+			const server = createServer();
+			const { sync, latest } = start(server, initial);
+
+			sync.edit([...initial, line("b", "本文")]);
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+			expect(server.snapshot().lines).toEqual([...initial, line("b", "本文")]);
+			expect(latest()?.status).toBe("saved");
+		});
+
+		it("保存したあとは、最初の内容に戻しても、それを保存する", async () => {
+			const server = createServer();
+			const { sync, latest } = start(server, initial);
+			sync.edit([...initial, line("b", "本文")]);
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+			sync.edit(initial);
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+			expect(server.snapshot().lines).toEqual(initial);
+			expect(latest()?.status).toBe("saved");
 		});
 	});
 

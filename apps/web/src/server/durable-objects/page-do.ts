@@ -17,6 +17,9 @@ type LineRow = { id: string; text: string };
  *
  * 行の並び順は、行ごとの「順序キー」(position)で持つ(ADR-0017)。
  * 2つの行のあいだに行を入れるとき、あいだに入るキーを作れるので、他の行を書き換えずに済む。
+ *
+ * P0 で使っていた `lines` テーブルからの移行はしない。当時はページを書き込む経路がテストだけで、
+ * どの環境にも保存されたページがない(ADR-0017)。今後テーブルの形を変えるときは、移行を書く。
  */
 export class PageDO extends DurableObject {
 	constructor(ctx: DurableObjectState, env: Cloudflare.Env) {

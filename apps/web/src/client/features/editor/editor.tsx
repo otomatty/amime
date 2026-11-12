@@ -27,7 +27,7 @@ import {
 	useState,
 } from "react";
 import { EditorLine } from "./editor-line.tsx";
-import { createModel, type RemoteDocument, reduceModel } from "./editor-model.ts";
+import { createIdPrefix, createModel, type RemoteDocument, reduceModel } from "./editor-model.ts";
 import { cursorFromPoint, LINE_END } from "./hit-test.ts";
 import { groupLines } from "./line-groups.ts";
 import { lineSelection } from "./line-selection.ts";
@@ -63,9 +63,6 @@ const keyInput = (event: KeyboardEvent): KeyInput => ({
 	alt: event.altKey,
 	meta: event.metaKey,
 });
-
-/** この端末が作る行IDの接頭辞。編集欄ごとに違う値にする。 */
-const createIdPrefix = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 12);
 
 /**
  * 行エディタ。表示は自前で描画し、文字入力は画面に見えない textarea で受け取る(ADR-0010)。

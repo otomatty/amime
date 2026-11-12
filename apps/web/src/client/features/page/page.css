@@ -5,7 +5,8 @@
 	text-align: right;
 }
 
-.page-status[data-status="retrying"] {
+.page-status[data-status="retrying"],
+.page-status[data-status="rejected"] {
 	color: var(--color-warning);
 }
 

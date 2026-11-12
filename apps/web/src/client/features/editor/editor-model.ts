@@ -53,6 +53,9 @@ type InitialContent = {
 	readonly initialDocument?: readonly Line[] | undefined;
 };
 
+/** この端末が作る行IDの接頭辞。編集欄ごとに違う値にして、他の人や他のタブが作るIDと重ならないようにする。 */
+export const createIdPrefix = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 12);
+
 const START: EditorState["cursor"] = { line: 0, column: 0 };
 const textsOf = (lines: readonly Line[]): string[] => lines.map((line) => line.text);
 

@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { applyChanges } from "./changes.ts";
+import { MAX_CHANGES, MAX_COMMIT_TEXT_LENGTH } from "./schema.ts";
 import {
 	acknowledge,
 	createSession,
@@ -163,6 +164,51 @@ describe("セッション(1つの端末から見たページの状態)", () => {
 		const next = resync(retry.session, server.snapshot());
 		expect(next.local).toEqual(local);
 		expect(hasUnsaved(next)).toBe(false);
+	});
+});
+
+describe("1つのコミットに収まらない変更", () => {
+	/** 送信と受け付けを、送るものがなくなるまで繰り返す。送ったコミットを返す。 */
+	function saveAll(start: Session, server: ReturnType<typeof createServer>) {
+		const commits: (readonly Change[])[] = [];
+		let session = start;
+		for (let sending = send(session); sending !== null; sending = send(session)) {
+			commits.push(sending.changes);
+			const next = acknowledge(sending.session, server.commit(sending.changes));
+			if (next === null) throw new Error("unexpected gap");
+			session = next;
+		}
+		return { commits, session };
+	}
+
+	it("変更の数が上限を超えるときは、上限までを送り、残りは次の送信で送る", () => {
+		const server = createServer();
+		const local = Array.from({ length: MAX_CHANGES + 500 }, (_, index) => line(`n${index}`, "x"));
+
+		const { commits, session } = saveAll(edit(createSession(server.snapshot()), local), server);
+
+		expect(commits.map((changes) => changes.length)).toEqual([MAX_CHANGES, 500]);
+		expect(server.snapshot().lines).toEqual(local);
+		expect(hasUnsaved(session)).toBe(false);
+	});
+
+	it("本文の合計が上限を超えるときも、分けて送る", () => {
+		const server = createServer();
+		const text = "あ".repeat(MAX_COMMIT_TEXT_LENGTH / 4);
+		const local = Array.from({ length: 10 }, (_, index) => line(`n${index}`, text));
+
+		const { commits } = saveAll(edit(createSession(server.snapshot()), local), server);
+
+		expect(commits.map((changes) => changes.length)).toEqual([4, 4, 2]);
+		expect(server.snapshot().lines).toEqual(local);
+	});
+
+	it("1つの変更だけで本文の上限を超えるときも、その1つは送る(送れるかどうかはサーバーが決める)", () => {
+		const local = [line("a", "x".repeat(MAX_COMMIT_TEXT_LENGTH + 1)), line("b")];
+
+		const sending = mustSend(edit(createSession({ version: 0, lines: [] }), local));
+
+		expect(sending.changes).toHaveLength(1);
 	});
 });
 

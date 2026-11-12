@@ -1,6 +1,7 @@
 import type { Change, LineId } from "@amime/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPageApi, PageApiError } from "./api.ts";
+import { createPageApi } from "./api.ts";
+import { PageApiError } from "./page-api-error.ts";
 
 const json = (body: unknown, status = 200) =>
 	new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -71,10 +72,19 @@ describe("createPageApi", () => {
 			);
 		});
 
-		it("断られたら失敗になる", async () => {
-			stubFetch(json({ error: "invalid-commit" }, 400));
+		it.each([
+			["形が正しくない(400)", 400],
+			["大きすぎる(413)", 413],
+		])("内容が%sと断られたら、送り直しても通らない失敗になる", async (_name, status) => {
+			stubFetch(json({ error: "invalid-commit" }, status));
 
-			await expect(api.commit(changes)).rejects.toBeInstanceOf(PageApiError);
+			await expect(api.commit(changes)).rejects.toMatchObject({ kind: "rejected" });
+		});
+
+		it("サーバーの失敗は、送り直せる失敗になる", async () => {
+			stubFetch(json({}, 503));
+
+			await expect(api.commit(changes)).rejects.toMatchObject({ kind: "failed" });
 		});
 	});
 });

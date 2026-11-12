@@ -100,6 +100,33 @@ describe("Page", () => {
 		await waitFor(() => expect(status()).toBe("保存済み"));
 	});
 
+	it("まだないページで、打った文字を取り消して最初の内容に戻したら、保存しない", async () => {
+		const fetchMock = stubFetch(() => json({ version: 0, lines: [] }));
+		render(<Page name="メモ" />);
+		await waitFor(() => expect(lines()).toEqual(["メモ"]));
+
+		fireEvent.mouseDown(screen.getByTestId("line"));
+		type("a");
+		expect(status()).toBe("未保存の変更があります");
+		fireEvent.keyDown(screen.getByLabelText("ページの本文"), { key: "z", ctrlKey: true });
+
+		expect(lines()).toEqual(["メモ"]);
+		expect(status()).toBe("新しいページです。書き始めると保存されます");
+		await new Promise((resolve) => setTimeout(resolve, 400));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("サーバーに内容を断られたら、直し方を伝える", async () => {
+		stubFetch((_url, init) => (init?.method === "POST" ? json({}, 400) : json(saved)));
+		render(<Page name="買い物" />);
+		await waitFor(() => expect(lines()).toEqual(["買い物"]));
+
+		fireEvent.mouseDown(screen.getByTestId("line"));
+		type("牛乳");
+
+		await waitFor(() => expect(status()).toMatch(/保存できない内容があります/));
+	});
+
 	it("保存に失敗したら、再試行することを表示する", async () => {
 		stubFetch((_url, init) => (init?.method === "POST" ? json({}, 500) : json(saved)));
 		render(<Page name="買い物" />);

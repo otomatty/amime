@@ -1,4 +1,5 @@
 import { applyChanges, diffLines } from "./changes.ts";
+import { MAX_CHANGES, MAX_COMMIT_TEXT_LENGTH } from "./schema.ts";
 import type { Change, CommitResult, Line, PageSnapshot } from "./types.ts";
 
 /**
@@ -16,7 +17,8 @@ export type Session = {
 	readonly local: readonly Line[];
 };
 
-const sameLines = (a: readonly Line[], b: readonly Line[]): boolean =>
+/** 2つの文書の内容(行IDと本文の並び)が同じか。 */
+export const sameLines = (a: readonly Line[], b: readonly Line[]): boolean =>
 	a.length === b.length &&
 	a.every((line, index) => line.id === b[index]?.id && line.text === b[index]?.text);
 
@@ -40,13 +42,32 @@ export function hasUnsaved(session: Session): boolean {
 	return session.inflight !== null || !sameLines(session.confirmed, session.local);
 }
 
+function textLength(change: Change): number {
+	if (change.type === "insert") return change.line.text.length;
+	return change.type === "update" ? change.text.length : 0;
+}
+
+/**
+ * 差分の先頭から、1つのコミットに収まる分を取り出す。少なくとも1つは取り出す。
+ * 差分は上から順に適用できる並びなので、途中までを先に送っても正しく適用できる。
+ */
+function firstCommit(changes: readonly Change[]): readonly Change[] {
+	let length = 0;
+	const end = changes.findIndex((change, index) => {
+		length += textLength(change);
+		return index > 0 && (index >= MAX_CHANGES || length > MAX_COMMIT_TEXT_LENGTH);
+	});
+	return end === -1 ? changes : changes.slice(0, end);
+}
+
 /**
  * 送信を始める。送る変更は、確定した文書と画面の文書の差分。
+ * 差分が1つのコミットに収まらなければ、収まる分だけを送る(残りは、次の送信で送られる)。
  * 送信中か、送る変更がなければ null。1度に送るコミットは1つだけ。
  */
 export function send(session: Session): { session: Session; changes: readonly Change[] } | null {
 	if (session.inflight !== null) return null;
-	const changes = diffLines(session.confirmed, session.local);
+	const changes = firstCommit(diffLines(session.confirmed, session.local));
 	if (changes.length === 0) return null;
 	return { session: { ...session, inflight: changes }, changes };
 }

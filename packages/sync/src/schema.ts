@@ -6,6 +6,11 @@ import type { Change, CommitResult, LineId, PageSnapshot } from "./types.ts";
 export const MAX_LINE_LENGTH = 20_000;
 /** 1つのコミットに入れられる変更の数の上限。 */
 export const MAX_CHANGES = 2_000;
+/**
+ * クライアントが1つのコミットに入れる本文の長さの合計の目安(UTF-16 の符号単位)。
+ * これを超える変更は、複数のコミットに分けて送る。JSONにしたときに、サーバーが受け付ける大きさに収めるため。
+ */
+export const MAX_COMMIT_TEXT_LENGTH = 300_000;
 
 const LINE_ID = /^[\w-]{1,64}$/;
 const LINE_BREAK = /[\r\n]/;
