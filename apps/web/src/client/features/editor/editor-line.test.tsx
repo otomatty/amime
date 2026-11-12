@@ -322,6 +322,80 @@ describe("EditorLine", () => {
 		});
 	});
 
+	describe("範囲選択", () => {
+		function renderSelected(
+			text: string,
+			selection: { start: number; end: number; lineBreak?: boolean },
+			caretColumn: number | null = null,
+		) {
+			render(
+				<EditorLine
+					index={1}
+					text={text}
+					kind="text"
+					blockIndent={0}
+					caretColumn={caretColumn}
+					composing={null}
+					selectionStart={selection.start}
+					selectionEnd={selection.end}
+					selectsLineBreak={selection.lineBreak ?? false}
+				/>,
+			);
+			return line();
+		}
+		const selected = (element: Element) =>
+			[...element.querySelectorAll("[data-column].selected")].map((el) => el.textContent).join("");
+
+		it("選択していない行には、選択の印を付けない", () => {
+			expect(renderShown("abc").querySelector(".selected")).toBeNull();
+		});
+
+		it("選択した範囲の文字に印を付ける", () => {
+			expect(selected(renderSelected("abcd", { start: 1, end: 3 }))).toBe("bc");
+		});
+
+		it("インデントも選択の対象になる", () => {
+			const element = renderSelected(" ab", { start: 0, end: 2 });
+
+			expect(element.querySelectorAll(".indent.selected")).toHaveLength(1);
+			expect(selected(element)).toBe("a");
+		});
+
+		it("編集中の行では、記法の記号にも印を付ける", () => {
+			expect(selected(renderSelected("[ab]c", { start: 0, end: 4 }, 4))).toBe("[ab]");
+		});
+
+		it("装飾して表示している行では、見えている文字にだけ印が付く", () => {
+			expect(selected(renderSelected("[ab]c", { start: 0, end: 4 }))).toBe("ab");
+		});
+
+		it("画像は、記法全体が選択の中にあるときに印を付ける", () => {
+			const raw = "[https://example.com/a.png]";
+
+			expect(
+				renderSelected(raw, { start: 0, end: raw.length }).querySelector("img.selected"),
+			).not.toBeNull();
+			cleanup();
+			expect(renderSelected(raw, { start: 0, end: 5 }).querySelector("img.selected")).toBeNull();
+		});
+
+		it("選択が次の行へ続くときは、行末に改行の印を表示する", () => {
+			const element = renderSelected("ab", { start: 1, end: 2, lineBreak: true });
+
+			expect(element.querySelector(".line-break.selected")).not.toBeNull();
+		});
+
+		it("選択がこの行で終わるときは、改行の印を表示しない", () => {
+			expect(renderSelected("ab", { start: 1, end: 2 }).querySelector(".line-break")).toBeNull();
+		});
+
+		it("空行でも、選択が次の行へ続くなら改行の印を表示する", () => {
+			expect(
+				renderSelected("", { start: 0, end: 0, lineBreak: true }).querySelector(".line-break"),
+			).not.toBeNull();
+		});
+	});
+
 	describe("タイトル行", () => {
 		const TITLE: Role = { kind: "title", blockIndent: 0 };
 

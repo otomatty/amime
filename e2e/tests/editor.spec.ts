@@ -521,3 +521,150 @@ test.describe("テーブルの端の扱い", () => {
 		await expect(lines(page).nth(TABLE_ROW_1 + 1)).toHaveAttribute("data-text", " a");
 	});
 });
+
+test.describe("範囲選択・コピー・取り消し", () => {
+	const selectedText = (page: Page) =>
+		page
+			.locator("[data-column].selected")
+			.evaluateAll((elements) => elements.map((el) => el.textContent).join(""));
+
+	test.beforeEach(async ({ page, context }) => {
+		await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+		await page.goto("/");
+	});
+
+	test("Shift+矢印で選択した範囲に色が付き、文字を打つと置き換わる", async ({ page }) => {
+		await clickLineEnd(page, 1); // 「行頭に空白を入れると箇条書きになります」
+		await page.keyboard.press("Home");
+
+		await page.keyboard.press("Shift+ArrowRight");
+		await page.keyboard.press("Shift+ArrowRight");
+
+		expect(await selectedText(page)).toBe("行頭");
+		const selected = page.locator("[data-column].selected").first();
+		const plain = lines(page).nth(1).locator(".char:not(.selected)").first();
+		expect(await selected.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(
+			await plain.evaluate((el) => getComputedStyle(el).backgroundColor),
+		);
+
+		await page.keyboard.type("先頭");
+		await expect(lines(page).nth(1)).toHaveAttribute(
+			"data-text",
+			"先頭に空白を入れると箇条書きになります",
+		);
+	});
+
+	test("マウスで押したまま動かすと、行をまたいで選択できる", async ({ page }) => {
+		const from = await lines(page).nth(2).locator(".char").first().boundingBox(); // 「1段目」の「1」
+		const to = await lines(page).nth(3).locator(".char").nth(1).boundingBox(); // 「2段目」の「段」
+		if (!from || !to) throw new Error("chars are not visible");
+
+		await page.mouse.move(from.x + 1, from.y + from.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(to.x + to.width * 0.25, to.y + to.height / 2, { steps: 5 });
+		await page.mouse.up();
+
+		expect(await selectedText(page)).toBe("1段目2");
+		await expect(page.locator(".line-break.selected")).toHaveCount(1);
+
+		await page.keyboard.press("Backspace");
+		await expect(lines(page).nth(2)).toHaveAttribute("data-text", " 段目");
+	});
+
+	test("Shift を押しながら別の位置を押すと、そこまでを選択する", async ({ page }) => {
+		await clickLineEnd(page, 1);
+		const box = await lines(page).nth(1).locator(".char").nth(2).boundingBox(); // 「に」
+		if (!box) throw new Error("char is not visible");
+
+		await page.keyboard.down("Shift");
+		await page.mouse.click(box.x + 1, box.y + box.height / 2);
+		await page.keyboard.up("Shift");
+
+		expect(await selectedText(page)).toBe("に空白を入れると箇条書きになります");
+	});
+
+	test("コピーして貼り付けると、選択した文字列が複製される", async ({ page }) => {
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Shift+Home");
+		expect(await selectedText(page)).toBe("はじめに");
+
+		await page.keyboard.press("Control+c");
+		await page.keyboard.press("End");
+		await page.keyboard.press("Control+v");
+
+		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめにはじめに");
+		expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("はじめに");
+	});
+
+	test("複数行を切り取って、別の場所に貼り付けられる(記法やインデントもそのまま)", async ({
+		page,
+	}) => {
+		await clickLineEnd(page, 2); // 「 1段目」
+		await page.keyboard.press("Home");
+		await page.keyboard.press("Shift+ArrowDown");
+		await page.keyboard.press("Shift+End");
+
+		await page.keyboard.press("Control+x");
+		expect((await lineTexts(page)).slice(1, 3)).toEqual([
+			"行頭に空白を入れると箇条書きになります",
+			"",
+		]);
+		expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(" 1段目\n  2段目");
+
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Enter");
+		await page.keyboard.press("Control+v");
+		expect((await lineTexts(page)).slice(0, 3)).toEqual(["はじめに", " 1段目", "  2段目"]);
+	});
+
+	test("Ctrl+A ですべてを選択できる", async ({ page }) => {
+		await clickLineEnd(page, 0);
+
+		await page.keyboard.press("Control+a");
+		await page.keyboard.type("x");
+
+		expect(await lineTexts(page)).toEqual(["x"]);
+	});
+
+	test("複数行を選択して Tab を押すと、まとめてインデントされる", async ({ page }) => {
+		await clickLineEnd(page, 5); // 「この画面で自由に編集できます…」
+		await page.keyboard.press("Shift+ArrowDown");
+
+		await page.keyboard.press("Tab");
+
+		await expect(lines(page).nth(5)).toHaveAttribute("data-indent", "1");
+		await expect(lines(page).nth(6)).toHaveAttribute("data-indent", "1");
+		await page.keyboard.press("Shift+Tab");
+		await expect(lines(page).nth(5)).toHaveAttribute("data-indent", "0");
+		await expect(lines(page).nth(6)).toHaveAttribute("data-indent", "0");
+	});
+
+	test("Ctrl+Z で取り消し、Ctrl+Shift+Z と Ctrl+Y でやり直せる", async ({ page }) => {
+		await clickLineEnd(page, 0);
+		await page.keyboard.type("abc");
+		await page.keyboard.press("Enter");
+		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめにabc");
+
+		await page.keyboard.press("Control+z");
+		expect((await lineTexts(page))[1]).toBe("行頭に空白を入れると箇条書きになります");
+		await page.keyboard.press("Control+z");
+		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
+
+		await page.keyboard.press("Control+Shift+z");
+		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめにabc");
+		await page.keyboard.press("Control+y");
+		expect((await lineTexts(page))[1]).toBe("");
+	});
+
+	test("選択して置き換えたあとに取り消すと、選択した状態まで戻る", async ({ page }) => {
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Shift+Home");
+		await page.keyboard.type("x");
+		await expect(lines(page).first()).toHaveAttribute("data-text", "x");
+
+		await page.keyboard.press("Control+z");
+
+		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
+		expect(await selectedText(page)).toBe("はじめに");
+	});
+});

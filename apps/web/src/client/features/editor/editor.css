@@ -247,3 +247,17 @@ a.link:hover {
 	font: inherit;
 	line-height: inherit;
 }
+
+/* 範囲選択。 */
+.selected {
+	background: var(--color-selection);
+}
+
+/* 選択が次の行へ続いていることを示す、行末の印。 */
+.line-break {
+	display: inline-block;
+	text-indent: 0;
+	width: 0.5em;
+	height: 1.3em;
+	vertical-align: text-bottom;
+}
