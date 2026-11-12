@@ -521,6 +521,26 @@ describe("createPageSync", () => {
 		});
 	});
 
+	it("読み直しを待っているあいだに止めたら、その読み直しが失敗しても再試行しない", async () => {
+		const server = createServer([line("a")]);
+		const { sync } = start(server);
+		let fail = () => {};
+		server.api.load.mockImplementationOnce(
+			() =>
+				new Promise((_resolve, reject) => {
+					fail = () => reject(new PageApiError("failed"));
+				}),
+		);
+		server.handlers?.onHello(5);
+		await vi.advanceTimersByTimeAsync(0);
+
+		sync.dispose();
+		fail();
+		await vi.advanceTimersByTimeAsync(60_000);
+
+		expect(server.api.load).toHaveBeenCalledOnce();
+	});
+
 	it("止めたあとは、保存も通知もしない", async () => {
 		const server = createServer([line("a")]);
 		const { sync, states } = start(server);

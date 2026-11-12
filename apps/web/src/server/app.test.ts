@@ -278,6 +278,19 @@ describe("他のサイトからの要求", () => {
 		expect(socket.status).toBe(101);
 	});
 
+	it("同じホストでも、http と https の違うサイトからの要求は断る", async () => {
+		const response = await exports.default.fetch(
+			"https://amime.test/api/pages/origin-scheme/commits",
+			{
+				method: "POST",
+				headers: { Origin: "http://amime.test" },
+				body: JSON.stringify({ changes: [change] }),
+			},
+		);
+
+		expect(response.status).toBe(403);
+	});
+
 	it("Origin が URL として読めない要求は断る", async () => {
 		const response = await exports.default.fetch(
 			"https://amime.test/api/pages/origin-bad/commits",

@@ -99,6 +99,8 @@ export function createPageSync({ snapshot, initial, api, onStatus, onRemote }: P
 	};
 
 	const schedule = (delay: number) => {
+		// 止めたあとに、待っていた通信が失敗して戻ってくることがある。そのときは、もう再試行しない。
+		if (disposed) return;
 		if (timer !== null) clearTimeout(timer);
 		timer = setTimeout(() => {
 			timer = null;

@@ -17,10 +17,10 @@ const MAX_COMMIT_BYTES = 2 * 1024 * 1024;
  */
 const pageStub = (name: string) => exports.PageDO.getByName(`default/${toTitleLc(name)}`);
 
-/** Origin ヘッダーの指すサイトが、要求を受けたこのサイトと同じか。 */
+/** Origin ヘッダーの指すサイトが、要求を受けたこのサイトと同じか(スキーム・ホスト・ポートがすべて同じ)。 */
 function sameSite(origin: string, url: string): boolean {
 	try {
-		return new URL(origin).host === new URL(url).host;
+		return new URL(origin).origin === new URL(url).origin;
 	} catch {
 		return false;
 	}
