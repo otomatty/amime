@@ -36,3 +36,18 @@ export type Applied = {
 	 */
 	readonly applied: readonly Change[];
 };
+
+/** ある時点のページ。 */
+export type PageSnapshot = {
+	/** コミットが効くたびに1ずつ増える。 */
+	readonly version: number;
+	readonly lines: readonly Line[];
+};
+
+/** コミットへの応答。 */
+export type CommitResult = {
+	/** 適用後のバージョン。何も効かなければ進まない。 */
+	readonly version: number;
+	/** 実際に効いた変更。 */
+	readonly applied: readonly Change[];
+};

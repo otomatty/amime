@@ -26,7 +26,8 @@ export default defineConfig({
 		},
 	],
 	webServer: {
-		// 事前に `pnpm build` が必要。CI ではビルド成果物を受け取ってから起動する。
+		// 事前に E2E 用のビルド(`pnpm build:e2e`)が必要。`pnpm test:e2e` が先に実行する。
+		// 本番用のビルドでは、ページのAPIが無効になっている(ADR-0017)。
 		command: `pnpm --filter @amime/web preview --port ${PORT} --strictPort`,
 		url: `http://localhost:${PORT}/api/health`,
 		reuseExistingServer: !isCI,

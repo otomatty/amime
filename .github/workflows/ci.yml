@@ -70,6 +70,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: pnpm build
+      # 認証が入るまで、本番用のビルドではページのAPIを無効にする(ADR-0009、ADR-0017)。
+      # 設定の誤りで有効になっていないことを、ビルド成果物で確かめる。
+      - name: 本番用のビルドでページのAPIが無効であることを確認
+        run: grep -q '"PAGE_API":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
       - name: アップロードせずにデプロイ内容を検証
         run: pnpm --filter @amime/web exec cf deploy --prebuilt --mode production --dry-run
 
@@ -80,11 +84,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-      - run: pnpm build
       # --with-deps は付けない。apt の更新が必要になり、ランナーの状態によっては長時間待たされる。
       # ブラウザの実行に必要なライブラリは、ランナーのイメージに入っている。
       - name: ブラウザをインストール
         run: pnpm --filter @amime/e2e exec playwright install chromium
+      # ページのAPIを有効にしたE2E用のビルド(--mode e2e)を作ってから実行する。
       - run: pnpm test:e2e
 
   # 以下の2つは、リポジトリ変数 DEPLOY_ENABLED が "true" のときだけ動く。

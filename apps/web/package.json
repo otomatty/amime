@@ -15,7 +15,9 @@
 	"dependencies": {
 		"@amime/editor-core": "workspace:*",
 		"@amime/parser": "workspace:*",
+		"@amime/shared": "workspace:*",
 		"@amime/sync": "workspace:*",
+		"fractional-indexing": "^4.0.0",
 		"hono": "^4.13.18",
 		"react": "^19.3.1",
 		"react-dom": "^19.3.1"

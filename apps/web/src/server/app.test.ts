@@ -1,9 +1,20 @@
-import { exports } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { app } from "./app.ts";
+
+const get = (path: string) => exports.default.fetch(`https://amime.test${path}`);
+const post = (path: string, body: unknown) =>
+	exports.default.fetch(`https://amime.test${path}`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: typeof body === "string" ? body : JSON.stringify(body),
+	});
+
+const insertTitle = { type: "insert", line: { id: "c1-0", text: "題" }, after: null, before: null };
 
 describe("GET /api/health", () => {
 	it("稼働中であることを返す", async () => {
-		const response = await exports.default.fetch("https://amime.test/api/health");
+		const response = await get("/api/health");
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ status: "ok" });
@@ -12,9 +23,91 @@ describe("GET /api/health", () => {
 
 describe("未定義のAPIパス", () => {
 	it("JSONの404を返す", async () => {
-		const response = await exports.default.fetch("https://amime.test/api/unknown");
+		const response = await get("/api/unknown");
 
 		expect(response.status).toBe(404);
 		expect(await response.json()).toEqual({ error: "not-found" });
+	});
+});
+
+describe("ページのAPI", () => {
+	it("まだ書かれていないページは、バージョン0で行がない", async () => {
+		const response = await get("/api/pages/api-new");
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(await response.json()).toEqual({ version: 0, lines: [] });
+	});
+
+	it("コミットを送ると変更が保存され、効いた変更とバージョンが返る", async () => {
+		const response = await post("/api/pages/api-commit/commits", { changes: [insertTitle] });
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ version: 1, applied: [insertTitle] });
+		expect(await (await get("/api/pages/api-commit")).json()).toEqual({
+			version: 1,
+			lines: [{ id: "c1-0", text: "題" }],
+		});
+	});
+
+	it("ページ名は、空白と大文字小文字の違いを同じページとして扱う", async () => {
+		await post(`/api/pages/${encodeURIComponent("API Title メモ")}/commits`, {
+			changes: [insertTitle],
+		});
+
+		const response = await get(`/api/pages/${encodeURIComponent("api_title メモ")}`);
+
+		expect(await response.json()).toMatchObject({ version: 1 });
+	});
+
+	it.each([
+		["JSONでない本文", "{"],
+		["changes のない本文", {}],
+		["形の違う変更", { changes: [{ type: "delete" }] }],
+	])("%sは 400 で断り、何も保存しない", async (_name, body) => {
+		const response = await post("/api/pages/api-invalid/commits", body);
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: "invalid-commit" });
+		expect(await (await get("/api/pages/api-invalid")).json()).toEqual({ version: 0, lines: [] });
+	});
+
+	it("長すぎるページ名は 400 で断る", async () => {
+		const response = await get(`/api/pages/${"a".repeat(201)}`);
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: "invalid-page-name" });
+	});
+
+	it("大きすぎる本文は 413 で断る", async () => {
+		const response = await post("/api/pages/api-large/commits", "x".repeat(2 * 1024 * 1024 + 1));
+
+		expect(response.status).toBe(413);
+		expect(await response.json()).toEqual({ error: "commit-too-large" });
+	});
+
+	describe("ページのAPIが無効な環境(認証が入るまでの公開環境)", () => {
+		const disabled = { ...env, PAGE_API: "disabled" as const };
+
+		it("読み込みを 403 で断る", async () => {
+			const response = await app.request("/api/pages/api-disabled", {}, disabled);
+
+			expect(response.status).toBe(403);
+			expect(await response.json()).toEqual({ error: "page-api-disabled" });
+		});
+
+		it("書き込みを 403 で断り、何も保存しない", async () => {
+			const response = await app.request(
+				"/api/pages/api-disabled/commits",
+				{ method: "POST", body: JSON.stringify({ changes: [insertTitle] }) },
+				disabled,
+			);
+
+			expect(response.status).toBe(403);
+			expect(await (await get("/api/pages/api-disabled")).json()).toEqual({
+				version: 0,
+				lines: [],
+			});
+		});
 	});
 });

@@ -9,6 +9,7 @@
 	"scripts": {
 		"dev": "pnpm --filter @amime/web dev",
 		"build": "pnpm --filter @amime/web build",
+		"build:e2e": "pnpm --filter @amime/web exec cf build --mode e2e",
 		"lint": "biome ci --error-on-warnings .",
 		"lint:fix": "biome check --write .",
 		"typecheck": "pnpm -r --parallel typecheck && tsc -p scripts",
@@ -16,7 +17,7 @@
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
 		"test:server": "pnpm --filter @amime/web test:server",
-		"test:e2e": "pnpm --filter @amime/e2e test",
+		"test:e2e": "pnpm build:e2e && pnpm --filter @amime/e2e test",
 		"check:unused": "knip",
 		"check:tdd": "node scripts/check-test-first.ts",
 		"check": "pnpm lint && pnpm typecheck && pnpm check:unused && pnpm test:coverage && pnpm test:server && pnpm build",

@@ -1,25 +1,19 @@
 import {
-	applyEdit,
 	bindingForKey,
 	type Command,
 	type Cursor,
-	createHistory,
 	deleteSelection,
 	type EditGroup,
-	type EditorState,
-	type History,
 	insertText,
 	type KeyInput,
-	redo,
 	selectedText,
 	selectionRange,
 	selectTo,
 	setCursor,
 	shortcutLetter,
-	undo,
 } from "@amime/editor-core";
 import { classifyLines } from "@amime/parser";
-import { type LineTracker, startTracking, trackLines } from "@amime/sync";
+import type { Line } from "@amime/sync";
 import {
 	type ClipboardEvent,
 	type CompositionEvent,
@@ -33,13 +27,21 @@ import {
 	useState,
 } from "react";
 import { EditorLine } from "./editor-line.tsx";
+import { createModel, type RemoteDocument, reduceModel } from "./editor-model.ts";
 import { cursorFromPoint, LINE_END } from "./hit-test.ts";
 import { groupLines } from "./line-groups.ts";
 import { lineSelection } from "./line-selection.ts";
 import "./editor.css";
 
 type EditorProps = {
-	readonly initialLines: readonly string[];
+	/** 行IDを持たない最初の本文。 */
+	readonly initialLines?: readonly string[];
+	/** 行IDを持つ最初の文書(保存されているページ)。行があれば、こちらを使う。 */
+	readonly initialDocument?: readonly Line[];
+	/** 他の人の変更を取り込んだ文書。渡されるたびに、画面の文書を置き換える。 */
+	readonly remote?: RemoteDocument | null;
+	/** 編集で文書が変わるたびに呼ばれる。 */
+	readonly onChange?: (lines: readonly Line[]) => void;
 };
 
 /** 単独で押されても、編集の操作としては扱わないキー。 */
@@ -53,24 +55,6 @@ const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
 const LINE_BREAK = /[\r\n]/;
 
-const initialState = (lines: readonly string[]): EditorState => ({
-	// エディタは常に1行以上を持つ。
-	lines: lines.length > 0 ? lines : [""],
-	cursor: { line: 0, column: 0 },
-});
-
-type Action =
-	| {
-			readonly type: "edit";
-			readonly command: Command;
-			/** 続けて行ったときに1回の取り消しにまとめる編集の種類。 */
-			readonly group: EditGroup | null;
-			/** 操作した時刻。reducer を純粋に保つため、呼び出し側で測って渡す。 */
-			readonly at: number;
-	  }
-	| { readonly type: "undo" }
-	| { readonly type: "redo" };
-
 const keyInput = (event: KeyboardEvent): KeyInput => ({
 	key: event.key,
 	code: event.code,
@@ -80,45 +64,33 @@ const keyInput = (event: KeyboardEvent): KeyInput => ({
 	meta: event.metaKey,
 });
 
-/** 編集の履歴と、行IDの割り当て。 */
-type EditorModel = {
-	readonly history: History;
-	readonly tracker: LineTracker;
-};
-
 /** この端末が作る行IDの接頭辞。編集欄ごとに違う値にする。 */
 const createIdPrefix = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 12);
-
-function createModel(lines: readonly string[]): EditorModel {
-	const history = createHistory(initialState(lines));
-	return { history, tracker: startTracking(history.present.lines, createIdPrefix()) };
-}
-
-function nextHistory(history: History, action: Action): History {
-	switch (action.type) {
-		case "edit":
-			return applyEdit(history, action.command, action);
-		case "undo":
-			return undo(history);
-		case "redo":
-			return redo(history);
-	}
-}
-
-function reducer(model: EditorModel, action: Action): EditorModel {
-	const history = nextHistory(model.history, action);
-	if (history === model.history) return model;
-	// 行IDは、編集の前後の本文を見比べて割り当てる。編集の操作そのものは本文だけを扱う(ADR-0016)。
-	return { history, tracker: trackLines(model.tracker, history.present.lines) };
-}
 
 /**
  * 行エディタ。表示は自前で描画し、文字入力は画面に見えない textarea で受け取る(ADR-0010)。
  * 編集の規則はすべて @amime/editor-core にあり、ここはイベントを操作に変換するだけ。
  */
-export function Editor({ initialLines }: EditorProps) {
-	const [{ history, tracker }, dispatch] = useReducer(reducer, initialLines, createModel);
+export function Editor({ initialLines, initialDocument, remote = null, onChange }: EditorProps) {
+	const [{ history, tracker }, dispatch] = useReducer(
+		reduceModel,
+		{ initialLines, initialDocument },
+		(content) => createModel(content, createIdPrefix()),
+	);
 	const state = history.present;
+
+	// 編集で文書が変わったら知らせる。最初の文書は、呼び出し側が既に持っているので知らせない。
+	const reported = useRef(tracker.lines);
+	useEffect(() => {
+		if (reported.current === tracker.lines) return;
+		reported.current = tracker.lines;
+		onChange?.(tracker.lines);
+	}, [tracker.lines, onChange]);
+
+	useEffect(() => {
+		if (remote !== null) dispatch({ type: "replace", ...remote });
+	}, [remote]);
+
 	const [composing, setComposing] = useState<string | null>(null);
 	const [focused, setFocused] = useState(false);
 	// 行の役割(タイトル、コードブロックの中身など)は、ページ全体の行の並びから決まる。

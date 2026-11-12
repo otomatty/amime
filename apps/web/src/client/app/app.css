@@ -10,6 +10,7 @@
 	--color-label-text: #fffdf8;
 	--color-border: #d9d3c5;
 	--color-selection: #bfdcf2;
+	--color-warning: #a4491f;
 	--font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 	--indent-width: 1.5em;
 	color-scheme: light;

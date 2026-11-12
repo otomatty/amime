@@ -1,6 +1,6 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import type { Change, Line, LineId } from "@amime/sync";
+import { applyChanges, type Change, type Line, type LineId } from "@amime/sync";
 import { describe, expect, it } from "vitest";
 
 const id = (value: string): LineId => value as LineId;
@@ -89,11 +89,66 @@ describe("PageDO", () => {
 		await stub.commit([insertAfter(null, "a", "A"), insertAfter("a", "b", "B")]);
 
 		await runInDurableObject(stub, (_instance, state) => {
-			const rows = state.storage.sql.exec("SELECT id, text FROM lines ORDER BY position").toArray();
+			const rows = state.storage.sql
+				.exec("SELECT id, text FROM page_lines ORDER BY position")
+				.toArray();
 			expect(rows).toEqual([
 				{ id: "a", text: "A" },
 				{ id: "b", text: "B" },
 			]);
 		});
+	});
+
+	it("コミットでは変わった行だけを書き込む(他の行の並び順の値は変わらない)", async () => {
+		const stub = page("diff-write");
+		await stub.commit([insertAfter(null, "a", "A"), insertAfter("a", "c", "C")]);
+		const positions = () =>
+			runInDurableObject(stub, (_instance, state) =>
+				Object.fromEntries(
+					state.storage.sql
+						.exec<{ id: string; position: string }>("SELECT id, position FROM page_lines")
+						.toArray()
+						.map((row) => [row.id, row.position]),
+				),
+			);
+		const before = await positions();
+
+		await stub.commit([insertAfter("a", "b", "B"), { type: "update", id: id("c"), text: "C2" }]);
+
+		const after = await positions();
+		expect(after).toMatchObject(before);
+		expect((await stub.getPage()).lines).toEqual([line("a", "A"), line("b", "B"), line("c", "C2")]);
+	});
+
+	it("挿入・移動・削除を繰り返しても、保存した並び順は変更を順に適用した結果と一致する", async () => {
+		const stub = page("many-operations");
+		let model: readonly Line[] = [];
+		// 再現できるように、決まった数列で操作を選ぶ。
+		let seed = 12345;
+		const next = (bound: number) => {
+			seed = (seed * 1103515245 + 12345) % 2147483648;
+			return bound === 0 ? 0 : seed % bound;
+		};
+		const pick = () => model[next(model.length)]?.id ?? null;
+
+		for (let step = 0; step < 80; step += 1) {
+			const target = pick();
+			const kind = target === null ? 0 : next(5);
+			const change: Change =
+				target === null || kind <= 2
+					? { type: "insert", line: line(`n${step}`, `${step}`), after: pick(), before: null }
+					: kind === 3
+						? { type: "move", id: target, after: pick(), before: pick() }
+						: { type: "delete", id: target };
+
+			await stub.commit([change]);
+			model = applyChanges(model, [change]).lines;
+		}
+
+		const saved = await stub.getPage();
+		expect(saved.lines).toEqual(model);
+		expect(model.length).toBeGreaterThan(10);
+		await evictDurableObject(stub);
+		expect((await stub.getPage()).lines).toEqual(model);
 	});
 });
