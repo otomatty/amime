@@ -144,6 +144,12 @@ describe("parsePendingRecord", () => {
 		expect(parsePendingRecord(JSON.stringify(record))).toEqual({ ok: true, value: record });
 	});
 
+	it("送れない長さの本文も受け付ける(復元して、直してもらうため)", () => {
+		const changes = [{ type: "update", id: "a", text: "a".repeat(MAX_LINE_LENGTH + 1) }];
+
+		expect(parsePendingRecord(JSON.stringify({ savedAt: 1, changes })).ok).toBe(true);
+	});
+
 	it("変更の数が多くても受け付ける(送るときに分ける)", () => {
 		const changes = Array.from({ length: MAX_CHANGES + 1 }, () => remove);
 

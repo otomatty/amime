@@ -119,6 +119,63 @@ describe("createPendingStore", () => {
 		expect(storeFor("third").adopt()).toEqual([[update("A2")]]);
 	});
 
+	it("移せなかった元の記録は、未送信の変更がなくなったときに消す(次に開いたときに、古い変更を載せ直さない)", () => {
+		storeFor("old").save([update("A2")]);
+		let failing = true;
+		const flaky = new Proxy(window.localStorage, {
+			get(target, property) {
+				if (property === "setItem" && failing) {
+					return () => {
+						throw new DOMException("quota", "QuotaExceededError");
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const store = storeFor("new", { storage: flaky });
+		store.adopt();
+		failing = false;
+
+		// 引き取った変更を送り終えた。
+		store.save([]);
+
+		expect(window.localStorage).toHaveLength(0);
+	});
+
+	it("引き取りの途中で元のタブが記録を書き換えていたら、その記録は消さない", () => {
+		storeFor("old").save([update("A2")]);
+		const key = `amime:pending:${encodeURIComponent("メモ")}:old`;
+		// 読んだあと、消す前に、元のタブ(まだ開いている)が新しい変更を書き込む。
+		const racing = new Proxy(window.localStorage, {
+			get(target, property) {
+				if (property === "setItem") {
+					return (targetKey: string, value: string) => {
+						target.setItem(targetKey, value);
+						target.setItem(key, JSON.stringify({ savedAt: 2000, changes: [update("A3")] }));
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+
+		expect(storeFor("new", { storage: racing }).adopt()).toEqual([[update("A2")]]);
+
+		expect(JSON.parse(String(window.localStorage.getItem(key))).changes).toEqual([update("A3")]);
+	});
+
+	it("自分の記録が他のタブに引き取られて消えていたら、次に残すときに書き直す", () => {
+		const store = storeFor("old");
+		store.save([update("A2")]);
+		storeFor("new").adopt();
+
+		// 内容は前と同じでも、記録がなくなっているので書き直す。
+		store.save([update("A2")]);
+
+		expect(storeFor("third").adopt()).toEqual([[update("A2")], [update("A2")]]);
+	});
+
 	it("同じ内容を続けて残すときは、書き込みを繰り返さない", () => {
 		let writes = 0;
 		const counting = new Proxy(window.localStorage, {

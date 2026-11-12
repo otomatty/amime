@@ -138,15 +138,27 @@ export function resync(session: Session, snapshot: PageSnapshot): Session {
 }
 
 /**
+ * 自分の変更を、送った順に並べる。送信中の変更が先で、そのあとに書き足した分が続く。
+ * この順に載せ直せば、送信中の変更がサーバーに入っていても、いなくても、同じ結果になる。
+ * 入っていた変更は、もう一度適用しても何も起こさない(ADR-0016)。
+ * 足した行を送ったあとでその行に書き足した分も、行を足す変更とは別の変更として残る。
+ */
+function ownChanges(session: Session): readonly Change[] {
+	return [...(session.inflight ?? []), ...diffLines(sent(session), session.local)];
+}
+
+/**
  * 応答が届かなかった送信のあとで、読み直したページを確定した文書にする。
- * 送信中の変更がサーバーに入ったかどうかは分からない。入っていても、いなくても正しくなるように、
- * 前の確定した文書からの自分の変更をすべて載せ直す(入っていた変更は、もう一度適用しても何も起こさない)。
- *
- * 送ったあとで取り消して元に戻していた場合は、取り消すつもりだったかどうかを判断できないので、
- * 画面はサーバーの内容になる。
+ * 送信中の変更がサーバーに入ったかどうかは分からないので、自分の変更を、送った順にすべて載せ直す。
  */
 export function recover(session: Session, snapshot: PageSnapshot): Session {
-	return rebase(session, snapshot.version, snapshot.lines, session.confirmed);
+	const local = applyChanges(snapshot.lines, ownChanges(session)).lines;
+	return {
+		version: snapshot.version,
+		confirmed: snapshot.lines,
+		inflight: null,
+		local: sameLines(local, session.local) ? session.local : local,
+	};
 }
 
 /**
@@ -158,11 +170,11 @@ export function failed(session: Session): Session {
 }
 
 /**
- * まだサーバーに入っていない(かもしれない)自分の変更を、確定した文書からの変更として取り出す。
+ * まだサーバーに入っていない(かもしれない)自分の変更を、送った順に取り出す。
  * 送信中の変更も含める。端末内に残しておき、次に開いたときに withPending で載せ直すために使う。
  */
 export function pendingChanges(session: Session): readonly Change[] {
-	return diffLines(session.confirmed, session.local);
+	return ownChanges(session);
 }
 
 /**

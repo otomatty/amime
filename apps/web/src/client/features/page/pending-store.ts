@@ -33,6 +33,13 @@ type PendingStoreOptions = {
 	readonly now?: () => number;
 };
 
+/** 他のタブが残した記録。raw は、読んだときの保存先の値。 */
+type OtherRecord = {
+	readonly key: string;
+	readonly raw: string | null;
+	readonly record: PendingRecord;
+};
+
 /** ブラウザの保存先を返す。使えない設定になっていれば null。 */
 export function browserStorage(): Storage | null {
 	try {
@@ -63,23 +70,39 @@ export function createPendingStore({
 	const ownKey = `${pagePrefix}${client}`;
 	/** 最後に残した変更。同じ内容を書き込み直さないために覚えておく。 */
 	let lastSaved: string | null = null;
+	/** 引き取ったが、自分の記録に移せなかったので消さずにおいた、他のタブの記録。 */
+	let leftovers: readonly OtherRecord[] = [];
+
+	/** 読んだときから書き換えられていなければ、記録を消す。書き換えられていたら、元のタブがまだ使っている。 */
+	const removeUnchanged = (target: Storage, { key, raw }: OtherRecord): void => {
+		if (target.getItem(key) === raw) target.removeItem(key);
+	};
 
 	const write = (target: Storage, changes: readonly Change[]): void => {
+		if (changes.length === 0) {
+			target.removeItem(ownKey);
+			// 引き取った変更も送り終えた。移せなかった元の記録を残しておくと、次に開いたときに古い変更を載せ直してしまう。
+			for (const other of leftovers) removeUnchanged(target, other);
+			leftovers = [];
+			lastSaved = null;
+			return;
+		}
 		const serialized = JSON.stringify(changes);
-		if (serialized === lastSaved) return;
-		if (changes.length === 0) target.removeItem(ownKey);
-		else target.setItem(ownKey, JSON.stringify({ savedAt: now(), changes }));
+		// 内容が同じでも、他のタブに引き取られて記録が消えていたら、書き直す。
+		if (serialized === lastSaved && target.getItem(ownKey) !== null) return;
+		target.setItem(ownKey, JSON.stringify({ savedAt: now(), changes }));
 		lastSaved = serialized;
 	};
 
 	/** 他のタブの記録を読む。読めない記録と古すぎる記録は、その場で消す。 */
-	const readOthers = (target: Storage): { key: string; record: PendingRecord }[] => {
-		const found: { key: string; record: PendingRecord }[] = [];
+	const readOthers = (target: Storage): OtherRecord[] => {
+		const found: OtherRecord[] = [];
 		for (const key of keysWith(target, pagePrefix)) {
 			if (key === ownKey) continue;
-			const record = parsePendingRecord(target.getItem(key));
+			const raw = target.getItem(key);
+			const record = parsePendingRecord(raw);
 			if (record.ok && now() - record.value.savedAt <= PENDING_MAX_AGE_MS) {
-				found.push({ key, record: record.value });
+				found.push({ key, raw, record: record.value });
 			} else {
 				target.removeItem(key);
 			}
@@ -104,11 +127,12 @@ export function createPendingStore({
 				const records = others.map(({ record }) => record.changes);
 				if (others.length === 0) return records;
 				try {
-					// 自分の記録に移してから、元の記録を消す。移せなければ、元の記録を残しておく。
+					// 自分の記録に移してから、元の記録を消す。
 					write(storage, records.flat());
-					for (const { key } of others) storage.removeItem(key);
+					for (const other of others) removeUnchanged(storage, other);
 				} catch {
-					// 引き取った変更は返す。記録は元のタブのものが残っている。
+					// 移せなかった。変更は返すが、元の記録は残しておき、送り終えたときに消す。
+					leftovers = others;
 				}
 				return records;
 			} catch {

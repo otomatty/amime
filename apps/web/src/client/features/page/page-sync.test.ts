@@ -217,20 +217,35 @@ describe("createPageSync", () => {
 			server.commitFromOther(changes); // サーバーには入ったが、応答は届かなかった
 			throw new PageApiError("failed");
 		});
-		const { sync, latest } = start(server);
-		const local = [line("a", "A2")];
-		sync.edit(local);
+		const { sync, latest, remotes } = start(server);
+		sync.edit([line("a", "A2"), line("n")]);
 		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
-		expect(latest()?.status).toBe("retrying");
-
-		// 取り消して元に戻しても、送った変更の行方が分かるまでは「保存済み」にしない。
-		sync.edit([line("a")]);
 		expect(latest()?.status).toBe("retrying");
 		await vi.advanceTimersByTimeAsync(1000);
 
 		expect(server.api.load).toHaveBeenCalledOnce();
 		expect(server.api.commit).toHaveBeenCalledTimes(1);
-		expect(latest()).toEqual({ status: "saved", remote: local });
+		expect(server.snapshot().lines).toEqual([line("a", "A2"), line("n")]);
+		expect(latest()?.status).toBe("saved");
+		expect(remotes).toEqual([]);
+	});
+
+	it("応答が届かないうちに取り消して元に戻していたら、行方が分かるまで保存済みにせず、取り消しも送る", async () => {
+		const server = createServer([line("a")]);
+		server.api.commit.mockImplementationOnce(async (changes) => {
+			server.commitFromOther(changes); // サーバーには入ったが、応答は届かなかった
+			throw new PageApiError("failed");
+		});
+		const { sync, latest } = start(server);
+		sync.edit([line("a", "A2")]);
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+		sync.edit([line("a")]);
+		expect(latest()?.status).toBe("retrying");
+		await vi.advanceTimersByTimeAsync(1000);
+
+		expect(server.snapshot().lines).toEqual([line("a")]);
+		expect(latest()).toEqual({ status: "saved", remote: null });
 	});
 
 	it("再試行のときの読み直しにも失敗したら、さらに間隔を延ばして再試行する", async () => {
