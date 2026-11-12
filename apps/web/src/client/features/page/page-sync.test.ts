@@ -165,6 +165,65 @@ describe("createPageSync", () => {
 		expect(latest()?.status).toBe("saved");
 	});
 
+	it("断られるまでのあいだに内容を直していたら、直した内容をそのまま保存する", async () => {
+		const server = createServer([line("a")]);
+		let reject = () => {};
+		server.api.commit.mockImplementationOnce(
+			() =>
+				new Promise((_resolve, rejectCommit) => {
+					reject = () => rejectCommit(new PageApiError("rejected"));
+				}),
+		);
+		const { sync, latest } = start(server);
+		sync.edit([line("a", "長すぎる行")]);
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+		sync.edit([line("a", "短い行")]);
+		reject();
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+		expect(server.snapshot().lines).toEqual([line("a", "短い行")]);
+		expect(latest()?.status).toBe("saved");
+	});
+
+	it("応答が届かなかったコミットがサーバーに入っていたら、再試行で二重に送らず、読み直して追いつく", async () => {
+		const server = createServer([line("a")]);
+		server.api.commit.mockImplementationOnce(async (changes) => {
+			server.commitFromOther(changes); // サーバーには入ったが、応答は届かなかった
+			throw new PageApiError("failed");
+		});
+		const { sync, latest } = start(server);
+		const local = [line("a", "A2")];
+		sync.edit(local);
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+		expect(latest()?.status).toBe("retrying");
+
+		// 取り消して元に戻しても、送った変更の行方が分かるまでは「保存済み」にしない。
+		sync.edit([line("a")]);
+		expect(latest()?.status).toBe("retrying");
+		await vi.advanceTimersByTimeAsync(1000);
+
+		expect(server.api.load).toHaveBeenCalledOnce();
+		expect(server.api.commit).toHaveBeenCalledTimes(1);
+		expect(latest()).toMatchObject({ status: "saved", remote: { lines: local } });
+	});
+
+	it("再試行のときの読み直しにも失敗したら、さらに間隔を延ばして再試行する", async () => {
+		const server = createServer([line("a")]);
+		server.failing = true;
+		server.api.load.mockRejectedValueOnce(new PageApiError("failed"));
+		const { sync, latest } = start(server);
+		sync.edit([line("a", "A2")]);
+		await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + 1000);
+		expect(latest()?.status).toBe("retrying");
+
+		server.failing = false;
+		await vi.advanceTimersByTimeAsync(2000);
+
+		expect(server.snapshot().lines).toEqual([line("a", "A2")]);
+		expect(latest()?.status).toBe("saved");
+	});
+
 	describe("まだないページ", () => {
 		const initial = [line("t", "新しいページ")];
 

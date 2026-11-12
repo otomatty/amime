@@ -72,16 +72,24 @@ export function send(session: Session): { session: Session; changes: readonly Ch
 	return { session: { ...session, inflight: changes }, changes };
 }
 
+/** 送信中の変更が、すべてサーバーに入ったとしたときの文書。 */
+const sent = (session: Session): readonly Line[] =>
+	session.inflight === null
+		? session.confirmed
+		: applyChanges(session.confirmed, session.inflight).lines;
+
 /**
- * 確定した文書を新しいものに進め、まだ送っていない編集(送信後に書き足した分)を載せ直す。
+ * 確定した文書を新しいものに進め、画面の文書を作り直す。
+ * base から画面の文書までの差分が「まだサーバーに入っていない自分の編集」で、それを新しい確定した文書に載せ直す。
  * サーバーが同じ変更を受け取ったときと同じ規則で適用するので、画面の文書はサーバーの結果と食い違わない。
  */
-function rebase(session: Session, version: number, confirmed: readonly Line[]): Session {
-	const sent =
-		session.inflight === null
-			? session.confirmed
-			: applyChanges(session.confirmed, session.inflight).lines;
-	const local = applyChanges(confirmed, diffLines(sent, session.local)).lines;
+function rebase(
+	session: Session,
+	version: number,
+	confirmed: readonly Line[],
+	base: readonly Line[],
+): Session {
+	const local = applyChanges(confirmed, diffLines(base, session.local)).lines;
 	// 内容が変わらなければ同じ配列を保つ(編集欄を置き換えずに済む)。
 	return {
 		version,
@@ -99,17 +107,33 @@ function rebase(session: Session, version: number, confirmed: readonly Line[]): 
 export function acknowledge(session: Session, result: CommitResult): Session | null {
 	const expected = session.version + (result.applied.length > 0 ? 1 : 0);
 	if (result.version !== expected) return null;
-	return rebase(session, result.version, applyChanges(session.confirmed, result.applied).lines);
-}
-
-/** 読み直したページを確定した文書にする。まだ送っていない編集は、その上に載せ直す。 */
-export function resync(session: Session, snapshot: PageSnapshot): Session {
-	return rebase(session, snapshot.version, snapshot.lines);
+	const confirmed = applyChanges(session.confirmed, result.applied).lines;
+	return rebase(session, result.version, confirmed, sent(session));
 }
 
 /**
- * 送信に失敗したときに、送信中の状態をやめる。変更は画面の文書に残っているので、次の送信でもう一度送られる。
- * 応答だけが届かずサーバーには入っていた場合も、同じ変更は二重に効かない(ADR-0016)。
+ * 読み直したページを確定した文書にする。まだ送っていない編集は、その上に載せ直す。
+ * 送信中の変更は、サーバーに入っている(読み直したページに含まれている)ものとして扱う。
+ */
+export function resync(session: Session, snapshot: PageSnapshot): Session {
+	return rebase(session, snapshot.version, snapshot.lines, sent(session));
+}
+
+/**
+ * 応答が届かなかった送信のあとで、読み直したページを確定した文書にする。
+ * 送信中の変更がサーバーに入ったかどうかは分からない。入っていても、いなくても正しくなるように、
+ * 前の確定した文書からの自分の変更をすべて載せ直す(入っていた変更は、もう一度適用しても何も起こさない)。
+ *
+ * 送ったあとで取り消して元に戻していた場合は、取り消すつもりだったかどうかを判断できないので、
+ * 画面はサーバーの内容になる。
+ */
+export function recover(session: Session, snapshot: PageSnapshot): Session {
+	return rebase(session, snapshot.version, snapshot.lines, session.confirmed);
+}
+
+/**
+ * サーバーに断られた送信をやめる。サーバーには入っていないことが分かっているときにだけ使う。
+ * 変更は画面の文書に残っているので、次の送信でもう一度送られる。
  */
 export function failed(session: Session): Session {
 	return { ...session, inflight: null };

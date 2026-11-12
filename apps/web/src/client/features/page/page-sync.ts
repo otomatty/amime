@@ -8,6 +8,7 @@ import {
 	hasUnsaved,
 	type Line,
 	type PageSnapshot,
+	recover,
 	resync,
 	type Session,
 	sameLines,
@@ -64,16 +65,20 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let retryDelay = FIRST_RETRY_MS;
 	let failure: "none" | "failed" | "rejected" = "none";
+	/** 応答が届かなかった送信がある。サーバーに入ったかどうかが分からないので、次に送る前に読み直す。 */
+	let uncertain = false;
+	let busy = false;
 	let disposed = false;
 
 	/** まだ1度も保存されていないページで、最初に表示した内容のままか。開いただけではページを作らない。 */
-	const untouched = () => session.version === 0 && sameLines(session.local, initial);
+	const untouched = () =>
+		session.version === 0 && session.inflight === null && sameLines(session.local, initial);
 	const status = (): SyncStatus => {
-		if (session.inflight !== null) return "saving";
 		if (untouched()) return "new";
+		if (failure === "failed") return "retrying";
+		if (session.inflight !== null) return "saving";
 		if (!hasUnsaved(session)) return "saved";
-		if (failure === "rejected") return "rejected";
-		return failure === "failed" ? "retrying" : "unsaved";
+		return failure === "rejected" ? "rejected" : "unsaved";
 	};
 	const publish = () => {
 		if (!disposed) onState({ status: status(), remote });
@@ -93,17 +98,42 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 		session = next;
 	};
 
-	async function save(): Promise<void> {
-		const sending = disposed || untouched() ? null : send(session);
-		if (sending === null) return;
-		session = sending.session;
+	/** 送った内容をサーバーに断られた。断られるまでのあいだに内容が直されていたら、続けて保存する。 */
+	const rejected = (sentLocal: readonly Line[]): boolean => {
+		const corrected = session.local !== sentLocal;
+		session = failed(session);
+		failure = corrected ? "none" : "rejected";
 		publish();
+		return corrected;
+	};
+
+	/**
+	 * 保存を1回分進める。続けてもう1回進めるべきなら true を返す。
+	 * await のあとでは、待っているあいだに編集されているかもしれないので、必ずその時点の session を使う。
+	 */
+	async function step(): Promise<boolean> {
+		let sentLocal: readonly Line[] | null = null;
 		try {
+			if (uncertain) {
+				const latest = await api.load();
+				settle(recover(session, latest));
+				uncertain = false;
+			}
+			const sending = disposed || untouched() ? null : send(session);
+			if (sending === null) {
+				failure = "none";
+				publish();
+				return false;
+			}
+			session = sending.session;
+			publish();
+
+			sentLocal = session.local;
 			const result = await api.commit(sending.changes);
-			// 待っているあいだに編集されているかもしれないので、応答を受け取ったあとの session に対して反映する。
+			sentLocal = null;
 			const acknowledged = acknowledge(session, result);
 			if (acknowledged === null) {
-				// 他の人の変更が先に入っている。読み直しを待ってから、その時点の session に載せ直す。
+				// 他の人の変更が先に入っている。読み直して、その時点の session に載せ直す。
 				const latest = await api.load();
 				settle(resync(session, latest));
 			} else {
@@ -111,23 +141,33 @@ export function createPageSync({ snapshot, initial, api, onState }: PageSyncOpti
 			}
 			failure = "none";
 			retryDelay = FIRST_RETRY_MS;
+			publish();
+			// 保存中に書き足した分があれば、続けて保存する。
+			return true;
 		} catch (error) {
-			session = failed(session);
-			if (error instanceof PageApiError && error.kind === "rejected") {
-				// 同じ内容を送り直しても通らない。内容が直される(次の編集)まで待つ。
-				failure = "rejected";
-				publish();
-				return;
+			if (sentLocal !== null && error instanceof PageApiError && error.kind === "rejected") {
+				return rejected(sentLocal);
 			}
+			// 送信中に失敗したら、サーバーに入ったかどうかが分からない。次に送る前に読み直す。
+			uncertain = uncertain || session.inflight !== null;
 			failure = "failed";
 			publish();
 			schedule(retryDelay);
 			retryDelay = Math.min(retryDelay * 2, MAX_RETRY_MS);
-			return;
+			return false;
 		}
-		publish();
-		// 保存中に書き足した分があれば、続けて保存する。
-		await save();
+	}
+
+	async function save(): Promise<void> {
+		if (busy) return;
+		busy = true;
+		try {
+			while (await step()) {
+				// 送るものがなくなるか、失敗するまで続ける。
+			}
+		} finally {
+			busy = false;
+		}
 	}
 
 	return {

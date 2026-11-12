@@ -7,6 +7,7 @@ export {
 	edit,
 	failed,
 	hasUnsaved,
+	recover,
 	resync,
 	type Session,
 	sameLines,
