@@ -163,25 +163,22 @@ export function applyEdit(
 	};
 }
 
-/** 自分の編集を打ち消した(または、もう一度行った)あとの状態にする。 */
-function moved(
-	history: History,
-	lines: readonly Line[],
-	position: Position,
-	stacks: Pick<History, "past" | "future">,
-): History {
+/**
+ * 自分の編集を打ち消した(または、もう一度行った)あとの文書とカーソルを作る。
+ * 文書が空になったら、空の1行を補う。
+ */
+function travel(history: History, lines: readonly Line[], position: Position) {
 	const tracker = withLine({ ...history.tracker, lines });
-	return {
-		present: restore(tracker.lines, position, history.present.cursor),
-		tracker,
-		...stacks,
-		lastEdit: null,
-	};
+	return { tracker, present: restore(tracker.lines, position, history.present.cursor) };
 }
 
 /**
  * 直前の自分の編集を取り消す。他の人の変更は巻き戻さない。
  * 取り消せなくなった編集(他の人が先に書き換えた、消した)は飛ばして、その前の編集を取り消す。
+ *
+ * やり直しのために覚えるのは、元の編集ではなく「この取り消しで実際に変わった分」。
+ * 一部しか取り消せなかった編集をやり直したときに、取り消していない部分まで変えないためである。
+ * 文書が空になって補った空の1行も、これに含まれる(やり直すと消える)。
  */
 export function undo(history: History): History {
 	const { past } = history;
@@ -189,24 +186,35 @@ export function undo(history: History): History {
 		const entry = itemAt(past, index);
 		const lines = revertEdit(history.tracker.lines, entry.edit);
 		if (lines === history.tracker.lines) continue;
-		return moved(history, lines, entry.before, {
+		const next = travel(history, lines, entry.before);
+		const undone = { ...entry, edit: recordEdit(next.tracker.lines, history.tracker.lines) };
+		return {
+			...next,
 			past: past.slice(0, index),
-			future: [entry, ...history.future],
-		});
+			future: [undone, ...history.future],
+			lastEdit: null,
+		};
 	}
 	return past.length === 0 ? history : { ...history, past: [], lastEdit: null };
 }
 
-/** 取り消した編集を、もう一度行う。やり直せなくなった編集は飛ばす。 */
+/**
+ * 取り消した編集を、もう一度行う。やり直せなくなった編集は飛ばす。
+ * 取り消しのために覚えるのは、このやり直しで実際に変わった分(undo と同じ理由)。
+ */
 export function redo(history: History): History {
 	const { future } = history;
 	for (const [index, entry] of future.entries()) {
 		const lines = reapplyEdit(history.tracker.lines, entry.edit);
 		if (lines === history.tracker.lines) continue;
-		return moved(history, lines, entry.after, {
-			past: [...history.past, entry],
+		const next = travel(history, lines, entry.after);
+		const redone = { ...entry, edit: recordEdit(history.tracker.lines, next.tracker.lines) };
+		return {
+			...next,
+			past: [...history.past, redone],
 			future: future.slice(index + 1),
-		});
+			lastEdit: null,
+		};
 	}
 	return future.length === 0 ? history : { ...history, future: [], lastEdit: null };
 }

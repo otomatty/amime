@@ -39,6 +39,11 @@ const type =
 	(text: string): Command =>
 	(current) =>
 		insertText(current, text);
+/** すべてを選択して、文字で置き換える。 */
+const selectAllAndType =
+	(text: string): Command =>
+	(current) =>
+		insertText(selectAll(current), text);
 const ungrouped = (at = 0) => ({ group: null, at });
 const typing = (at: number) => ({ group: "typing" as const, at });
 
@@ -302,6 +307,42 @@ describe("履歴", () => {
 			const undone = undo(receive(added, { type: "delete", id: id("t-0") }));
 
 			expect(undone.present).toEqual(state([""], 0, 0));
+		});
+
+		it("一部だけ取り消せた編集をやり直しても、取り消さなかった部分(他の人が消した行)は戻さない", () => {
+			const one = createHistory(state(["A"], 0, 1));
+			const edited = applyEdit(one, type("2\nB"), ungrouped());
+			expect(edited.present.lines).toEqual(["A2", "B"]);
+
+			// 他の人が、自分の足した行 B を消した。取り消しで戻るのは、A の書き換えだけ。
+			const undone = undo(receive(edited, { type: "delete", id: id("t-1") }));
+			expect(undone.present.lines).toEqual(["A"]);
+
+			expect(redo(undone).present.lines).toEqual(["A2"]);
+		});
+
+		it("一部だけやり直せた編集を取り消しても、やり直さなかった部分は変えない", () => {
+			const two = createHistory(state(["A", "B"], 0, 1));
+			const undone = undo(applyEdit(two, selectAllAndType("X"), ungrouped()));
+			expect(undone.present.lines).toEqual(["A", "B"]);
+
+			// 他の人が B を書き換えた。やり直しで消えるのは A だけで、B は残る。
+			const redone = redo(receive(undone, { type: "update", id: id("t-1"), text: "他の人のB" }));
+			expect(redone.present.lines).toEqual(["X", "他の人のB"]);
+
+			expect(undo(redone).present.lines).toEqual(["A", "他の人のB"]);
+		});
+
+		it("取り消しで補った空の1行は、やり直すと残らない", () => {
+			const one = createHistory(state(["題"], 0, 1));
+			const added = applyEdit(one, splitLine, ungrouped());
+			const undone = undo(receive(added, { type: "delete", id: id("t-0") }));
+			expect(undone.present.lines).toEqual([""]);
+
+			const redone = redo(undone);
+
+			expect(redone.present.lines).toEqual([""]);
+			expect(redone.tracker.lines).toEqual([line("t-1", "")]);
 		});
 
 		it("取り込みをはさんだ入力は、前の入力とまとめない(他の人の変更を、自分の編集に含めないため)", () => {
