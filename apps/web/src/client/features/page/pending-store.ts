@@ -91,19 +91,26 @@ export function createPendingStore({
 	const ownKey = `${pagePrefix}${client}`;
 	/** 最後に残した変更。同じ内容を書き込み直さないために覚えておく。 */
 	let lastSaved: string | null = null;
-	/** 引き取ったが、自分の記録に移せなかったので消さずにおいた、他のタブの記録。 */
-	let leftovers: readonly OtherRecord[] = [];
+	/**
+	 * 引き取ったが、自分の記録に移せなかったので消さずにおいた、他のタブの記録。
+	 * release を呼ぶと、その記録のロックを解く(送り終えるまでは、他のタブに引き取らせない)。
+	 */
+	let leftovers: readonly { readonly other: OtherRecord; readonly release: () => void }[] = [];
 
 	/** 読んだときから書き換えられていなければ、記録を消す。書き換えられていたら、元のタブがまだ使っている。 */
 	const removeUnchanged = (target: Storage, { key, raw }: OtherRecord): void => {
 		if (target.getItem(key) === raw) target.removeItem(key);
 	};
 
-	const write = (target: Storage, changes: readonly Change[]): void => {
+	/** 自分の記録を書く。savedAt は、記録の新旧を比べるための時刻。 */
+	const write = (target: Storage, changes: readonly Change[], savedAt: number): void => {
 		if (changes.length === 0) {
 			target.removeItem(ownKey);
 			// 引き取った変更も送り終えた。移せなかった元の記録を残しておくと、次に開いたときに古い変更を載せ直してしまう。
-			for (const other of leftovers) removeUnchanged(target, other);
+			for (const { other, release } of leftovers) {
+				removeUnchanged(target, other);
+				release();
+			}
 			leftovers = [];
 			lastSaved = null;
 			return;
@@ -111,7 +118,7 @@ export function createPendingStore({
 		const serialized = JSON.stringify(changes);
 		// 内容が同じでも、他のタブに引き取られて記録が消えていたら、書き直す。
 		if (serialized === lastSaved && target.getItem(ownKey) !== null) return;
-		target.setItem(ownKey, JSON.stringify({ savedAt: now(), changes }));
+		target.setItem(ownKey, JSON.stringify({ savedAt, changes }));
 		lastSaved = serialized;
 	};
 
@@ -135,38 +142,49 @@ export function createPendingStore({
 	const claimed: OtherRecord[] = [];
 
 	/**
-	 * 記録を1つ、自分の記録に移す。移したら true。
-	 * 読んだあとで記録が変わっていたら(他のタブが先に引き取った、元のタブが書き換えた)、何もしない。
+	 * 記録を1つ引き取る。
+	 * - moved: 自分の記録に移して、元の記録を消した
+	 * - kept: 引き取ったが、自分の記録に移せなかった。元の記録は残してある(送り終えたときに消す)
+	 * - skipped: 読んだあとで記録が変わっていた(他のタブが先に引き取った、元のタブが書き換えた)
 	 */
-	const claim = (target: Storage, other: OtherRecord): boolean => {
-		if (target.getItem(other.key) !== other.raw) return false;
+	const claim = (target: Storage, other: OtherRecord): "moved" | "kept" | "skipped" => {
+		if (target.getItem(other.key) !== other.raw) return "skipped";
 		claimed.push(other);
 		try {
-			// 自分の記録に移してから、元の記録を消す。
-			write(
-				target,
-				claimed.flatMap(({ record }) => record.changes),
-			);
+			// 記録は古い順に引き取る。移した記録の時刻は、最後に引き取った記録の時刻にする。
+			// いまの時刻にすると、引き取りの途中で閉じたときに、まだ引き取っていない新しい記録と新旧が逆になる。
+			const changes = claimed.flatMap(({ record }) => record.changes);
+			write(target, changes, other.record.savedAt);
 			removeUnchanged(target, other);
+			return "moved";
 		} catch {
-			// 移せなかった。変更は引き取るが、元の記録は残しておき、送り終えたときに消す。
-			leftovers = [...leftovers, other];
+			return "kept";
 		}
-		return true;
 	};
 
 	/**
 	 * 記録の持ち主のタブが閉じていれば、引き取る。
 	 * 持ち主は、開いているあいだロックを持っている(hold)。ロックを取れたら、持ち主はもういない。
 	 * ロックを持ったまま移すので、2つのタブが同じ記録を引き取ることもない。
+	 * 自分の記録に移せなかったときは、送り終えるまでロックを持ち続ける(元の記録を、他のタブに引き取らせない)。
 	 */
-	const claimIfAbandoned = async (target: Storage, other: OtherRecord): Promise<void> => {
+	const claimIfAbandoned = (target: Storage, other: OtherRecord): Promise<void> => {
 		if (locks === null) {
-			claim(target, other);
-			return;
+			if (claim(target, other) === "kept") leftovers = [...leftovers, { other, release: () => {} }];
+			return Promise.resolve();
 		}
-		await locks.request(other.key, { ifAvailable: true }, (lock) => {
-			if (lock !== null) claim(target, other);
+		return new Promise<void>((done) => {
+			locks
+				.request(other.key, { ifAvailable: true }, (lock) => {
+					const outcome = lock === null ? "skipped" : claim(target, other);
+					done();
+					if (outcome !== "kept") return;
+					// ロックは、返した約束が果たされるまで持ち続ける。
+					return new Promise<void>((release) => {
+						leftovers = [...leftovers, { other, release }];
+					});
+				})
+				.catch(done);
 		});
 	};
 
@@ -185,7 +203,7 @@ export function createPendingStore({
 		save(changes) {
 			if (storage === null) return false;
 			try {
-				write(storage, changes);
+				write(storage, changes, now());
 				return true;
 			} catch {
 				return false;

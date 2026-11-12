@@ -243,6 +243,53 @@ describe("createPendingStore", () => {
 			expect(window.localStorage).toHaveLength(1);
 		});
 
+		it("移せなかった元の記録は、送り終えるまで、他のタブに引き取らせない", async () => {
+			const locks = createFakeLocks();
+			storeFor("closed", { locks }).save([update("A2")]);
+			let failing = true;
+			const flaky = new Proxy(window.localStorage, {
+				get(target, property) {
+					if (property === "setItem" && failing) {
+						return () => {
+							throw new DOMException("quota", "QuotaExceededError");
+						};
+					}
+					const value = Reflect.get(target, property);
+					return typeof value === "function" ? value.bind(target) : value;
+				},
+			});
+			const restoring = storeFor("restoring", { storage: flaky, locks });
+			expect(await restoring.adopt()).toEqual([[update("A2")]]);
+
+			// 復元したタブが送り終えるまで、元の記録は残っているが、他のタブは引き取れない。
+			expect(await storeFor("third", { locks }).adopt()).toEqual([]);
+			expect(window.localStorage).toHaveLength(1);
+
+			failing = false;
+			restoring.save([]);
+			await Promise.resolve();
+			expect(window.localStorage).toHaveLength(0);
+		});
+
+		it("一部の記録だけを引き取ったあとでも、変更の新旧の順は変わらない", async () => {
+			const locks = createFakeLocks();
+			storeFor("closed", { now: 1000, locks }).save([update("古い")]);
+			const open = storeFor("open", { now: 2000, locks });
+			const close = open.hold();
+			open.save([update("新しい")]);
+
+			// 開いているタブの記録は引き取れないので、古いほうだけを引き取る。そのあと、何も送らずに閉じた。
+			await storeFor("interrupted", { now: 3000, locks }).adopt();
+			close();
+			await Promise.resolve();
+
+			// 引き取った記録は、元の時刻のまま。新しいほうより先に載る。
+			expect(await storeFor("later", { now: 4000, locks }).adopt()).toEqual([
+				[update("古い")],
+				[update("新しい")],
+			]);
+		});
+
 		it("引き取りは1度だけ行う。もう一度呼んでも、同じ結果を返す", async () => {
 			storeFor("closed").save([update("A2")]);
 			const store = storeFor("new");
