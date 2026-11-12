@@ -4,6 +4,8 @@ import {
 	moveDown,
 	moveLeft,
 	moveRight,
+	moveToDocumentEnd,
+	moveToDocumentStart,
 	moveToLineEnd,
 	moveToLineStart,
 	moveUp,
@@ -95,6 +97,21 @@ describe("moveToLineStart / moveToLineEnd", () => {
 
 	it("行末へ動く", () => {
 		expect(moveToLineEnd(state(["a", "bcd"], 1, 1)).cursor).toEqual({ line: 1, column: 3 });
+	});
+});
+
+describe("moveToDocumentStart / moveToDocumentEnd", () => {
+	it("文書の先頭へ動く", () => {
+		expect(moveToDocumentStart(state(["ab", "cd"], 1, 1))).toEqual(state(["ab", "cd"], 0, 0));
+	});
+
+	it("文書の末尾へ動く", () => {
+		expect(moveToDocumentEnd(state(["ab", "cde"], 0, 1))).toEqual(state(["ab", "cde"], 1, 3));
+	});
+
+	it("選択をやめる", () => {
+		const selected = { ...state(["ab", "cd"], 1, 1), anchor: { line: 0, column: 0 } };
+		expect(moveToDocumentEnd(selected)).toEqual(state(["ab", "cd"], 1, 2));
 	});
 });
 

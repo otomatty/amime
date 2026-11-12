@@ -694,3 +694,86 @@ test.describe("範囲選択・コピー・取り消し", () => {
 		expect(await selectedText(page)).toBe("はじめに");
 	});
 });
+
+test.describe("行とかたまりを動かす", () => {
+	test.beforeEach(async ({ page }) => {
+		await page.goto("/");
+	});
+
+	test("Alt+下で、行を子の行ごと次の行の下へ動かせる。カーソルは行についていく", async ({
+		page,
+	}) => {
+		await clickLineEnd(page, 1); // 子の行が3つある行
+
+		await page.keyboard.press("Alt+ArrowDown");
+		await page.keyboard.type("!");
+
+		expect((await lineTexts(page)).slice(1, 6)).toEqual([
+			"この画面で自由に編集できます(まだ保存はされません)",
+			"行頭に空白を入れると箇条書きになります!",
+			" 1段目",
+			"  2段目",
+			" \t全角スペースやタブも同じ深さとして数えます",
+		]);
+	});
+
+	test("Alt+上で元の位置へ戻せる", async ({ page }) => {
+		const before = await lineTexts(page);
+		await clickLineEnd(page, 1);
+
+		await page.keyboard.press("Alt+ArrowDown");
+		await page.keyboard.press("Alt+ArrowUp");
+
+		expect(await lineTexts(page)).toEqual(before);
+	});
+
+	test("Ctrl+下では、カーソルのある行だけが動く(子の行はその場に残る)", async ({ page }) => {
+		await clickLineEnd(page, 1);
+
+		await page.keyboard.press("Control+ArrowDown");
+
+		expect((await lineTexts(page)).slice(1, 4)).toEqual([
+			" 1段目",
+			"行頭に空白を入れると箇条書きになります",
+			"  2段目",
+		]);
+	});
+
+	test("複数行を選択して Ctrl+上を押すと、選択した行がまとめて動く", async ({ page }) => {
+		await clickLineEnd(page, 2);
+		await page.keyboard.press("Shift+ArrowDown");
+
+		await page.keyboard.press("Control+ArrowUp");
+
+		expect((await lineTexts(page)).slice(1, 4)).toEqual([
+			" 1段目",
+			"  2段目",
+			"行頭に空白を入れると箇条書きになります",
+		]);
+		await expect(lines(page).nth(1).locator(".selected").first()).toBeVisible();
+	});
+
+	test("かたまりを動かしたあと、取り消すと1回で元に戻る", async ({ page }) => {
+		const before = await lineTexts(page);
+		await clickLineEnd(page, 1);
+
+		await page.keyboard.press("Alt+ArrowDown");
+		await page.keyboard.press("ControlOrMeta+z");
+
+		expect(await lineTexts(page)).toEqual(before);
+	});
+
+	test("文書の末尾と先頭へ、キーで移動できる", async ({ page }) => {
+		// Mac では Command+上下、それ以外では Ctrl+Home / End(ADR-0015)。
+		const mac = process.platform === "darwin";
+		await clickLineEnd(page, 3);
+
+		await page.keyboard.press(mac ? "Meta+ArrowDown" : "Control+End");
+		await page.keyboard.type("末尾");
+		await expect(lines(page).last()).toHaveAttribute("data-text", "$ pnpm dev末尾");
+
+		await page.keyboard.press(mac ? "Meta+ArrowUp" : "Control+Home");
+		await page.keyboard.type("先頭");
+		await expect(lines(page).first()).toHaveAttribute("data-text", "先頭はじめに");
+	});
+});

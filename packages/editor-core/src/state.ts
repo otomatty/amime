@@ -32,6 +32,23 @@ export function selectionRange(state: EditorState): SelectionRange | null {
 	return isBefore(anchor, cursor) ? { start: anchor, end: cursor } : { start: cursor, end: anchor };
 }
 
+/** 行の範囲。first から last まで(どちらも含む)。 */
+export type LineRange = { readonly first: number; readonly last: number };
+
+/**
+ * 行を単位にした操作の対象になる行を返す。
+ * 選択していなければカーソルのある行、選択していれば選択にかかるすべての行。
+ * 選択が行頭で終わっているときは、その行を対象にしない(その行の文字は1つも選択されていない)。
+ */
+export function targetLines(state: EditorState): LineRange {
+	const range = selectionRange(state) ?? { start: state.cursor, end: state.cursor };
+	const first = range.start.line;
+	const last =
+		range.end.column === 0 && range.end.line > first ? range.end.line - 1 : range.end.line;
+	lineAt(state.lines, last);
+	return { first, last };
+}
+
 /** 状態を組み立てる。anchor がないかカーソルと同じ位置なら、選択していない状態にする。 */
 export function withSelection(
 	lines: readonly string[],

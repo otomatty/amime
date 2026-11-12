@@ -7,7 +7,24 @@ import {
 	splitLine,
 } from "./commands.ts";
 import type { EditGroup } from "./history.ts";
-import { moveDown, moveLeft, moveRight, moveToLineEnd, moveToLineStart, moveUp } from "./motion.ts";
+import {
+	moveDown,
+	moveLeft,
+	moveRight,
+	moveToDocumentEnd,
+	moveToDocumentStart,
+	moveToLineEnd,
+	moveToLineStart,
+	moveUp,
+} from "./motion.ts";
+import {
+	indentBlock,
+	moveBlockDown,
+	moveBlockUp,
+	moveLinesDown,
+	moveLinesUp,
+	outdentBlock,
+} from "./outline.ts";
 import { extendSelection, selectAll } from "./selection.ts";
 import { selectionRange } from "./state.ts";
 import type { EditorState } from "./types.ts";
@@ -45,7 +62,10 @@ export type KeyContext = {
 	 * Enter で引き継ぐインデントがこの文字数までになる。
 	 */
 	readonly tableRowIndent?: number | null;
-	/** Mac かどうか。Mac では Command キー、それ以外では Ctrl キーとの組み合わせを使う。 */
+	/**
+	 * Mac かどうか。取り消しや全選択、文書の端への移動には、Mac では Command キー、
+	 * それ以外では Ctrl キーとの組み合わせを使う。行やかたまりを動かすキーは、どちらでも同じ。
+	 */
 	readonly mac?: boolean;
 };
 
@@ -82,6 +102,39 @@ const SHIFT_KEYS = new Map<string, KeyBinding>([
 	["End", run(extendSelection(moveToLineEnd))],
 ]);
 
+/** Ctrl+矢印: 行だけを動かす。Mac でも Control キーを使う。 */
+const LINE_KEYS = new Map<string, KeyBinding>([
+	["ArrowUp", run(moveLinesUp)],
+	["ArrowDown", run(moveLinesDown)],
+	["ArrowLeft", run(outdentLine)],
+	["ArrowRight", run(indentLine)],
+]);
+
+/** Alt(Mac では Option)+矢印: 行を子の行ごと動かす。 */
+const BLOCK_KEYS = new Map<string, KeyBinding>([
+	["ArrowUp", run(moveBlockUp)],
+	["ArrowDown", run(moveBlockDown)],
+	["ArrowLeft", run(outdentBlock)],
+	["ArrowRight", run(indentBlock)],
+]);
+
+/** Mac の Option+左右は単語単位の移動に使われるので、割り当てない。 */
+const MAC_WORD_KEYS = new Set(["ArrowLeft", "ArrowRight"]);
+
+/** Ctrl との組み合わせでカーソルを動かすキー(Mac 以外)。 */
+const CTRL_MOTIONS = new Map<string, Command>([
+	["Home", moveToDocumentStart],
+	["End", moveToDocumentEnd],
+]);
+
+/** Command との組み合わせでカーソルを動かすキー(Mac)。 */
+const COMMAND_MOTIONS = new Map<string, Command>([
+	["ArrowUp", moveToDocumentStart],
+	["ArrowDown", moveToDocumentEnd],
+	["ArrowLeft", moveToLineStart],
+	["ArrowRight", moveToLineEnd],
+]);
+
 const LATIN_LETTER = /^[a-z]$/i;
 const LETTER_KEY_CODE = /^Key([A-Z])$/;
 
@@ -97,6 +150,9 @@ export function shortcutLetter(input: KeyInput): string | null {
 
 /** Ctrl(Mac では Command)との組み合わせ。コピー・切り取り・貼り付けは、ここでは扱わずブラウザに任せる。 */
 function modifiedBinding(input: KeyInput, mac: boolean): KeyBinding | null {
+	const motion = (mac ? COMMAND_MOTIONS : CTRL_MOTIONS).get(input.key);
+	if (motion) return run(input.shift ? extendSelection(motion) : motion);
+
 	const key = shortcutLetter(input);
 	if (key === "z") return input.shift ? REDO : UNDO;
 	if (input.shift) return null;
@@ -119,16 +175,30 @@ function tableRowBinding(input: KeyInput, tableRowIndent: number): KeyBinding | 
 	return null;
 }
 
+/** Ctrl・Alt・Meta のどれかを押しているときの割り当て。2つ以上を同時に押す組み合わせは扱わない。 */
+function modifierBinding(input: KeyInput, mac: boolean): KeyBinding | null {
+	const pressed = [input.ctrl, input.alt, input.meta].filter(Boolean).length;
+	if (pressed > 1) return null;
+	if (input.alt) return blockBinding(input, mac);
+	const outline = input.ctrl && !input.shift ? LINE_KEYS.get(input.key) : undefined;
+	if (outline) return outline;
+	const primary = mac ? input.meta : input.ctrl;
+	return primary ? modifiedBinding(input, mac) : null;
+}
+
+/** Alt(Mac では Option)との組み合わせ。 */
+function blockBinding(input: KeyInput, mac: boolean): KeyBinding | null {
+	if (input.shift || (mac && MAC_WORD_KEYS.has(input.key))) return null;
+	return BLOCK_KEYS.get(input.key) ?? null;
+}
+
 /**
  * キー入力に割り当てられた働きを返す。
  * 割り当てがなければ null を返す(呼び出し側はブラウザの既定の動作に任せる)。
  */
 export function bindingForKey(input: KeyInput, context: KeyContext = {}): KeyBinding | null {
 	const mac = context.mac ?? false;
-	const modifier = mac ? input.meta : input.ctrl;
-	const otherModifier = mac ? input.ctrl : input.meta;
-	if (input.alt || otherModifier) return null;
-	if (modifier) return modifiedBinding(input, mac);
+	if (input.alt || input.ctrl || input.meta) return modifierBinding(input, mac);
 
 	const tableRowIndent = context.tableRowIndent ?? null;
 	const inTable = tableRowIndent === null ? null : tableRowBinding(input, tableRowIndent);

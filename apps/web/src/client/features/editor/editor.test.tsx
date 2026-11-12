@@ -592,6 +592,65 @@ describe("Editor", () => {
 		});
 	});
 
+	describe("行とかたまりを動かす", () => {
+		const outline = ["題", "A", " a1", "B", " b1"];
+
+		it("Ctrl+上で、カーソルのある行だけを1行上へ動かす。カーソルは行についていく", () => {
+			render(<Editor initialLines={outline} />);
+			clickChar(3, 0);
+
+			press("ArrowUp", { ctrlKey: true });
+
+			expect(lines()).toEqual(["題", "A", "B", " a1", " b1"]);
+			expect(caret()).toEqual({ line: 2, column: 0 });
+		});
+
+		it("Alt+上で、行を子の行ごと、上のかたまりと入れ替える", () => {
+			render(<Editor initialLines={outline} />);
+			clickChar(3, 0);
+
+			const notPrevented = press("ArrowUp", { altKey: true });
+
+			expect(lines()).toEqual(["題", "B", " b1", "A", " a1"]);
+			expect(caret()).toEqual({ line: 1, column: 0 });
+			// Alt+矢印は、ブラウザでは「戻る」などに使われる。編集欄の中では既定の動作を止める。
+			expect(notPrevented).toBe(false);
+		});
+
+		it("Alt+右で子の行ごとインデントし、取り消すと1回で元に戻る", () => {
+			render(<Editor initialLines={outline} />);
+			clickChar(3, 0);
+
+			press("ArrowRight", { altKey: true });
+			expect(lines()).toEqual(["題", "A", " a1", " B", "  b1"]);
+
+			press("z", { ctrlKey: true });
+			expect(lines()).toEqual(outline);
+		});
+
+		it("複数行を選択して Alt+下を押すと、選択した行とその子の行がまとめて動き、選択は保たれる", () => {
+			render(<Editor initialLines={["題", "A", " a1", "B", "C"]} />);
+			clickChar(1, 0);
+			press("ArrowDown", { shiftKey: true });
+
+			press("ArrowDown", { altKey: true });
+
+			expect(lines()).toEqual(["題", "B", "A", " a1", "C"]);
+			expect(screen.getAllByTestId("line")[2]?.querySelector(".selected")).not.toBeNull();
+		});
+
+		it("Ctrl+End で文書の末尾へ、Ctrl+Home で文書の先頭へ動く", () => {
+			render(<Editor initialLines={["ab", "cd", "ef"]} />);
+			clickChar(1, 1);
+
+			press("End", { ctrlKey: true });
+			expect(caret()).toEqual({ line: 2, column: 2 });
+
+			press("Home", { ctrlKey: true });
+			expect(caret()).toEqual({ line: 0, column: 0 });
+		});
+	});
+
 	describe("日本語入力(IME)", () => {
 		it("変換中の文字列はカーソル位置に表示されるが、行にはまだ入らない", () => {
 			render(<Editor initialLines={["ab"]} />);
