@@ -663,7 +663,7 @@ test.describe("範囲選択・コピー・取り消し", () => {
 		await expect(lines(page).nth(6)).toHaveAttribute("data-indent", "0");
 	});
 
-	test("Ctrl+Z で取り消し、Ctrl+Shift+Z と Ctrl+Y でやり直せる", async ({ page }) => {
+	test("Ctrl+Z で取り消し、Ctrl+Shift+Z と Ctrl+Y(Mac 以外)でやり直せる", async ({ page }) => {
 		await clickLineEnd(page, 0);
 		await page.keyboard.type("abc");
 		await page.keyboard.press("Enter");
@@ -676,7 +676,9 @@ test.describe("範囲選択・コピー・取り消し", () => {
 
 		await page.keyboard.press("ControlOrMeta+Shift+z");
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめにabc");
-		await page.keyboard.press("ControlOrMeta+y");
+		// Y でのやり直しは Mac 以外だけにある(ADR-0014)。Mac では Shift+Z で確かめる。
+		const redoKey = process.platform === "darwin" ? "Meta+Shift+z" : "Control+y";
+		await page.keyboard.press(redoKey);
 		expect((await lineTexts(page))[1]).toBe("");
 	});
 
