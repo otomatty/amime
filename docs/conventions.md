@@ -155,11 +155,11 @@ CIは次の3点を検査します。
 
 ## 10. よく使うコマンド
 
-| コマンド                      | 内容                                |
-| ----------------------------- | ----------------------------------- |
-| `pnpm dev`                    | 開発サーバーを起動                  |
-| `pnpm test:watch`             | 単体テストを監視実行(TDDの基本)     |
-| `pnpm test:server`            | サーバーのテストを workerd 上で実行 |
-| `pnpm lint:fix`               | Lint と整形を自動修正               |
-| `pnpm check`                  | CIと同じ検査を一通り実行(E2Eを除く) |
-| `pnpm build && pnpm test:e2e` | E2Eテストを実行                     |
+| コマンド           | 内容                                |
+| ------------------ | ----------------------------------- |
+| `pnpm dev`         | 開発サーバーを起動                  |
+| `pnpm test:watch`  | 単体テストを監視実行(TDDの基本)     |
+| `pnpm test:server` | サーバーのテストを workerd 上で実行 |
+| `pnpm lint:fix`    | Lint と整形を自動修正               |
+| `pnpm check`       | CIと同じ検査を一通り実行(E2Eを除く) |
+| `pnpm test:e2e`    | E2E用にビルドしてE2Eテストを実行    |

@@ -1,6 +1,8 @@
 import { Editor } from "../features/editor/editor.tsx";
+import { Page } from "../features/page/page.tsx";
+import { pageNameFromPath } from "../features/page/route.ts";
 
-/** 動作確認用の初期内容。P2でサーバーから取得したページに置き換える。 */
+/** 試し書きのページの初期内容。 */
 const SAMPLE_LINES = [
 	"はじめに",
 	"行頭に空白を入れると箇条書きになります",
@@ -22,13 +24,22 @@ const SAMPLE_LINES = [
 	"$ pnpm dev",
 ];
 
+/** トップに表示する、保存されない試し書きのページ。P3 でページの一覧に置き換える。 */
+function Playground() {
+	return (
+		<>
+			<p className="page-status">この画面は試し書き用です。内容は保存されません。</p>
+			<Editor initialLines={SAMPLE_LINES} />
+		</>
+	);
+}
+
 export function App() {
+	const name = pageNameFromPath(window.location.pathname);
 	return (
 		<main className="app">
 			<h1>Amime</h1>
-			<article className="page">
-				<Editor initialLines={SAMPLE_LINES} />
-			</article>
+			<article className="page">{name === null ? <Playground /> : <Page name={name} />}</article>
 		</main>
 	);
 }

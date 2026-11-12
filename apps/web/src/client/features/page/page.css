@@ -1,0 +1,21 @@
+.page-status {
+	margin: 0 0 0.75rem;
+	color: var(--color-muted);
+	font-size: 0.8rem;
+	text-align: right;
+}
+
+.page-status[data-status="retrying"],
+.page-status[data-status="rejected"] {
+	color: var(--color-warning);
+}
+
+.page-message {
+	margin: 0;
+	line-height: 1.8;
+}
+
+.page-message button {
+	margin-left: 0.5rem;
+	font: inherit;
+}

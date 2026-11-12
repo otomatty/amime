@@ -26,6 +26,13 @@ test.describe("起動確認", () => {
 		await expect(page.getByRole("heading", { level: 1, name: "Amime" })).toBeVisible();
 	});
 
+	test("E2E用のビルドでは、ページのAPIが有効になっている", async ({ request }) => {
+		const response = await request.get("/api/pages/e2e-smoke");
+
+		// 403 なら、本番用のビルドを起動している。`pnpm test:e2e` で実行すること。
+		expect(response.status()).toBe(200);
+	});
+
 	test("APIはWorkerが応答する", async ({ request }) => {
 		const response = await request.get("/api/health");
 

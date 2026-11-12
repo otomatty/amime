@@ -10,6 +10,7 @@
 		"typecheck": "tsc"
 	},
 	"dependencies": {
-		"@amime/shared": "workspace:*"
+		"@amime/shared": "workspace:*",
+		"valibot": "^1.5.0"
 	}
 }
