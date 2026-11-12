@@ -287,6 +287,36 @@ test.describe("未送信の変更の復元", () => {
 		await expect(status(reopened)).toHaveText("保存済み");
 	});
 
+	test("開いているタブの未送信の変更は、別のタブが引き取らない。そのタブを閉じると、次に開いたタブが復元する", async ({
+		page,
+		context,
+	}) => {
+		const name = newPageName();
+		await page.goto(`/${name}`);
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Enter");
+		await page.keyboard.type("最初の行");
+		await expect(status(page)).toHaveText("保存済み");
+		await page.route("**/commits", (route) => route.abort());
+		await page.keyboard.type("(送れない追記)");
+		await expect(status(page)).toHaveText("保存できませんでした。自動で再試行します");
+
+		// 最初のタブは、まだ開いている。別のタブは、その未送信の変更に手を出さない。
+		const second = await context.newPage();
+		await second.goto(`/${name}`);
+		await expectLines(second, [name, "最初の行"]);
+		await expect(second.getByRole("note")).toHaveCount(0);
+
+		await page.close();
+		const third = await context.newPage();
+		await third.goto(`/${name}`);
+
+		const expected = [name, "最初の行(送れない追記)"];
+		await expectLines(third, expected);
+		await expect(third.getByRole("note")).toContainText("送信できなかった変更を復元しました");
+		await expectLines(second, expected);
+	});
+
 	test("閉じているあいだに他の人が書いた内容は残り、復元した変更と両方が入る", async ({
 		page,
 		context,

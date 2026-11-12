@@ -7,7 +7,12 @@ import { createChannel } from "./channel.ts";
 import { createClientId } from "./client-id.ts";
 import { PageApiError } from "./page-api-error.ts";
 import { createPageSync, type PageApi, type SyncStatus } from "./page-sync.ts";
-import { browserStorage, createPendingStore, type PendingStore } from "./pending-store.ts";
+import {
+	browserLocks,
+	browserStorage,
+	createPendingStore,
+	type PendingStore,
+} from "./pending-store.ts";
 import { titleFromName } from "./route.ts";
 import "./page.css";
 
@@ -46,21 +51,29 @@ export function Page({ name }: PageProps) {
 		const client = createClientId();
 		return {
 			api: createPageApi(name, client),
-			pending: createPendingStore({ storage: browserStorage(), page: name, client }),
+			pending: createPendingStore({
+				storage: browserStorage(),
+				locks: browserLocks(),
+				page: name,
+				client,
+			}),
 		};
 	}, [name]);
 	const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
 	const [attempt, setAttempt] = useState(0);
 
+	// このタブが開いているあいだ、このタブの未送信の変更を、他のタブに引き取らせない(ADR-0020)。
+	useEffect(() => pending.hold(), [pending]);
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt は、読み込みをやり直すためのきっかけとして使う。
 	useEffect(() => {
 		let cancelled = false;
 		setLoaded({ status: "loading" });
-		api.load().then(
-			(snapshot) => {
+		// 前回送れなかった変更が端末内に残っていたら、引き取って、読み込んだページに載せる(ADR-0020)。
+		Promise.all([api.load(), pending.adopt()]).then(
+			([snapshot, records]) => {
 				if (cancelled) return;
-				// 前回送れなかった変更が端末内に残っていたら、引き取って、読み込んだページに載せる(ADR-0020)。
-				const document = withPending(snapshot.lines, pending.adopt());
+				const document = withPending(snapshot.lines, records);
 				const restored = document === snapshot.lines ? null : document;
 				setLoaded({ status: "ready", snapshot, restored });
 			},

@@ -17,15 +17,30 @@ export type PendingStore = {
 	 */
 	readonly save: (changes: readonly Change[]) => boolean;
 	/**
-	 * 同じページについて、他のタブ(閉じたタブ)が残した未送信の変更を引き取る。古い順に返す。
+	 * 同じページについて、閉じたタブが残した未送信の変更を引き取る。古い順に返す。
 	 * 引き取った変更は、このタブの記録に移す。引き取った直後にこのタブが閉じても、変更は失われない。
+	 * まだ開いているタブの記録は引き取らない(そのタブが自分で送る)。
+	 * 引き取りは1度だけ行う。もう一度呼ぶと、同じ結果を返す。
 	 */
-	readonly adopt: () => readonly (readonly Change[])[];
+	readonly adopt: () => Promise<readonly (readonly Change[])[]>;
+	/**
+	 * このタブが開いていることを、他のタブに示す。返した関数を呼ぶと、示すのをやめる。
+	 * 示しているあいだ、このタブの記録は他のタブに引き取られない。タブが閉じたり落ちたりすると、自動で解かれる。
+	 */
+	readonly hold: () => () => void;
 };
+
+/** タブが開いているかどうかを確かめるためのロック(Web Locks API)。 */
+type Locks = Pick<LockManager, "request">;
 
 type PendingStoreOptions = {
 	/** 保存先。使えない環境では null。 */
 	readonly storage: Storage | null;
+	/**
+	 * ロック。使えない環境では null。そのときは、タブが開いているかどうかを確かめられないので、
+	 * 残っている記録をすべて引き取る。
+	 */
+	readonly locks: Locks | null;
 	/** ページ名。 */
 	readonly page: string;
 	readonly client: ClientId;
@@ -49,6 +64,11 @@ export function browserStorage(): Storage | null {
 	}
 }
 
+/** ブラウザのロックを返す。対応していなければ null。 */
+export function browserLocks(): Locks | null {
+	return typeof navigator !== "undefined" && "locks" in navigator ? navigator.locks : null;
+}
+
 /** 保存先にあるキーのうち、prefix で始まるものを返す。 */
 function keysWith(storage: Storage, prefix: string): string[] {
 	const keys: string[] = [];
@@ -61,6 +81,7 @@ function keysWith(storage: Storage, prefix: string): string[] {
 
 export function createPendingStore({
 	storage,
+	locks,
 	page,
 	client,
 	now = Date.now,
@@ -110,6 +131,56 @@ export function createPendingStore({
 		return found.sort((a, b) => a.record.savedAt - b.record.savedAt);
 	};
 
+	/** このタブが引き取った記録。 */
+	const claimed: OtherRecord[] = [];
+
+	/**
+	 * 記録を1つ、自分の記録に移す。移したら true。
+	 * 読んだあとで記録が変わっていたら(他のタブが先に引き取った、元のタブが書き換えた)、何もしない。
+	 */
+	const claim = (target: Storage, other: OtherRecord): boolean => {
+		if (target.getItem(other.key) !== other.raw) return false;
+		claimed.push(other);
+		try {
+			// 自分の記録に移してから、元の記録を消す。
+			write(
+				target,
+				claimed.flatMap(({ record }) => record.changes),
+			);
+			removeUnchanged(target, other);
+		} catch {
+			// 移せなかった。変更は引き取るが、元の記録は残しておき、送り終えたときに消す。
+			leftovers = [...leftovers, other];
+		}
+		return true;
+	};
+
+	/**
+	 * 記録の持ち主のタブが閉じていれば、引き取る。
+	 * 持ち主は、開いているあいだロックを持っている(hold)。ロックを取れたら、持ち主はもういない。
+	 * ロックを持ったまま移すので、2つのタブが同じ記録を引き取ることもない。
+	 */
+	const claimIfAbandoned = async (target: Storage, other: OtherRecord): Promise<void> => {
+		if (locks === null) {
+			claim(target, other);
+			return;
+		}
+		await locks.request(other.key, { ifAvailable: true }, (lock) => {
+			if (lock !== null) claim(target, other);
+		});
+	};
+
+	async function adoptOthers(): Promise<readonly (readonly Change[])[]> {
+		if (storage === null) return [];
+		try {
+			for (const other of readOthers(storage)) await claimIfAbandoned(storage, other);
+		} catch {
+			// 保存先やロックが使えなくなった。そこまでに引き取れた分を返す。
+		}
+		return claimed.map(({ record }) => record.changes);
+	}
+	let adopted: Promise<readonly (readonly Change[])[]> | null = null;
+
 	return {
 		save(changes) {
 			if (storage === null) return false;
@@ -121,23 +192,18 @@ export function createPendingStore({
 			}
 		},
 		adopt() {
-			if (storage === null) return [];
-			try {
-				const others = readOthers(storage);
-				const records = others.map(({ record }) => record.changes);
-				if (others.length === 0) return records;
-				try {
-					// 自分の記録に移してから、元の記録を消す。
-					write(storage, records.flat());
-					for (const other of others) removeUnchanged(storage, other);
-				} catch {
-					// 移せなかった。変更は返すが、元の記録は残しておき、送り終えたときに消す。
-					leftovers = others;
-				}
-				return records;
-			} catch {
-				return [];
-			}
+			adopted ??= adoptOthers();
+			return adopted;
+		},
+		hold() {
+			if (locks === null) return () => {};
+			let release = () => {};
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			// ロックは、渡した関数の約束が果たされるまで持ち続ける。タブが閉じれば、自動で解かれる。
+			locks.request(ownKey, () => held).catch(() => {});
+			return release;
 		},
 	};
 }
