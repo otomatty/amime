@@ -102,7 +102,7 @@ const PageIdSchema = v.pipe(
 );
 const pageTitle = {
 	title: v.string(),
-	problem: v.nullable(v.picklist(["taken", "empty", "too-long"])),
+	problem: v.nullable(v.picklist(["taken", "empty", "too-long", "reserved"])),
 };
 const PageInfoSchema = v.object({ id: PageIdSchema, ...pageTitle });
 const CursorSchema = v.nullable(

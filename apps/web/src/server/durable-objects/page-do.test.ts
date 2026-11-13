@@ -223,6 +223,47 @@ describe("PageDO", () => {
 			expect((await directory.open("途中")).id).not.toBe(info.id);
 		});
 
+		it("知らせの予約が消えていても、同じコミットの送り直しで予約し直す", async () => {
+			// 保存したあとで予約に失敗すると、コミットは失敗として返り、端末は同じコミットを送り直す。
+			const info = await directory.open("予約し直す");
+			const stub = page(info.id);
+			const commit = { id: nextCommitId(), changes: [insertAfter(null, "a", "予約し直した名前")] };
+			await stub.commit(commit);
+			await runInDurableObject(stub, (_instance, state) => state.storage.deleteAlarm());
+
+			expect(await stub.commit(commit)).toMatchObject({ duplicate: true });
+
+			expect(await runDurableObjectAlarm(stub)).toBe(true);
+			expect((await directory.open("予約し直した名前")).id).toBe(info.id);
+		});
+
+		it("知らせ終えたあとは、送り直しが来ても予約しない", async () => {
+			const stub = page("index-settled");
+			const commit = { id: nextCommitId(), changes: [insertAfter(null, "a", "知らせ終えた")] };
+			await stub.commit(commit);
+			await runDurableObjectAlarm(stub);
+
+			await stub.commit(commit);
+
+			expect(await runDurableObjectAlarm(stub)).toBe(false);
+		});
+
+		it("知らせていない変更があることは、メモリから追い出されても覚えている", async () => {
+			const info = await directory.open("追い出される");
+			const stub = page(info.id);
+			const commit = {
+				id: nextCommitId(),
+				changes: [insertAfter(null, "a", "追い出されたあとの名前")],
+			};
+			await stub.commit(commit);
+			await runInDurableObject(stub, (_instance, state) => state.storage.deleteAlarm());
+			await evictDurableObject(stub);
+
+			await stub.commit(commit);
+
+			expect(await runDurableObjectAlarm(stub)).toBe(true);
+		});
+
 		it("行がなくなったページは、空の1行目として知らせる(名前は変わらない)", async () => {
 			const info = await directory.open("空にする");
 			const stub = page(info.id);

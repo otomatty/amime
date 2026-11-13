@@ -34,6 +34,31 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			expect((await stub.open("a")).id).not.toBe((await stub.open("b")).id);
 		});
 
+		it("IDは、名前から決まる。台帳から消えたあとで同じ名前を開いても、同じIDになる", async () => {
+			// 端末内に残した未送信の変更は、IDごとに残っている。IDが変わると、復元できなくなる。
+			const stub = project("open-stable");
+			const first = await stub.open("出張 メモ");
+			await runInDurableObject(stub, (_instance, state) => {
+				state.storage.sql.exec("DELETE FROM pages");
+			});
+
+			expect((await stub.open("出張_メモ")).id).toBe(first.id);
+		});
+
+		it("その名前から決まるIDを、名前を変えた前のページが使っていたら、次のIDにする。これも名前から決まる", async () => {
+			const stub = project("open-reused");
+			const renamed = await stub.open("名前");
+			await stub.retitle(renamed.id, saved("別の名前"));
+
+			const second = await stub.open("名前");
+			expect(second.id).not.toBe(renamed.id);
+
+			await runInDurableObject(stub, (_instance, state) => {
+				state.storage.sql.exec("DELETE FROM pages WHERE id = ?", second.id);
+			});
+			expect((await stub.open("名前")).id).toBe(second.id);
+		});
+
 		it("プロジェクトが違えば、同じ名前でも別のページ", async () => {
 			const here = await project("open-here").open("a");
 			const there = await project("open-there").open("a");
@@ -136,6 +161,18 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			expect((await stub.open("名前")).id).toBe(page.id);
 		});
 
+		it("重ならない名前は、番号を付けても、名前の長さの上限に収める", async () => {
+			const stub = project("retitle-orphan-long");
+			const long = "あ".repeat(200);
+			const page = await stub.open(long);
+			await stub.retitle(page.id, saved(long));
+
+			const adopted = await stub.retitle("unknown-page" as PageId, saved(long));
+
+			expect(adopted.title).toBe(`${"あ".repeat(196)} (2)`);
+			expect((await stub.open(adopted.title)).id).toBe("unknown-page");
+		});
+
 		it("重ならない名前は、空いている番号を探して決める", async () => {
 			const stub = project("retitle-orphan-number");
 			for (const title of ["名前", "名前 (2)"]) {
@@ -164,6 +201,25 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			expect(await stub.retitle(page.id, saved(" 　"))).toEqual({ ...page, problem: "empty" });
 		});
 
+		it.each([["."], [".."]])(
+			"1行目が %j なら、名前を変えない(URLにできない)。理由を返す",
+			async (title) => {
+				const stub = project(`retitle-reserved-${title.length}`);
+				const page = await stub.open("名前");
+
+				expect(await stub.retitle(page.id, saved(title))).toEqual({ ...page, problem: "reserved" });
+			},
+		);
+
+		it("台帳にないページの1行目が、名前にできないものなら、「無題」から名前を決める", async () => {
+			const adopted = await project("retitle-orphan-reserved").retitle(
+				"unknown-page" as PageId,
+				saved(".."),
+			);
+
+			expect(adopted).toEqual({ id: "unknown-page", title: "無題", problem: "reserved" });
+		});
+
 		it("1行目が長すぎるなら、名前を変えない。理由を返す", async () => {
 			const stub = project("retitle-long");
 			const page = await stub.open("名前");
@@ -182,6 +238,13 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				state.storage.sql.exec("UPDATE pages SET created = ? WHERE id = ?", Date.now() - age, id);
 			});
 
+		const count = (stub: ReturnType<typeof project>) =>
+			runInDurableObject(
+				stub,
+				(_instance, state) =>
+					state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM pages").one().n,
+			);
+
 		it("開いただけで保存されないまま1日たったページは、台帳から消す", async () => {
 			const stub = project("gc-old");
 			const stale = await stub.open("開いただけ");
@@ -189,7 +252,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 
 			await stub.open("別のページ");
 
-			expect((await stub.open("開いただけ")).id).not.toBe(stale.id);
+			expect(await count(stub)).toBe(1);
 		});
 
 		it("1日たっていないページと、保存されたページは消さない", async () => {

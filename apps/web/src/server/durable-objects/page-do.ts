@@ -10,9 +10,11 @@ import {
 	type Line,
 	type LineId,
 	type PageId,
+	type PageInfo,
 	type PageSnapshot,
 	parseClientMessage,
 	parseCursorPosition,
+	parsePageInfo,
 	type ServerMessage,
 } from "@amime/sync";
 import { generateKeyBetween } from "fractional-indexing";
@@ -48,9 +50,6 @@ const WS_POLICY_VIOLATION = 1008;
  * どの環境にも保存されたページがない(ADR-0017)。今後テーブルの形を変えるときは、移行を書く。
  */
 export class PageDO extends DurableObject {
-	/** 台帳にまだ知らせていない変更のうち、最初のものが入った時刻。なければ null。 */
-	#dirtySince: number | null = null;
-
 	constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
 		super(ctx, env);
 		ctx.storage.sql.exec(`
@@ -66,6 +65,10 @@ export class PageDO extends DurableObject {
 			CREATE TABLE IF NOT EXISTS commits (
 				id TEXT PRIMARY KEY,
 				version INTEGER NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS notes (
+				key TEXT PRIMARY KEY,
+				value TEXT NOT NULL
 			);
 		`);
 		// 接続が生きているかをクライアントが確かめるための応答。休止中でも、起こされずに返る。
@@ -91,6 +94,9 @@ export class PageDO extends DurableObject {
 		// 端末の識別子をタグにする。その端末のコミットを、本人の接続には配信しないため。
 		this.ctx.acceptWebSocket(serverSocket, [client]);
 		this.#send(serverSocket, { type: "hello", version: this.#version() });
+		// 台帳に確かめてあるページの名前も送る。切れているあいだに名前が変わっていても、追いつける。
+		const named = this.#named();
+		if (named !== null) this.#send(serverSocket, { type: "page", ...named });
 		for (const [owner, cursor] of others) {
 			this.#send(serverSocket, { type: "cursor", client: owner, cursor });
 		}
@@ -165,7 +171,11 @@ export class PageDO extends DurableObject {
 	 */
 	async commit(commit: Commit, client?: ClientId): Promise<CommitResult> {
 		// 同じコミットを送り直してきた(前の応答が届かなかった)。もう適用してあるので、何もしない(ADR-0021)。
-		if (this.#seen(commit.id)) return { version: this.#version(), applied: [], duplicate: true };
+		if (this.#seen(commit.id)) {
+			// 前回、保存したあとで台帳への知らせの予約に失敗していたら、ここで予約し直す。
+			await this.#scheduleIndexing();
+			return { version: this.#version(), applied: [], duplicate: true };
+		}
 
 		const { applied } = applyChanges(this.#lines(), commit.changes);
 		const version = this.#version() + (applied.length > 0 ? 1 : 0);
@@ -175,7 +185,12 @@ export class PageDO extends DurableObject {
 			this.#setMeta("version", version);
 			// 何も効かなかったコミットも覚えておく。送り直しで、あとから効いてしまわないようにする。
 			this.#remember(commit.id, version);
-			if (applied.length > 0) this.#setMeta("updated", Date.now());
+			if (applied.length > 0) {
+				const now = Date.now();
+				this.#setMeta("updated", now);
+				// 台帳に知らせていない変更がある印。最初の変更の時刻を覚えておく(知らせ終えたら 0 に戻す)。
+				if (this.#meta("dirty") === 0) this.#setMeta("dirty", now);
+			}
 		});
 		if (applied.length === 0) return { version, applied };
 		await this.#scheduleIndexing();
@@ -193,9 +208,9 @@ export class PageDO extends DurableObject {
 	 * 知らせは、編集の応答を待たせないように、アラームで行う。失敗しても、アラームがやり直す。
 	 */
 	async #scheduleIndexing(): Promise<void> {
-		const now = Date.now();
-		this.#dirtySince ??= now;
-		const at = Math.min(now + INDEX_DELAY_MS, this.#dirtySince + INDEX_MAX_WAIT_MS);
+		const dirtySince = this.#meta("dirty");
+		if (dirtySince === 0) return;
+		const at = Math.min(Date.now() + INDEX_DELAY_MS, dirtySince + INDEX_MAX_WAIT_MS);
 		await this.ctx.storage.setAlarm(at);
 	}
 
@@ -204,18 +219,37 @@ export class PageDO extends DurableObject {
 	 * 台帳は、ページの名前を1行目に合わせる。結果を、接続している端末に知らせる(URLや案内を合わせるため)。
 	 */
 	override async alarm(): Promise<void> {
-		this.#dirtySince = null;
 		// この Durable Object の名前は「プロジェクト/ページのID」。
 		const [project, page] = (this.ctx.id.name ?? "").split("/");
 		if (project === undefined || page === undefined) return;
+		const version = this.#version();
 		const info = await exports.ProjectDO.getByName(project).retitle(page as PageId, {
 			title: this.#lines()[0]?.text ?? "",
-			version: this.#version(),
+			version,
 			updated: this.#meta("updated"),
 		});
-		for (const socket of this.ctx.getWebSockets()) {
-			this.#send(socket, { type: "page", title: info.title, problem: info.problem });
-		}
+		// 知らせているあいだに変更が入っていなければ、知らせ終えたことにする。
+		// 入っていたら、その変更が次の知らせを予約している。
+		if (this.#version() === version) this.#setMeta("dirty", 0);
+
+		const named = { title: info.title, problem: info.problem };
+		this.ctx.storage.sql.exec(
+			"INSERT INTO notes (key, value) VALUES ('named', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+			JSON.stringify(named),
+		);
+		for (const socket of this.ctx.getWebSockets()) this.#send(socket, { type: "page", ...named });
+	}
+
+	/** 台帳に確かめてある、ページの名前と、名前を1行目に合わせられない理由。まだ確かめていなければ null。 */
+	#named(): Pick<PageInfo, "title" | "problem"> | null {
+		const rows = this.ctx.storage.sql
+			.exec<{ value: string }>("SELECT value FROM notes WHERE key = 'named'")
+			.toArray();
+		const stored = rows[0]?.value;
+		if (stored === undefined) return null;
+		// 自分で保存した値。ページのIDは、ここでは使わないので、形だけ合わせて検査する。
+		const parsed = parsePageInfo({ id: "self", ...JSON.parse(stored) });
+		return parsed.ok ? { title: parsed.value.title, problem: parsed.value.problem } : null;
 	}
 
 	#send(socket: WebSocket, message: ServerMessage): void {
@@ -296,14 +330,14 @@ export class PageDO extends DurableObject {
 		return this.#meta("version");
 	}
 
-	#meta(key: "version" | "updated"): number {
+	#meta(key: "version" | "updated" | "dirty"): number {
 		const rows = this.ctx.storage.sql
 			.exec<{ value: number }>("SELECT value FROM meta WHERE key = ?", key)
 			.toArray();
 		return rows[0]?.value ?? 0;
 	}
 
-	#setMeta(key: "version" | "updated", value: number): void {
+	#setMeta(key: "version" | "updated" | "dirty", value: number): void {
 		this.ctx.storage.sql.exec(
 			"INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
 			key,

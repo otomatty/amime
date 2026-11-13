@@ -26,7 +26,26 @@ type PageState = {
 	readonly updated: number;
 };
 
-const PROBLEMS: ReadonlySet<string | null> = new Set(["taken", "empty", "too-long"]);
+const PROBLEMS: ReadonlySet<string | null> = new Set(["taken", "empty", "too-long", "reserved"]);
+
+/** URLのパスの中で、別の場所を指す書き方になる名前。ページの名前にできない。 */
+const DOT_SEGMENTS: ReadonlySet<string> = new Set([".", ".."]);
+
+/** 1行目(wanted)そのものが、名前にできない理由。できるなら null。他のページとの重なりは見ない。 */
+function unusable(wanted: string): TitleProblem | null {
+	if (wanted === "") return "empty";
+	if (wanted.length > MAX_TITLE_LENGTH) return "too-long";
+	return DOT_SEGMENTS.has(wanted) ? "reserved" : null;
+}
+
+/** 文字列の SHA-256 を、16進で返す。 */
+async function sha256(text: string): Promise<string> {
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** ページIDの長さ(16進の文字数)。 */
+const PAGE_ID_LENGTH = 32;
 
 /**
  * 1プロジェクト = 1インスタンス。プロジェクトのページの台帳を持つ(ADR-0003、ADR-0024)。
@@ -56,11 +75,30 @@ export class ProjectDO extends DurableObject {
 	 * 名前からページを引く。まだなければ、IDを決めて台帳に載せる。
 	 * 載せただけのページは「開いただけ」の状態で、一覧には出ない。保存されないまま1日たつと、台帳から消える。
 	 */
-	open(name: string): PageInfo {
+	async open(name: string): Promise<PageInfo> {
 		this.#sweep();
 		const existing = this.#byTitle(toTitleLc(name));
 		if (existing !== null) return toInfo(existing);
-		return this.#insert(crypto.randomUUID() as PageId, titleFromName(name), null, 0);
+		const id = await this.#newId(toTitleLc(name));
+		// IDを決めているあいだに、同じ名前が載っていたら、そちらを返す。
+		const raced = this.#byTitle(toTitleLc(name));
+		return raced === null ? this.#insert(id, titleFromName(name), null, 0) : toInfo(raced);
+	}
+
+	/**
+	 * まだないページのIDを決める。IDは、名前から決まる(プロジェクト、名前、0 から数えた番号のハッシュ)。
+	 *
+	 * 「開いただけ」のページが台帳から消えたあとで、同じ名前をもう一度開いても、同じIDになる。
+	 * 端末内に残した未送信の変更は、IDごとに残っている(ADR-0020)。IDが変わると、復元できなくなる。
+	 * その名前から決まるIDを、名前を変えたあとの前のページが使っていたら、次の番号のIDにする。
+	 */
+	async #newId(titleLc: string): Promise<PageId> {
+		for (let number = 0; ; number += 1) {
+			// プロジェクト(この Durable Object の名前)も含める。別のプロジェクトの同じ名前のページと、IDが重ならない。
+			const source = `${this.ctx.id.name}\n${titleLc}\n${number}`;
+			const id = (await sha256(source)).slice(0, PAGE_ID_LENGTH) as PageId;
+			if (this.#byId(id) === null) return id;
+		}
 	}
 
 	/**
@@ -90,8 +128,8 @@ export class ProjectDO extends DurableObject {
 
 	/** 1行目(wanted)を名前にできない理由。できるなら null。 */
 	#problemOf(wanted: string, row: PageRow): TitleProblem | null {
-		if (wanted === "") return "empty";
-		if (wanted.length > MAX_TITLE_LENGTH) return "too-long";
+		const problem = unusable(wanted);
+		if (problem !== null) return problem;
 		const holder = this.#byTitle(toTitleLc(wanted));
 		// 開いただけで保存されていないページの名前は、空いているものとして扱う。
 		return holder === null || holder.id === row.id || holder.version === 0 ? null : "taken";
@@ -107,20 +145,28 @@ export class ProjectDO extends DurableObject {
 
 	/** 台帳にないページを、重ならない名前で載せる。 */
 	#adopt(id: PageId, wanted: string, state: PageState): PageInfo {
-		const usable = wanted !== "" && wanted.length <= MAX_TITLE_LENGTH;
-		const base = usable ? wanted : UNTITLED;
+		const problem = unusable(wanted);
+		const base = problem === null ? wanted : UNTITLED;
 		const holder = this.#byTitle(toTitleLc(base));
 		if (holder !== null && holder.version === 0) this.#evictPlaceholder(base);
 		const free = holder === null || holder.version === 0;
-		const problem = usable ? (free ? null : "taken") : wanted === "" ? "empty" : "too-long";
 		const title = free ? base : this.#numbered(base);
-		return this.#insert(id, title, problem, state.version, state.updated);
+		return this.#insert(
+			id,
+			title,
+			problem ?? (free ? null : "taken"),
+			state.version,
+			state.updated,
+		);
 	}
 
-	/** 「名前 (2)」「名前 (3)」…のうち、空いている最初のもの。 */
+	/** 「名前 (2)」「名前 (3)」…のうち、空いている最初のもの。番号を付けても、名前の長さの上限に収める。 */
 	#numbered(base: string): string {
 		for (let number = 2; ; number += 1) {
-			const candidate = `${base} (${number})`;
+			const suffix = ` (${number})`;
+			// 文字(サロゲートの組)の途中で切れたら、残った片方を取り除く。
+			const head = base.slice(0, MAX_TITLE_LENGTH - suffix.length);
+			const candidate = `${head.isWellFormed() ? head : head.slice(0, -1)}${suffix}`;
 			if (this.#byTitle(toTitleLc(candidate)) === null) return candidate;
 		}
 	}

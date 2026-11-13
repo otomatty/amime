@@ -77,6 +77,9 @@ describe("parsePageInfo", () => {
 
 		expect(parsePageInfo(named)).toEqual({ ok: true, value: named });
 		expect(parsePageInfo(blocked)).toEqual({ ok: true, value: blocked });
+		for (const problem of ["empty", "too-long", "reserved"]) {
+			expect(parsePageInfo({ ...named, problem }).ok).toBe(true);
+		}
 	});
 
 	it.each([

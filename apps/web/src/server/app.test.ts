@@ -100,6 +100,35 @@ describe("ページのAPI", () => {
 		expect(await response.json()).toEqual({ version: 1, applied: [], duplicate: true });
 	});
 
+	it("接続したとき、台帳に確かめてあるページの名前も届く(切れているあいだに名前が変わっていても、追いつく)", async () => {
+		const info = (await (await get("/api/pages/by-title/ws-name")).json()) as { id: string };
+		const stub = exports.PageDO.getByName(`default/${info.id}`);
+		await post(`/api/pages/${info.id}/commits`, {
+			id: commitId(),
+			changes: [
+				{ type: "insert", line: { id: "t", text: "ws 新しい名前" }, after: null, before: null },
+			],
+		});
+		await runDurableObjectAlarm(stub);
+
+		const response = await exports.default.fetch(
+			`https://amime.test/api/pages/${info.id}/socket?client=late`,
+			{ headers: { Upgrade: "websocket" } },
+		);
+		const messages: unknown[] = [];
+		response.webSocket?.accept();
+		response.webSocket?.addEventListener("message", ({ data }) => {
+			messages.push(JSON.parse(String(data)));
+		});
+
+		await vi.waitFor(() =>
+			expect(messages).toEqual([
+				{ type: "hello", version: 1 },
+				{ type: "page", title: "ws 新しい名前", problem: null },
+			]),
+		);
+	});
+
 	describe("名前からページを引く(ADR-0024)", () => {
 		const open = async (title: string) => {
 			const response = await get(`/api/pages/by-title/${encodeURIComponent(title)}`);

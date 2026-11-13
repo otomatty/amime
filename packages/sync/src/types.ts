@@ -65,8 +65,9 @@ export type PageId = string & { readonly __brand: "PageId" };
  * - taken: 同じ名前のページが、すでにある
  * - empty: 1行目が空
  * - too-long: 1行目が、名前にするには長すぎる
+ * - reserved: 1行目が「.」か「..」(URLの中で、別の場所を指す書き方になる)
  */
-export type TitleProblem = "taken" | "empty" | "too-long";
+export type TitleProblem = "taken" | "empty" | "too-long" | "reserved";
 
 /** 台帳にある、ページの情報。 */
 export type PageInfo = {
