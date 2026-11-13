@@ -23,14 +23,18 @@ test.describe("起動確認", () => {
 	test("SPAなので、未知のパスでもアプリが表示される", async ({ page }) => {
 		await page.goto("/some-project/some-page");
 
-		await expect(page.getByRole("heading", { level: 1, name: "Amime" })).toBeVisible();
+		await expect(page.getByRole("heading", { level: 1 })).toContainText("Amime");
+		// ないプロジェクトなので、そのことが表示される。
+		await expect(page.getByText(/ないか、見る権限がありません/)).toBeVisible();
 	});
 
-	test("E2E用のビルドでは、ページのAPIが有効になっている", async ({ request }) => {
-		const response = await request.get("/api/pages/e2e-smoke");
+	test("E2E用のビルドでは、開発用のログインが使え、メンバーとしてページを読める", async ({
+		request,
+	}) => {
+		const response = await request.get("/api/projects/e2e/pages/e2e-smoke");
 
-		// 403 なら、本番用のビルドを起動している。`pnpm test:e2e` で実行すること。
 		expect(response.status()).toBe(200);
+		expect(await response.json()).toEqual({ version: 0, lines: [] });
 	});
 
 	test("APIはWorkerが応答する", async ({ request }) => {

@@ -42,8 +42,10 @@ type Loaded =
 type PageListProps = {
 	/** 別のページへ移る。テストで差し替える。 */
 	readonly navigate?: (href: string) => void;
-	/** ページのAPIが無効な環境で、一覧の代わりに表示する内容。 */
+	/** 一覧を見る権限がないときに、代わりに表示する内容。 */
 	readonly whenDisabled?: ReactNode;
+	/** 読むだけにするか(メンバーでない人が、公開のプロジェクトを見ている)。新しいページを作る欄を出さない。 */
+	readonly readOnly?: boolean;
 };
 
 /**
@@ -53,6 +55,7 @@ type PageListProps = {
 export function PageList({
 	navigate = (href) => window.location.assign(href),
 	whenDisabled = null,
+	readOnly = false,
 }: PageListProps) {
 	const [sort, setSort] = useState<PageSort>(sortFromUrl);
 	const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
@@ -128,13 +131,19 @@ export function PageList({
 	return (
 		<section className="page-list" aria-label="ページの一覧">
 			<div className="page-list-tools">
-				<form className="new-page" onSubmit={create}>
-					<label>
-						新しいページの名前
-						<input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} />
-					</label>
-					<button type="submit">作る</button>
-				</form>
+				{!readOnly && (
+					<form className="new-page" onSubmit={create}>
+						<label>
+							新しいページの名前
+							<input
+								value={name}
+								onChange={(event) => setName(event.target.value)}
+								maxLength={200}
+							/>
+						</label>
+						<button type="submit">作る</button>
+					</form>
+				)}
 				<label className="page-sort">
 					並び順
 					<select
@@ -164,7 +173,8 @@ export function PageList({
 			)}
 			{loaded.status === "ready" && loaded.pages.length === 0 && (
 				<p className="page-message">
-					まだページがありません。上の欄に名前を入れて、最初のページを作りましょう。
+					まだページがありません。
+					{!readOnly && "上の欄に名前を入れて、最初のページを作りましょう。"}
 				</p>
 			)}
 			{loaded.status === "ready" && loaded.pages.length > 0 && <PageCards pages={loaded.pages} />}

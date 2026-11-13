@@ -90,6 +90,11 @@ const WS_NORMAL = 1000;
 const WS_POLICY_VIOLATION = 1008;
 
 /**
+ * 読むだけの人の接続に付けるタグ。端末の識別子(英数字と - と _)とは重ならない形にする。
+ */
+const VIEWER_TAG = "access:read";
+
+/**
  * 1ページ = 1インスタンス。ページへのコミットをここで直列化する。
  * 正となるデータは常にSQLiteにあり、メモリには状態を持たない。
  *
@@ -138,7 +143,10 @@ export class PageDO extends DurableObject {
 	 * 要求の検査(切り替えの要求であること、端末の識別子)は、呼び出す Worker の側で済ませてある。
 	 */
 	override fetch(request: Request): Response {
-		const client = new URL(request.url).searchParams.get("client") ?? "";
+		const query = new URL(request.url).searchParams;
+		const client = query.get("client") ?? "";
+		// 読むだけの人(公開のプロジェクトを見ている、メンバーでない人)の接続か。Worker が付けた印で決まる。
+		const viewer = query.get("access") === "read";
 		const { 0: clientSocket, 1: serverSocket } = new WebSocketPair();
 		if (this.#deleted()) {
 			// 削除されたページ。接続は受け付けて、削除されたことだけを伝えて閉じる
@@ -157,7 +165,8 @@ export class PageDO extends DurableObject {
 			if (owner !== client && cursor !== null) others.set(owner, cursor);
 		}
 		// 端末の識別子をタグにする。その端末のコミットを、本人の接続には配信しないため。
-		this.ctx.acceptWebSocket(serverSocket, [client]);
+		// 読むだけの人の接続には、もう1つタグを付ける。
+		this.ctx.acceptWebSocket(serverSocket, viewer ? [client, VIEWER_TAG] : [client]);
 		this.#send(serverSocket, { type: "hello", version: this.#version() });
 		// 台帳に確かめてあるページの名前も送る。切れているあいだに名前が変わっていても、追いつける。
 		const named = this.#named();
@@ -179,6 +188,8 @@ export class PageDO extends DurableObject {
 			socket.close(WS_POLICY_VIOLATION, "unexpected message");
 			return;
 		}
+		// 読むだけの人のカーソルは、配らない(書いている人の画面に、知らない人のカーソルを出さない)。
+		if (this.ctx.getTags(socket).includes(VIEWER_TAG)) return;
 		const { cursor } = parsed.value;
 		const client = this.#clientOf(socket);
 		// 同じ端末の接続がいくつかあっても(つなぎ直しの途中)、どの接続にも同じ位置を覚えさせる。

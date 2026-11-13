@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 
+// ログインしていない状態から始める。
+test.use({ storageState: { cookies: [], origins: [] } });
+
 test.describe("ログイン", () => {
 	test("開発用のログインでログインでき、再読み込みしてもログインしたまま。ログアウトできる", async ({
 		page,

@@ -14,7 +14,7 @@ async function clickLineEnd(page: Page, index: number) {
 
 /** 本文のあるページを作る。 */
 async function createPage(page: Page, name: string, ...body: string[]) {
-	await page.goto(`/${name}`);
+	await page.goto(`/e2e/${name}`);
 	await clickLineEnd(page, 0);
 	for (const text of body) {
 		await page.keyboard.press("Enter");
@@ -116,7 +116,7 @@ test.describe("本文からページを探す", () => {
 
 	test("見つからなければ、そのことが分かる。Enter だけでも、本文から探せる", async ({ page }) => {
 		const words = `どこにもない言葉 ${randomUUID()}`;
-		await page.goto("/");
+		await page.goto("/e2e/");
 
 		await search(page).fill(words);
 		// 合う名前がないので、「本文から探す」が選ばれている。

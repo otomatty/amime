@@ -1123,4 +1123,25 @@ describe("Editor", () => {
 			]);
 		});
 	});
+	describe("読むだけの表示(readOnly)", () => {
+		it("入力を受け取る欄を置かず、押してもカーソルを出さない。リンクは、そのまま使える", () => {
+			render(<Editor initialLines={["題", "[買い物] を見る"]} readOnly />);
+
+			expect(screen.queryByRole("textbox", { name: "ページの本文" })).toBeNull();
+			const editor = screen.getByTestId("editor");
+			expect(editor.getAttribute("data-readonly")).toBe("true");
+			const allowed = fireEvent.mouseDown(screen.getAllByTestId("line")[1] as HTMLElement);
+			// ブラウザの既定の動作(文字を選ぶ)を、止めない。
+			expect(allowed).toBe(true);
+			expect(editor.getAttribute("data-focused")).toBe("false");
+			expect(editor.querySelector(".caret")).toBeNull();
+			expect(screen.getByRole("link", { name: "買い物" })).toBeDefined();
+		});
+
+		it("読むだけでないとき(既定)は、印を付けない", () => {
+			render(<Editor initialLines={["題"]} />);
+
+			expect(screen.getByTestId("editor").hasAttribute("data-readonly")).toBe(false);
+		});
+	});
 });

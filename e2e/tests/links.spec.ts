@@ -15,7 +15,7 @@ async function clickLineEnd(page: Page, index: number) {
 
 /** 本文のあるページを作る。 */
 async function createPage(page: Page, name: string, ...body: string[]) {
-	await page.goto(`/${name}`);
+	await page.goto(`/e2e/${name}`);
 	await clickLineEnd(page, 0);
 	for (const text of body) {
 		await page.keyboard.press("Enter");
@@ -52,7 +52,7 @@ test.describe("リンクでつながる", () => {
 		await expect(status(page)).toHaveText("保存済み");
 		// 元のページには、リンク先のページが、関連するページとして並ぶ。
 		await expect(async () => {
-			await page.goto(`/${from}`);
+			await page.goto(`/e2e/${from}`);
 			await expect(related(page).getByRole("heading", { name: to })).toBeVisible({ timeout: 1000 });
 		}).toPass();
 		await expect(page.locator("[data-missing]")).toHaveCount(0);
@@ -67,7 +67,7 @@ test.describe("リンクでつながる", () => {
 
 		// 2つめのページが台帳に反映されると、1つめのページにも出る。
 		await expect(async () => {
-			await page.goto(`/${first}`);
+			await page.goto(`/e2e/${first}`);
 			await expect(related(page)).toBeVisible({ timeout: 1000 });
 		}).toPass();
 		const group = related(page).getByRole("group");
@@ -96,11 +96,11 @@ test.describe("リンクでつながる", () => {
 		await createPage(page, from, `[${target}] を読む`, `#${target}`);
 		// リンク元を、別の画面で開いたままにしておく。
 		const other = await context.newPage();
-		await other.goto(`/${from}`);
+		await other.goto(`/e2e/${from}`);
 		await expect(other.getByTestId("connection")).toHaveText("オンライン");
 
 		// 1行目を書き換えて、名前を変える。
-		await page.goto(`/${target}`);
+		await page.goto(`/e2e/${target}`);
 		await clickLineEnd(page, 0);
 		await page.keyboard.type("-renamed");
 		await expect(page).toHaveURL(new RegExp(`/${target}-renamed$`));
@@ -123,7 +123,7 @@ test.describe("リンクでつながる", () => {
 		// 他のテストのページと混ざらないように、このテストだけの語を名前に入れる。
 		const token = randomUUID().slice(0, 8);
 		await createPage(page, `${token}_買い物_メモ`, "牛乳");
-		await page.goto(`/${newPageName()}`);
+		await page.goto(`/e2e/${newPageName()}`);
 		await clickLineEnd(page, 0);
 		await page.keyboard.press("Enter");
 		const options = page.getByRole("option");

@@ -44,8 +44,8 @@ afterEach(() => {
 });
 
 describe("TitleSearch(名前でページを探す)", () => {
-	it("ページのAPIが無効な環境では、探す欄を出さない", async () => {
-		const fetchMock = stubTitles(() => json({ error: "page-api-disabled" }, 403));
+	it("権限がないときは、探す欄を出さない", async () => {
+		const fetchMock = stubTitles(() => json({ error: "read-only" }, 403));
 
 		render(<TitleSearch />);
 
@@ -177,7 +177,17 @@ describe("TitleSearch(名前でページを探す)", () => {
 		expect(options()).toEqual([]);
 		expect(active()).toBe("「ない 名前」を本文から探す");
 		fireEvent.keyDown(input(), { key: "Enter" });
-		expect(navigate).toHaveBeenCalledExactlyOnceWith(`/?q=${encodeURIComponent("ない 名前")}`);
+		expect(navigate).toHaveBeenCalledExactlyOnceWith(`./?q=${encodeURIComponent("ない 名前")}`);
+	});
+
+	it("プロジェクトがない(見る権限がない)ときも、何も出さない", async () => {
+		const fetchMock = stubTitles(() => json({ error: "unknown-project" }, 404));
+
+		render(<TitleSearch />);
+
+		await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+		await new Promise((done) => setTimeout(done, 0));
+		expect(screen.queryByRole("combobox")).toBeNull();
 	});
 
 	it("入力を変えたら、選んでいた位置を最初に戻す(候補が届かなくても、出ている項目を選んでいる)", async () => {
@@ -203,7 +213,7 @@ describe("TitleSearch(名前でページを探す)", () => {
 		expect(active()).toBe("「買う」を本文から探す");
 		expect(input().getAttribute("aria-activedescendant")).toBe(fullText()?.id);
 		fireEvent.keyDown(input(), { key: "Enter" });
-		expect(navigate).toHaveBeenCalledExactlyOnceWith(`/?q=${encodeURIComponent("買う")}`);
+		expect(navigate).toHaveBeenCalledExactlyOnceWith(`./?q=${encodeURIComponent("買う")}`);
 	});
 
 	it("入力があるあいだは、候補の最後に「本文から探す」の項目を出す。選ぶと、本文を探した結果へ移る", async () => {
@@ -222,12 +232,12 @@ describe("TitleSearch(名前でページを探す)", () => {
 		if (item === null) throw new Error("no full-text option");
 		fireEvent.mouseDown(item);
 
-		expect(navigate).toHaveBeenCalledExactlyOnceWith(`/?q=${encodeURIComponent("牛乳")}`);
+		expect(navigate).toHaveBeenCalledExactlyOnceWith(`./?q=${encodeURIComponent("牛乳")}`);
 	});
 
 	it("本文を探した結果を開いているときは、探した語を欄に入れておく", async () => {
 		stubTitles(() => json({ titles: [] }));
-		window.history.replaceState(null, "", `/?q=${encodeURIComponent("牛乳 卵")}`);
+		window.history.replaceState(null, "", `./?q=${encodeURIComponent("牛乳 卵")}`);
 
 		await renderSearch();
 

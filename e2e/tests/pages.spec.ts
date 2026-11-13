@@ -16,7 +16,7 @@ async function clickLineEnd(page: Page, index: number) {
 
 /** 本文のあるページを作る。 */
 async function createPage(page: Page, name: string, ...body: string[]) {
-	await page.goto(`/${name}`);
+	await page.goto(`/e2e/${name}`);
 	await clickLineEnd(page, 0);
 	for (const text of body) {
 		await page.keyboard.press("Enter");
@@ -53,7 +53,7 @@ test.describe("ページの一覧", () => {
 
 		// 一覧に載るのは、書き換えが落ち着いてから。
 		await expect(async () => {
-			await page.goto("/");
+			await page.goto("/e2e/");
 			await expect(cardOf(page, name)).toBeVisible({ timeout: 1000 });
 		}).toPass();
 		const card = cardOf(page, name);
@@ -77,7 +77,7 @@ test.describe("ページの一覧", () => {
 
 		// 一覧に載るのは、書き換えが落ち着いてから。
 		await expect(async () => {
-			await page.goto("/");
+			await page.goto("/e2e/");
 			await expect(mine()).toHaveText([`${prefix}-b`, `${prefix}-a`], { timeout: 1000 });
 		}).toPass();
 
@@ -94,7 +94,7 @@ test.describe("ページの一覧", () => {
 
 	test("名前を入れて、新しいページを書き始められる", async ({ page }) => {
 		const name = newPageName();
-		await page.goto("/");
+		await page.goto("/e2e/");
 
 		await page.getByLabel("新しいページの名前").fill(`${name} メモ`);
 		await page.getByRole("button", { name: "作る" }).click();
@@ -112,22 +112,22 @@ test.describe("ページの一覧", () => {
 		await createPage(page, `${prefix}-b`, "あとで書いた");
 		const mine = () => cards(page).filter({ hasText: prefix }).getByRole("heading");
 
-		await page.goto(`/${prefix}-a`);
+		await page.goto(`/e2e/${prefix}-a`);
 		await page.getByRole("button", { name: "一覧の先頭に固定する" }).click();
 		await expect(page.getByRole("button", { name: "固定を外す" })).toBeVisible();
 
 		// 更新が新しいのは b だが、固定した a が先に並ぶ。
 		await expect(async () => {
-			await page.goto("/");
+			await page.goto("/e2e/");
 			await showAllCards(page);
 			await expect(mine()).toHaveText([`${prefix}-a`, `${prefix}-b`], { timeout: 1000 });
 		}).toPass();
 		await expect(cardOf(page, `${prefix}-a`).getByText("固定", { exact: true })).toBeVisible();
 
-		await page.goto(`/${prefix}-a`);
+		await page.goto(`/e2e/${prefix}-a`);
 		await page.getByRole("button", { name: "固定を外す" }).click();
 		await expect(page.getByRole("button", { name: "一覧の先頭に固定する" })).toBeVisible();
-		await page.goto("/");
+		await page.goto("/e2e/");
 		await showAllCards(page);
 		await expect(mine()).toHaveText([`${prefix}-b`, `${prefix}-a`]);
 	});
@@ -139,14 +139,14 @@ test.describe("ページの一覧", () => {
 		const name = newPageName();
 		await createPage(page, name, "消す本文");
 		await expect(async () => {
-			await page.goto("/");
+			await page.goto("/e2e/");
 			await showAllCards(page);
 			await expect(cardOf(page, name)).toBeVisible({ timeout: 1000 });
 		}).toPass();
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await expect(status(page)).toHaveText("保存済み");
 		const other = await context.newPage();
-		await other.goto(`/${name}`);
+		await other.goto(`/e2e/${name}`);
 		await expect(other.getByTestId("connection")).toHaveText("オンライン");
 
 		await page.getByRole("button", { name: "このページを削除" }).click();
@@ -163,16 +163,27 @@ test.describe("ページの一覧", () => {
 		);
 		await expect(other.getByTestId("line").nth(1)).toHaveAttribute("data-text", "消す本文");
 		// 同じ名前を開くと、前の本文を引き継がない、新しいページになる。
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await expect(status(page)).toHaveText("新しいページです。書き始めると保存されます");
 		await expect(page.getByTestId("line")).toHaveCount(1);
 	});
 
-	test("見出しを押すと、どのページからでもトップへ戻れる", async ({ page }) => {
-		await page.goto(`/${newPageName()}`);
+	test("見出しのプロジェクトの名前を押すと、どのページからでも、ページの一覧へ戻れる", async ({
+		page,
+	}) => {
+		await page.goto(`/e2e/${newPageName()}`);
+
+		await page.getByRole("link", { name: "e2e", exact: true }).click();
+
+		await expect(page.getByRole("region", { name: "ページの一覧" })).toBeVisible();
+	});
+
+	test("見出しの Amime を押すと、参加しているプロジェクトの一覧へ戻れる", async ({ page }) => {
+		await page.goto(`/e2e/${newPageName()}`);
 
 		await page.getByRole("link", { name: "Amime" }).click();
 
-		await expect(page.getByRole("region", { name: "ページの一覧" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "プロジェクト", exact: true })).toBeVisible();
+		await expect(page.getByRole("link", { name: "e2e", exact: true })).toBeVisible();
 	});
 });

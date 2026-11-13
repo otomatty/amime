@@ -1,6 +1,6 @@
 # ADR-0009: 認証は Google ログイン、参加は招待制にする
 
-- 状態: 採用(セッションの持ち方は [ADR-0032](0032-login-and-sessions.md) で変更)
+- 状態: 採用(セッションの持ち方は [ADR-0032](0032-login-and-sessions.md) で変更。「P4までの扱い」は [ADR-0033](0033-projects-and-access.md) で終了)
 - 日付: 2026-11-11
 
 ## 状況

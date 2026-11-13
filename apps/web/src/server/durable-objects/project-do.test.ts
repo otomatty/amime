@@ -36,6 +36,35 @@ const saved = (
 });
 
 describe("ProjectDO(プロジェクトのページの台帳)", () => {
+	describe("find(名前からページを引く。まだないページのIDは、決めない)", () => {
+		it("開いたことのあるページは、open と同じものを返す(大文字と小文字、空白かアンダースコアかは区別しない)", async () => {
+			const stub = project("find-existing");
+			const opened = await stub.open("Shopping List");
+
+			expect(await stub.find("shopping_list")).toEqual(opened);
+		});
+
+		it("まだない名前は null。台帳は、変わらない", async () => {
+			const stub = project("find-missing");
+
+			expect(await stub.find("まだない")).toBeNull();
+			expect(await stub.find("まだない")).toBeNull();
+			await runInDurableObject(stub, (_instance, state) => {
+				expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM pages").one()).toEqual({ n: 0 });
+			});
+		});
+	});
+
+	describe("has(台帳に、そのIDのページがあるか)", () => {
+		it("開いたことのあるページは true。知らないIDは false", async () => {
+			const stub = project("has");
+			const opened = await stub.open("買い物");
+
+			expect(await stub.has(opened.id)).toBe(true);
+			expect(await stub.has("unknown" as PageId)).toBe(false);
+		});
+	});
+
 	describe("open(名前からページを引く)", () => {
 		it("まだない名前を開くと、新しいIDを決める。名前は、URLの名前から作る", async () => {
 			const info = await project("open-new").open("買い物_メモ");

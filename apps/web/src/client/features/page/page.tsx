@@ -33,6 +33,8 @@ import "./page.css";
 type PageProps = {
 	/** ページ名。URLのパスから求めたもの。 */
 	readonly name: string;
+	/** 読むだけにするか(メンバーでない人が、公開のプロジェクトを見ている)。 */
+	readonly readOnly?: boolean;
 };
 
 /** サーバーからの読み込みの進み具合。 */
@@ -81,14 +83,20 @@ function Pending({ state }: { readonly state: Loading<unknown> }) {
 	if (state.kind === "gone") {
 		return (
 			<p className="page-message">
-				このページは削除されました。<a href="/">ページの一覧</a>へ戻れます。
+				このページは削除されました。<a href="./">ページの一覧</a>へ戻れます。
+			</p>
+		);
+	}
+	if (state.kind === "missing") {
+		return (
+			<p className="page-message">
+				このページは、まだありません。<a href="./">ページの一覧</a>へ戻れます。
 			</p>
 		);
 	}
 	return state.kind === "disabled" ? (
 		<p className="page-message">
-			この環境では、ページの保存と読み込みはまだ使えません。ログインの仕組みができるまで、公開している環境では止めています。
-			<a href="/">試し書きのページ</a>は使えます。
+			このページを見る権限がありません。ログインし直すと、見られることがあります。
 		</p>
 	) : (
 		<p className="page-message">
@@ -137,14 +145,14 @@ const WITHOUT_TOOLS: ReadonlySet<SyncStatus> = new Set(["new", "deleted"]);
  * 保存されるページ。URLの中の名前からページを引き、読み込んでから編集欄を表示する。
  * ページは、名前を変えても変わらないIDで識別する(ADR-0024)。
  */
-export function Page({ name }: PageProps) {
+export function Page({ name, readOnly = false }: PageProps) {
 	const opened = useLoading(useCallback(() => openPage(name), [name]));
 	if (opened.status !== "ready") return <Pending state={opened} />;
-	return <OpenedPage key={opened.value.id} info={opened.value} />;
+	return <OpenedPage key={opened.value.id} info={opened.value} readOnly={readOnly} />;
 }
 
 /** IDの分かったページ。保存されている内容を読み込み、前回送れなかった変更を復元する。 */
-function OpenedPage({ info }: { readonly info: PageInfo }) {
+function OpenedPage({ info, readOnly }: { readonly info: PageInfo; readonly readOnly: boolean }) {
 	// 端末(タブ)の識別子は、ページを開くたびに作る。
 	const { api, pending } = useMemo(() => {
 		const client = createClientId();
@@ -173,6 +181,7 @@ function OpenedPage({ info }: { readonly info: PageInfo }) {
 			noticed={loaded.value.noticed}
 			api={api}
 			pending={pending}
+			readOnly={readOnly}
 		/>
 	);
 }
@@ -223,9 +232,19 @@ type PageEditorProps = {
 	readonly noticed: boolean;
 	readonly api: PageApi;
 	readonly pending: PendingStore;
+	/** 読むだけにするか(メンバーでない人が、公開のプロジェクトを見ている)。 */
+	readonly readOnly: boolean;
 };
 
-function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEditorProps) {
+function PageEditor({
+	info,
+	snapshot,
+	restored,
+	noticed,
+	api,
+	pending,
+	readOnly,
+}: PageEditorProps) {
 	// ページを開いたときの名前。まだないページの1行目に入れる(あとで名前が変わっても、入れ直さない)。
 	const [title] = useState(info.title);
 	// ページのいまの名前と、名前を1行目に合わせられない理由。1行目を変えると、サーバーが名前を合わせて知らせてくる。
@@ -312,12 +331,18 @@ function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEdi
 
 	return (
 		<>
-			{!WITHOUT_TOOLS.has(status) && (
+			{!readOnly && !WITHOUT_TOOLS.has(status) && (
 				<PageTools id={info.id} pinned={pinned} onPinned={setPinned} />
 			)}
-			<p className="page-status" role="status" data-status={status}>
-				{STATUS_LABELS[status]}
-			</p>
+			{readOnly ? (
+				<p className="page-status" role="status" data-status="read-only">
+					読むだけの表示です。書き込めるのは、このプロジェクトのメンバーだけです
+				</p>
+			) : (
+				<p className="page-status" role="status" data-status={status}>
+					{STATUS_LABELS[status]}
+				</p>
+			)}
 			{/* 保存の状態(上)とは別に示す。切れていても、書いたものは端末内に残り、つながったら送られる。 */}
 			<p className="page-connection" data-testid="connection" data-connection={connection}>
 				{CONNECTION_LABELS[connection]}
@@ -340,7 +365,7 @@ function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEdi
 				others={others}
 				onCursor={handleCursor}
 				missingLinks={missing}
-				completeTitles={searchTitles}
+				{...(readOnly ? { readOnly } : { completeTitles: searchTitles })}
 			/>
 			<RelatedPages links={links} />
 		</>

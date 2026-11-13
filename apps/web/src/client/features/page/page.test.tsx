@@ -9,7 +9,7 @@ type Handler = (url: string, init?: RequestInit) => Response | Promise<Response>
 
 /** テストで開くページのID。 */
 const PAGE_ID = "p1";
-const BY_TITLE = "/api/pages/by-title/";
+const BY_TITLE = "/api/projects/team/pages/by-title/";
 
 /**
  * fetch を差し替える。名前からページを引く要求には、決まったIDと、URLの名前から作った名前を返す。
@@ -33,7 +33,8 @@ function stubFetch(
 	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
 		// ページのつながりにも、ここで答える。
 		if (url.endsWith("/links")) return info.links?.() ?? json(NO_LINKS);
-		if (url.startsWith("/api/pages/titles")) return json({ titles: info.titles ?? [] });
+		if (url.startsWith("/api/projects/team/pages/titles"))
+			return json({ titles: info.titles ?? [] });
 		if (!url.startsWith(BY_TITLE)) return fetchMock(url, init);
 		const name = decodeURIComponent(url.slice(BY_TITLE.length));
 		const title = info.title ?? name.replaceAll("_", " ");
@@ -522,7 +523,8 @@ describe("Page", () => {
 			render(<Page name="買い物" />);
 
 			await waitFor(() => expect(screen.getByText(/このページは削除されました/)).toBeDefined());
-			expect(screen.getByRole("link", { name: "ページの一覧" }).getAttribute("href")).toBe("/");
+			// プロジェクトのトップ(同じ階層)へ戻る。
+			expect(screen.getByRole("link", { name: "ページの一覧" }).getAttribute("href")).toBe("./");
 		});
 	});
 
@@ -546,12 +548,21 @@ describe("Page", () => {
 			await waitFor(() => expect(lines()).toEqual(["買い物"]));
 		});
 
-		it("ページのAPIが無効な環境では、名前を引く時点で、そのことを表示する", async () => {
-			vi.stubGlobal("fetch", async () => json({ error: "page-api-disabled" }, 403));
+		it("見る権限がなければ、名前を引く時点で、そのことを表示する", async () => {
+			vi.stubGlobal("fetch", async () => json({ error: "read-only" }, 403));
 
 			render(<Page name="買い物" />);
 
-			await waitFor(() => expect(screen.getByText(/まだ使えません/)).toBeDefined());
+			await waitFor(() => expect(screen.getByText(/見る権限がありません/)).toBeDefined());
+		});
+
+		it("まだないページを、読むだけの人が開いたら、ないことを伝え、一覧へ戻れるようにする", async () => {
+			vi.stubGlobal("fetch", async () => json({ error: "unknown-page" }, 404));
+
+			render(<Page name="買い物" readOnly />);
+
+			await waitFor(() => expect(screen.getByText(/このページは、まだありません/)).toBeDefined());
+			expect(screen.getByRole("link", { name: "ページの一覧" }).getAttribute("href")).toBe("./");
 		});
 
 		it("引いたIDのページを読み込む。未送信の変更も、IDごとに残す", async () => {
@@ -560,27 +571,27 @@ describe("Page", () => {
 			render(<Page name="買い物" />);
 
 			await waitFor(() => expect(lines()).toEqual(["買い物"]));
-			expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${PAGE_ID}`, undefined);
+			expect(fetchMock).toHaveBeenCalledWith(`/api/projects/team/pages/${PAGE_ID}`, undefined);
 		});
 
 		it("URLの名前が、ページの名前と表記だけ違うときは、URLをページの名前に合わせる", async () => {
-			window.history.replaceState(null, "", "/notes/kaimono_MEMO");
+			window.history.replaceState(null, "", "/team/kaimono_MEMO");
 			stubFetch(() => json(saved), { title: "Kaimono Memo" });
 
 			render(<Page name="kaimono_MEMO" />);
 
 			// URLは、編集欄を表示したあとで合わせる。
-			await waitFor(() => expect(path()).toBe("/notes/Kaimono_Memo"));
+			await waitFor(() => expect(path()).toBe("/team/Kaimono_Memo"));
 			expect(lines()).toEqual(["買い物"]);
 		});
 
 		it("ページの名前が変わったと知らされたら、URLを新しい名前に合わせる(再読み込みしても同じページが開く)", async () => {
-			window.history.replaceState(null, "", `/${encodeURIComponent("買い物")}`);
+			window.history.replaceState(null, "", `/team/${encodeURIComponent("買い物")}`);
 			const { receive } = await openWithSocket();
 
 			receive({ type: "page", title: "買い物 メモ", problem: null });
 
-			expect(path()).toBe("/買い物_メモ");
+			expect(path()).toBe("/team/買い物_メモ");
 			expect(screen.queryByRole("note")).toBeNull();
 		});
 
@@ -707,14 +718,20 @@ describe("Page", () => {
 		expect(leave()).toBe(false);
 	});
 
-	it("ページのAPIが無効な環境では、使えないことを伝える", async () => {
-		stubFetch(() => json({ error: "page-api-disabled" }, 403));
+	it("読むだけの表示では、そのことを伝え、ページの操作(固定、削除)を出さない。本文は見える", async () => {
+		stubFetch(() => json(saved));
 
-		render(<Page name="買い物" />);
+		render(<Page name="買い物" readOnly />);
 
-		expect(
-			await screen.findByText(/この環境では、ページの保存と読み込みはまだ使えません/),
-		).toBeDefined();
+		await waitFor(() =>
+			expect(screen.getByRole("status").textContent).toMatch(/読むだけの表示です/),
+		);
+		await waitFor(() => expect(screen.getAllByTestId("line").length).toBeGreaterThan(0));
+		expect(screen.getByTestId("editor").getAttribute("data-readonly")).toBe("true");
+		// 入力を受け取る欄がない。
+		expect(screen.queryByRole("textbox", { name: "ページの本文" })).toBeNull();
+		expect(screen.queryByRole("button", { name: /固定/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /削除/ })).toBeNull();
 	});
 
 	it("読み込みに失敗したら、やり直せる", async () => {

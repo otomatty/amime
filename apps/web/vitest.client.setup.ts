@@ -1,3 +1,5 @@
+import { beforeEach } from "vitest";
+
 /**
  * jsdom が実装していないブラウザのAPIを補う。
  * テストで呼び出しを確かめたいときは vi.spyOn で差し替える。
@@ -18,3 +20,11 @@ class InertWebSocket extends EventTarget {
 	close(): void {}
 }
 Object.defineProperty(globalThis, "WebSocket", { value: InertWebSocket, writable: true });
+
+/**
+ * ページのAPIは、URLの最初の部分のプロジェクトを宛先にする(ADR-0033)。
+ * テストは、「team」というプロジェクトのトップを開いているところから始める。
+ */
+beforeEach(() => {
+	window.history.replaceState(null, "", "/team/");
+});

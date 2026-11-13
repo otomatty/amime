@@ -106,7 +106,7 @@ describe("PageList(ページの一覧)", () => {
 		render(<PageList />);
 
 		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-		expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pages?sort=updated&offset=0");
+		expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/projects/team/pages?sort=updated&offset=0");
 	});
 
 	it("並び順を選ぶと、その順で取り出し直す。選んだ並び順は、URLに残る", async () => {
@@ -124,32 +124,32 @@ describe("PageList(ページの一覧)", () => {
 		fireEvent.change(screen.getByLabelText("並び順"), { target: { value: "title" } });
 
 		await waitFor(() => expect(titles()).toEqual(["名前順の先頭"]));
-		expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/pages?sort=title&offset=0");
+		expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/projects/team/pages?sort=title&offset=0");
 		expect(window.location.search).toBe("?sort=title");
 	});
 
 	it("URLに並び順があれば、その順で始める。知らない並び順は、更新が新しい順として扱う", async () => {
-		window.history.replaceState(null, "", "/?sort=linked");
+		window.history.replaceState(null, "", "/team/?sort=linked");
 		const fetchMock = stubList(() => json({ pages: [], total: 0 }));
 		const { unmount } = render(<PageList />);
 		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-		expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pages?sort=linked&offset=0");
+		expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/projects/team/pages?sort=linked&offset=0");
 		expect(screen.getByLabelText<HTMLSelectElement>("並び順").value).toBe("linked");
 		unmount();
 
-		window.history.replaceState(null, "", "/?sort=popular");
+		window.history.replaceState(null, "", "/team/?sort=popular");
 		const second = render(<PageList />);
 
 		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-		expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/pages?sort=updated&offset=0");
+		expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/projects/team/pages?sort=updated&offset=0");
 		second.unmount();
 
 		// どのオブジェクトにもある名前(toString など)も、並び順としては知らない値。
-		window.history.replaceState(null, "", "/?sort=toString");
+		window.history.replaceState(null, "", "/team/?sort=toString");
 		render(<PageList />);
 
 		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-		expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/pages?sort=updated&offset=0");
+		expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/projects/team/pages?sort=updated&offset=0");
 	});
 
 	it("まだ取り出していないページがあれば、続きを取り出せる", async () => {
@@ -164,7 +164,7 @@ describe("PageList(ページの一覧)", () => {
 		fireEvent.click(screen.getByRole("button", { name: "もっと見る" }));
 
 		await waitFor(() => expect(titles()).toEqual(["1つめ", "2つめ", "3つめ"]));
-		expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/pages?sort=updated&offset=2");
+		expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/projects/team/pages?sort=updated&offset=2");
 		expect(screen.queryByRole("button", { name: "もっと見る" })).toBeNull();
 	});
 
@@ -240,7 +240,7 @@ describe("PageList(ページの一覧)", () => {
 		// 続きの位置は1件分だけ進む。3つめのページまで、取りこぼさずにたどり着ける。
 		fireEvent.click(screen.getByRole("button", { name: "もっと見る" }));
 		await waitFor(() => expect(titles()).toEqual(["1つめ", "2つめ", "3つめ"]));
-		expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/pages?sort=updated&offset=2");
+		expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/projects/team/pages?sort=updated&offset=2");
 	});
 
 	it("続きを取り出せなかったら、もう一度「もっと見る」を押して取り出せる", async () => {
@@ -325,11 +325,22 @@ describe("PageList(ページの一覧)", () => {
 		await waitFor(() => expect(titles()).toEqual(["買い物"]));
 	});
 
-	it("ページのAPIが無効な環境では、代わりの内容を表示する", async () => {
-		stubList(() => json({ error: "page-api-disabled" }, 403));
+	it("権限がないときは、代わりの内容を表示する", async () => {
+		stubList(() => json({ error: "read-only" }, 403));
 
 		render(<PageList whenDisabled={<p>代わりの内容</p>} />);
 
 		await waitFor(() => expect(screen.getByText("代わりの内容")).toBeDefined());
+	});
+	it("読むだけの表示では、新しいページを作る欄を出さない(並び順は選べる)", async () => {
+		stubList(() => json({ pages: [], total: 0 }));
+
+		render(<PageList readOnly />);
+
+		await waitFor(() => expect(screen.getByText(/まだページがありません/)).toBeDefined());
+		expect(screen.queryByRole("textbox", { name: "新しいページの名前" })).toBeNull();
+		expect(screen.getByRole("combobox", { name: "並び順" })).toBeDefined();
+		// ない欄へ、案内しない。
+		expect(screen.queryByText(/上の欄に名前を入れて/)).toBeNull();
 	});
 });
