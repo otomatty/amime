@@ -78,6 +78,32 @@ export type PageInfo = {
 	readonly problem: TitleProblem | null;
 };
 
+/** ページの一覧の並び順。 */
+export type PageSort = "updated" | "created" | "title" | "linked";
+
+/** 一覧に出す、ページの情報(ADR-0025)。 */
+export type PageCard = {
+	readonly id: PageId;
+	readonly title: string;
+	/** 冒頭の本文(タイトルの次の行から)。記法の記号を除いた文字列。 */
+	readonly descriptions: readonly string[];
+	/** ページの中の最初の画像のURL。なければ null。 */
+	readonly image: string | null;
+	/** 最後に変更された時刻(ミリ秒)。 */
+	readonly updated: number;
+	/** 最初に開かれた時刻(ミリ秒)。 */
+	readonly created: number;
+	/** 他のページからリンクされている数。 */
+	readonly linked: number;
+};
+
+/** ページの一覧の、ひとまとまり。 */
+export type PageList = {
+	readonly pages: readonly PageCard[];
+	/** 保存されているページの総数。 */
+	readonly total: number;
+};
+
 /** コミットを識別するID。送る側が作る。同じコミットを送り直しても、サーバーは1度しか適用しない(ADR-0021)。 */
 export type CommitId = string & { readonly __brand: "CommitId" };
 

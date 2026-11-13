@@ -101,7 +101,7 @@ test.describe("ページの保存", () => {
 	});
 
 	test("トップの試し書きは保存されない", async ({ page }) => {
-		await page.goto("/");
+		await page.goto("/?playground");
 		await clickLineEnd(page, 0);
 		await page.keyboard.type("abc");
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめにabc");

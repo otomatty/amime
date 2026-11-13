@@ -1,6 +1,12 @@
 import { exports } from "cloudflare:workers";
 import { MAX_TITLE_LENGTH } from "@amime/shared";
-import { type PageId, parseClientId, parseCommitRequest, parsePageId } from "@amime/sync";
+import {
+	type PageId,
+	parseClientId,
+	parseCommitRequest,
+	parsePageId,
+	parsePageSort,
+} from "@amime/sync";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 
@@ -27,6 +33,21 @@ function sameSite(origin: string, url: string): boolean {
 	}
 }
 
+/** 0以上の整数の問い合わせ。 */
+const COUNT = /^\d{1,9}$/;
+
+/**
+ * 件数や始まりの位置の問い合わせを読む。省かれていれば空、形が違えば null。
+ * 返したものを、そのまま一覧の指定に展開できる形にする。
+ */
+function countQuery(
+	value: string | undefined,
+	key: "limit" | "offset",
+): Partial<Record<"limit" | "offset", number>> | null {
+	if (value === undefined) return {};
+	return COUNT.test(value) ? { [key]: Number(value) } : null;
+}
+
 async function readJson(request: Request): Promise<unknown> {
 	try {
 		return await request.json();
@@ -48,6 +69,16 @@ const pages = new Hono<AppEnv>()
 		}
 		c.header("cache-control", "no-store");
 		return next();
+	})
+	// ページの一覧(ADR-0025)。
+	.get("/", async (c) => {
+		const sort = parsePageSort(c.req.query("sort") ?? "updated");
+		const limit = countQuery(c.req.query("limit"), "limit");
+		const offset = countQuery(c.req.query("offset"), "offset");
+		if (!sort.ok || limit === null || offset === null) {
+			return c.json({ error: "invalid-query" }, 400);
+		}
+		return c.json(await directory().list({ sort: sort.value, ...limit, ...offset }));
 	})
 	// 名前からページを引く。まだないページには、IDを決める(本文は、書き込まれるまで作られない)。
 	.get("/by-title/:title", async (c) => {

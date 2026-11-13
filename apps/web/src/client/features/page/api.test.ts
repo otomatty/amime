@@ -1,6 +1,6 @@
 import type { ClientId, Commit, CommitId, LineId, PageId } from "@amime/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPageApi, openPage, pageSocketUrl } from "./api.ts";
+import { createPageApi, listPages, openPage, pageSocketUrl } from "./api.ts";
 import { PageApiError } from "./page-api-error.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -45,6 +45,25 @@ describe("openPage(名前からページを引く)", () => {
 		stubFetch(json({ id: "p-1" }));
 
 		await expect(openPage("a")).rejects.toMatchObject({ kind: "failed" });
+	});
+});
+
+describe("listPages(ページの一覧)", () => {
+	const list = { pages: [], total: 0 };
+
+	it("並び順と、何件目から取り出すかを指定して取り出す", async () => {
+		const fetchMock = stubFetch(json(list));
+
+		expect(await listPages({ sort: "linked", offset: 100 })).toEqual(list);
+		expect(fetchMock).toHaveBeenCalledWith("/api/pages?sort=linked&offset=100", undefined);
+	});
+
+	it("形の違う応答は、読み込みの失敗になる", async () => {
+		stubFetch(json({ pages: [] }));
+
+		await expect(listPages({ sort: "updated", offset: 0 })).rejects.toMatchObject({
+			kind: "failed",
+		});
 	});
 });
 

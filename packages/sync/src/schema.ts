@@ -10,7 +10,9 @@ import type {
 	LineId,
 	PageId,
 	PageInfo,
+	PageList,
 	PageSnapshot,
+	PageSort,
 	PendingRecord,
 	ServerMessage,
 } from "./types.ts";
@@ -105,6 +107,18 @@ const pageTitle = {
 	problem: v.nullable(v.picklist(["taken", "empty", "too-long", "reserved"])),
 };
 const PageInfoSchema = v.object({ id: PageIdSchema, ...pageTitle });
+const TimeSchema = v.pipe(v.number(), v.minValue(0));
+const PageCardSchema = v.object({
+	id: PageIdSchema,
+	title: v.string(),
+	descriptions: v.array(v.string()),
+	image: v.nullable(v.string()),
+	updated: TimeSchema,
+	created: TimeSchema,
+	linked: VersionSchema,
+});
+const PageListSchema = v.object({ pages: v.array(PageCardSchema), total: VersionSchema });
+const PageSortSchema = v.picklist(["updated", "created", "title", "linked"]);
 const CursorSchema = v.nullable(
 	v.object({
 		line: LineIdSchema,
@@ -150,6 +164,14 @@ export const parsePageId = (input: unknown): Result<PageId, "invalid"> =>
 /** サーバーから届いた、ページの情報を検査する。 */
 export const parsePageInfo = (input: unknown): Result<PageInfo, "invalid"> =>
 	parse(PageInfoSchema, input);
+
+/** サーバーから届いた、ページの一覧を検査する。 */
+export const parsePageList = (input: unknown): Result<PageList, "invalid"> =>
+	parse(PageListSchema, input);
+
+/** 外部から届いた、一覧の並び順を検査する。 */
+export const parsePageSort = (input: unknown): Result<PageSort, "invalid"> =>
+	parse(PageSortSchema, input);
 
 /** クライアントから WebSocket で届いたメッセージを検査する。 */
 export const parseClientMessage = (input: unknown): Result<ClientMessage, "invalid"> =>

@@ -1,6 +1,6 @@
 # ADR-0024: ページを変わらないIDで識別し、プロジェクトに台帳を置く
 
-- 状態: 採用(Cloudflare 上での動作は未確認。手元の Workers ランタイムで確認した)
+- 状態: 採用(Cloudflare 上での動作は未確認。手元の Workers ランタイムで確認した。台帳の索引の内容は [ADR-0025](0025-page-index-and-list.md) で追加)
 - 日付: 2026-11-13
 - 関連: [ADR-0003](0003-platform-cloudflare.md)(`ProjectDO` を、ここで実装する)、[ADR-0017](0017-page-storage-and-api.md)(ページの識別のしかたと、APIのパスを、このADRで置き換える)、[ADR-0020](0020-pending-changes-on-device.md)(端末内の記録のキーを、このADRで置き換える)
 

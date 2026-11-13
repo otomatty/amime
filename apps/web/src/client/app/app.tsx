@@ -1,6 +1,7 @@
 import { Editor } from "../features/editor/editor.tsx";
 import { Page } from "../features/page/page.tsx";
 import { pageNameFromPath } from "../features/page/route.ts";
+import { PageList } from "../features/pages/page-list.tsx";
 
 /** 試し書きのページの初期内容。 */
 const SAMPLE_LINES = [
@@ -24,7 +25,7 @@ const SAMPLE_LINES = [
 	"$ pnpm dev",
 ];
 
-/** トップに表示する、保存されない試し書きのページ。P3 でページの一覧に置き換える。 */
+/** 保存されない試し書きのページ。ページのAPIが無効な環境(公開環境)では、トップに表示する。 */
 function Playground() {
 	return (
 		<>
@@ -34,12 +35,34 @@ function Playground() {
 	);
 }
 
+/**
+ * トップ。ページの一覧を表示する(ADR-0025)。
+ * ページのAPIが無効な環境と、URLに ?playground を付けたときは、試し書きのページを表示する。
+ */
+function Home() {
+	const playground = (
+		<article className="page">
+			<Playground />
+		</article>
+	);
+	if (new URLSearchParams(window.location.search).has("playground")) return playground;
+	return <PageList whenDisabled={playground} />;
+}
+
 export function App() {
 	const name = pageNameFromPath(window.location.pathname);
 	return (
 		<main className="app">
-			<h1>Amime</h1>
-			<article className="page">{name === null ? <Playground /> : <Page name={name} />}</article>
+			<h1 className="app-title">
+				<a href="/">Amime</a>
+			</h1>
+			{name === null ? (
+				<Home />
+			) : (
+				<article className="page">
+					<Page name={name} />
+				</article>
+			)}
 		</main>
 	);
 }
