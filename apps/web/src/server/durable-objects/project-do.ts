@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, exports } from "cloudflare:workers";
 import type { PageSummary } from "@amime/parser";
 import { MAX_TITLE_LENGTH, titleFromName, titleOfLine, toTitleLc } from "@amime/shared";
 import type {
@@ -66,6 +66,22 @@ const CARD_COLUMNS = `p.id, p.title, p.descriptions, p.image, p.updated, p.creat
 
 const NO_LINKS: PageLinks = { missing: [], related: [], hops: [] };
 
+/** 1度のアラームで、リンクを書き換えるページの数の上限(ADR-0028)。 */
+export const REWRITE_BATCH = 20;
+/** リンクの書き換えを、あきらめるまでに試す回数。 */
+export const MAX_REWRITE_ATTEMPTS = 5;
+/** リンクの書き換えに失敗したあと、やり直すまでの時間。 */
+const REWRITE_RETRY_MS = 30_000;
+
+/** まだ済んでいない、リンクの書き換え。page_id のページの中の、old_lc へのリンクを、new_title へのリンクにする。 */
+type RewriteRow = {
+	seq: number;
+	page_id: string;
+	old_lc: string;
+	new_lc: string;
+	new_title: string;
+};
+
 /** 並び順ごとの、SQL の並べ方。同じ値のページは、名前の順にする(順序が、取り出すたびに変わらないように)。 */
 /** 固定したページを先頭に並べる。あとから固定したものを前にする。 */
 const PINNED_FIRST = "pinned > 0 DESC, pinned DESC";
@@ -111,6 +127,15 @@ export const MIGRATIONS: readonly string[] = [
 	);`,
 	// 4: リンク先の、書かれたとおりの名前(ADR-0027)。まだないページへのリンクを、名前で見せるために持つ。
 	"ALTER TABLE links ADD COLUMN title TEXT NOT NULL DEFAULT '';",
+	// 5: まだ済んでいない、リンクの書き換え(ADR-0028)。名前を変えたページへリンクしているページごとに1行。
+	`CREATE TABLE rewrites (
+		seq INTEGER PRIMARY KEY AUTOINCREMENT,
+		page_id TEXT NOT NULL,
+		old_lc TEXT NOT NULL,
+		new_lc TEXT NOT NULL,
+		new_title TEXT NOT NULL,
+		attempts INTEGER NOT NULL DEFAULT 0
+	);`,
 ];
 
 /**
@@ -221,15 +246,107 @@ export class ProjectDO extends DurableObject {
 	 * 1行目が空、長すぎる)は、名前を変えずに、理由を返す。
 	 * 一覧とリンクのつながりのための情報(冒頭の本文、画像、リンク先)も、ここで入れ替える(ADR-0025)。
 	 */
-	index(id: PageId, state: PageState): PageInfo {
+	async index(id: PageId, state: PageState): Promise<PageInfo> {
 		// 削除したページについての知らせが、あとから届いた。台帳に載せ直さない。
 		const removed = this.#removedTitle(id);
 		if (removed !== null) return { id, title: removed, problem: null, pinned: false };
+		const queued = this.#lastRewrite();
 		// 名前・要約・リンク先を、まとめて確定する。途中で失敗して、一部だけが新しくなることがないようにする。
-		return this.ctx.storage.transactionSync(() => {
+		const info = this.ctx.storage.transactionSync(() => {
 			const info = this.#retitle(id, state);
 			this.#summarize(id, state.summary);
 			return info;
+		});
+		// 名前が変わって、リンクの書き換えが増えた。応答を待たせないように、アラームで行う(ADR-0028)。
+		if (this.#lastRewrite() !== queued) await this.ctx.storage.setAlarm(Date.now());
+		return info;
+	}
+
+	/** いちばん新しい、リンクの書き換えの番号。まだ1つもなければ 0。 */
+	#lastRewrite(): number {
+		return this.ctx.storage.sql
+			.exec<{ seq: number }>("SELECT COALESCE(MAX(seq), 0) AS seq FROM rewrites")
+			.one().seq;
+	}
+
+	/**
+	 * 名前が変わったページへのリンクを、書き換える予定に入れる(ADR-0028)。
+	 * そのページへリンクしているページごとに、1つずつ入れる。書き換えは、アラームで少しずつ行う。
+	 */
+	#queueRewrites(oldLc: string, title: string): void {
+		const { sql } = this.ctx.storage;
+		const newLc = toTitleLc(title);
+		// まだ済んでいない書き換えが、前の名前を目指していたら、新しい名前を目指させる(名前を続けて変えた)。
+		sql.exec("UPDATE rewrites SET new_lc = ?, new_title = ? WHERE new_lc = ?", newLc, title, oldLc);
+		sql.exec(
+			`INSERT INTO rewrites (page_id, old_lc, new_lc, new_title)
+			SELECT from_id, to_lc, ?, ? FROM links WHERE to_lc = ?`,
+			newLc,
+			title,
+			oldLc,
+		);
+	}
+
+	/**
+	 * 予定に入っているリンクの書き換えを、少しずつ行う(ADR-0028)。
+	 * 失敗した書き換えは、あとでやり直す。何度やり直しても失敗するものは、あきらめる(リンクは、前の名前を指したまま残る)。
+	 */
+	override async alarm(): Promise<void> {
+		const { sql } = this.ctx.storage;
+		const rows = sql
+			.exec<RewriteRow>(
+				"SELECT seq, page_id, old_lc, new_lc, new_title FROM rewrites ORDER BY seq LIMIT ?",
+				REWRITE_BATCH,
+			)
+			.toArray();
+		let failed = false;
+		for (const row of rows) {
+			// このプロジェクト(この Durable Object の名前)の、そのページ。
+			const page = exports.PageDO.getByName(`${this.ctx.id.name}/${row.page_id}`);
+			try {
+				this.#rewritten(row, await page.rewriteLinks(row.old_lc, row.new_title));
+			} catch {
+				failed = true;
+				sql.exec("UPDATE rewrites SET attempts = attempts + 1 WHERE seq = ?", row.seq);
+				sql.exec(
+					"DELETE FROM rewrites WHERE seq = ? AND attempts >= ?",
+					row.seq,
+					MAX_REWRITE_ATTEMPTS,
+				);
+			}
+		}
+		const left = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM rewrites").one().n;
+		if (left > 0) await this.ctx.storage.setAlarm(Date.now() + (failed ? REWRITE_RETRY_MS : 0));
+	}
+
+	/**
+	 * ページの書き換えが済んだ。done は、前の名前へのリンクが、そのページに残っていないか。
+	 * 残っていなければ、台帳のリンク先も、新しい名前にする(書き換えたページの反映を待たない。
+	 * 待っているあいだにもう1度名前が変わっても、そのページを見つけられる)。
+	 */
+	#rewritten(row: RewriteRow, done: boolean): void {
+		const { sql } = this.ctx.storage;
+		this.ctx.storage.transactionSync(() => {
+			const current = sql
+				.exec<{ new_lc: string }>("SELECT new_lc FROM rewrites WHERE seq = ?", row.seq)
+				.toArray()[0];
+			// 書き換えているあいだに、ページが削除された。
+			if (current === undefined) return;
+			if (done) {
+				sql.exec(
+					"UPDATE OR REPLACE links SET to_lc = ?, title = ? WHERE from_id = ? AND to_lc = ?",
+					row.new_lc,
+					row.new_title,
+					row.page_id,
+					row.old_lc,
+				);
+			}
+			if (current.new_lc === row.new_lc) {
+				sql.exec("DELETE FROM rewrites WHERE seq = ?", row.seq);
+			} else if (done) {
+				// 書き換えているあいだに、名前がもう1度変わった。書き換えた先の名前から、いまの名前へ、続けて書き換える。
+				sql.exec("UPDATE rewrites SET old_lc = ?, attempts = 0 WHERE seq = ?", row.new_lc, row.seq);
+			}
 		});
 	}
 
@@ -337,6 +454,7 @@ export class ProjectDO extends DurableObject {
 				Date.now(),
 			);
 			sql.exec("DELETE FROM links WHERE from_id = ?", id);
+			sql.exec("DELETE FROM rewrites WHERE page_id = ?", id);
 			sql.exec("DELETE FROM pages WHERE id = ?", id);
 		});
 	}
@@ -393,7 +511,12 @@ export class ProjectDO extends DurableObject {
 
 		const problem = this.#problemOf(wanted, row);
 		const title = problem === null ? wanted : row.title;
-		if (problem === null && toTitleLc(wanted) !== row.title_lc) this.#evictPlaceholder(wanted);
+		if (problem === null && toTitleLc(wanted) !== row.title_lc) {
+			this.#evictPlaceholder(wanted);
+			// 保存されていたページの名前が変わった。そのページへのリンクを、書き換える。
+			// 開いただけだったページ(前の名前のページは、なかった)では、書き換えない。
+			if (row.version > 0) this.#queueRewrites(row.title_lc, wanted);
+		}
 		this.ctx.storage.sql.exec(
 			"UPDATE pages SET title = ?, title_lc = ?, problem = ?, version = ?, updated = ? WHERE id = ?",
 			title,

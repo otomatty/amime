@@ -31,6 +31,11 @@ function flatten(nodes: readonly InlineNode[]): InlineNode[] {
 	return nodes.flatMap((node) => ("children" in node ? [node, ...flatten(node.children)] : [node]));
 }
 
+/** 行の中の、記法のノードを、入れ子の中も含めて、出てくる順に並べる。 */
+export function inlineNodes(line: ParsedLine): InlineNode[] {
+	return flatten(nodesOf(line));
+}
+
 /** ノードを、読める文字列にする。記法の記号は除く。画像とアイコンは文字にしない。 */
 function textOf(raw: string, node: InlineNode): string {
 	if (node.type === "text") return raw.slice(node.start, node.end);
@@ -74,7 +79,7 @@ export function summarizePage(lines: readonly string[]): PageSummary {
 		const role = roles[index];
 		return index === 0 || role === undefined ? [] : [{ raw, parsed: parseLine(raw, role) }];
 	});
-	const nodes = body.flatMap(({ parsed }) => flatten(nodesOf(parsed)));
+	const nodes = body.flatMap(({ parsed }) => inlineNodes(parsed));
 
 	// 同じ名前へのリンクは、最初に出てきた表記で1つにまとめる。
 	const links = new Map<string, string>();

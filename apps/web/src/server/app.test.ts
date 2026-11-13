@@ -348,6 +348,67 @@ describe("ページのAPI", () => {
 		});
 	});
 
+	describe("名前を変えたときの、リンクの書き換え(ADR-0028)", () => {
+		it("ページの名前を変えると、リンクしているページの本文が書き換わり、開いている端末に配信される", async () => {
+			const open = async (title: string) =>
+				(
+					(await (await get(`/api/pages/by-title/${encodeURIComponent(title)}`)).json()) as {
+						id: string;
+					}
+				).id;
+			const insertLines = (...texts: string[]) =>
+				texts.map((text, index) => ({
+					type: "insert",
+					line: { id: `l${index}`, text },
+					after: index === 0 ? null : `l${index - 1}`,
+					before: null,
+				}));
+			const index = (id: string) =>
+				runDurableObjectAlarm(exports.PageDO.getByName(`default/${id}`));
+			const target = await open("書き換え 前の名前");
+			await post(`/api/pages/${target}/commits`, {
+				id: commitId(),
+				changes: insertLines("書き換え 前の名前"),
+			});
+			await index(target);
+			const linking = await open("書き換え リンク元");
+			await post(`/api/pages/${linking}/commits`, {
+				id: commitId(),
+				changes: insertLines("書き換え リンク元", "[書き換え 前の名前] を読む"),
+			});
+			await index(linking);
+			const response = await exports.default.fetch(
+				`https://amime.test/api/pages/${linking}/socket?client=reader`,
+				{ headers: { Upgrade: "websocket" } },
+			);
+			const messages: unknown[] = [];
+			response.webSocket?.accept();
+			response.webSocket?.addEventListener("message", ({ data }) => {
+				messages.push(JSON.parse(String(data)));
+			});
+
+			// 1行目を書き換えて、名前を変える。
+			await post(`/api/pages/${target}/commits`, {
+				id: commitId(),
+				changes: [{ type: "update", id: "l0", text: "書き換え 新しい名前" }],
+			});
+			await index(target);
+			await runDurableObjectAlarm(exports.ProjectDO.getByName("default"));
+
+			const rewritten = { type: "update", id: "l1", text: "[書き換え 新しい名前] を読む" };
+			await vi.waitFor(() =>
+				expect(messages).toContainEqual({ type: "commit", version: 2, applied: [rewritten] }),
+			);
+			expect(await (await get(`/api/pages/${linking}`)).json()).toMatchObject({
+				version: 2,
+				lines: [
+					{ id: "l0", text: "書き換え リンク元" },
+					{ id: "l1", text: "[書き換え 新しい名前] を読む" },
+				],
+			});
+		});
+	});
+
 	describe("固定と削除(ADR-0026)", () => {
 		const send = (method: string, path: string, body?: unknown) =>
 			exports.default.fetch(`https://amime.test${path}`, {

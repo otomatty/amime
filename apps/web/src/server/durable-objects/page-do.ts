@@ -1,5 +1,6 @@
 import { DurableObject, exports } from "cloudflare:workers";
-import { summarizePage } from "@amime/parser";
+import { renameLinks, summarizePage } from "@amime/parser";
+import { toTitleLc } from "@amime/shared";
 import {
 	applyChanges,
 	type Change,
@@ -10,6 +11,7 @@ import {
 	type CursorPosition,
 	type Line,
 	type LineId,
+	MAX_LINE_LENGTH,
 	type PageId,
 	type PageInfo,
 	type PageSnapshot,
@@ -215,14 +217,50 @@ export class PageDO extends DurableObject {
 			return { version: this.#version(), applied: [], duplicate: true };
 		}
 
-		const { applied } = applyChanges(this.#lines(), commit.changes);
+		return this.#apply(commit.changes, commit.id, client);
+	}
+
+	/**
+	 * 名前が from から to に変わったページへのリンクを、書き換える(ADR-0028)。台帳が呼ぶ。
+	 * 書き換えは、ふつうのコミットと同じように保存し、開いている端末に配信する。
+	 * 何度呼んでも、結果は同じ(書き換えるリンクが残っていなければ、何もしない)。
+	 * 前の名前へのリンクが、このページに残っていなければ true を返す
+	 * (新しい名前がリンクとして書けないときなどは、残る)。
+	 */
+	async rewriteLinks(from: string, to: string): Promise<boolean> {
+		if (this.#deleted()) return true;
+		const lines = this.#lines();
+		const texts = lines.map((line) => line.text);
+		const changes: Change[] = [];
+		for (const { index, text } of renameLinks(texts, from, to)) {
+			const line = lines[index];
+			// 書き換えると長さの上限を超える行は、そのままにする(リンクは、前の名前を指したまま残る)。
+			if (line === undefined || text.length > MAX_LINE_LENGTH) continue;
+			texts[index] = text;
+			changes.push({ type: "update", id: line.id, text });
+		}
+		if (changes.length > 0) await this.#apply(changes);
+		const fromLc = toTitleLc(from);
+		return !summarizePage(texts).links.some((title) => toTitleLc(title) === fromLc);
+	}
+
+	/**
+	 * 変更を適用して保存し、接続している端末に配信する。
+	 * id は、端末が送ってきたコミットのID。client は、送った端末の識別子。
+	 */
+	async #apply(
+		changes: readonly Change[],
+		id?: CommitId,
+		client?: ClientId,
+	): Promise<CommitResult> {
+		const { applied } = applyChanges(this.#lines(), changes);
 		const version = this.#version() + (applied.length > 0 ? 1 : 0);
 		this.ctx.storage.transactionSync(() => {
 			// 効いた変更は、位置が実際の前後の行に書き直してある。順に書けば、保存した内容も同じ結果になる。
 			for (const change of applied) this.#write(change);
 			this.#setMeta("version", version);
 			// 何も効かなかったコミットも覚えておく。送り直しで、あとから効いてしまわないようにする。
-			this.#remember(commit.id, version);
+			if (id !== undefined) this.#remember(id, version);
 			if (applied.length > 0) {
 				const now = Date.now();
 				this.#setMeta("updated", now);

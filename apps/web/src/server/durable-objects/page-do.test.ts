@@ -1,6 +1,13 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { applyChanges, type Change, type CommitId, type Line, type LineId } from "@amime/sync";
+import {
+	applyChanges,
+	type Change,
+	type CommitId,
+	type Line,
+	type LineId,
+	MAX_LINE_LENGTH,
+} from "@amime/sync";
 import { describe, expect, it } from "vitest";
 
 const id = (value: string): LineId => value as LineId;
@@ -224,6 +231,83 @@ describe("PageDO", () => {
 
 			await stub.destroy();
 			await stub.destroy();
+
+			expect(await stub.getPage()).toBe("deleted");
+		});
+	});
+
+	describe("rewriteLinks(名前が変わったページへのリンクを書き換える。ADR-0028)", () => {
+		it("リンクを新しい名前に書き換え、バージョンを1つ進める。台帳への知らせも予約する", async () => {
+			const stub = page("rewrite");
+			await commitTo(stub, [
+				insertAfter(null, "a", "題"),
+				insertAfter("a", "b", "[牛乳] を買う"),
+				insertAfter("b", "c", "関係ない行"),
+				insertAfter("c", "d", "#牛乳"),
+			]);
+			await runDurableObjectAlarm(stub);
+
+			// このページに、前の名前へのリンクが残っていなければ true。
+			expect(await stub.rewriteLinks("牛乳", "豆乳")).toBe(true);
+
+			expect(await read(stub)).toEqual({
+				version: 2,
+				lines: [
+					line("a", "題"),
+					line("b", "[豆乳] を買う"),
+					line("c", "関係ない行"),
+					line("d", "#豆乳"),
+				],
+			});
+			await runInDurableObject(stub, async (_instance, state) => {
+				expect(await state.storage.getAlarm()).not.toBeNull();
+			});
+		});
+
+		it("書き換えるリンクがなければ、何も変えない(バージョンも進めない)", async () => {
+			const stub = page("rewrite-none");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[卵]")]);
+
+			expect(await stub.rewriteLinks("牛乳", "豆乳")).toBe(true);
+			// もう1度呼んでも(やり直しでも)、同じ。
+			expect(await stub.rewriteLinks("牛乳", "豆乳")).toBe(true);
+
+			expect((await read(stub)).version).toBe(1);
+		});
+
+		it("書き換えると長さの上限を超える行は、そのままにする。前の名前へのリンクが残ったことを返す", async () => {
+			const stub = page("rewrite-long");
+			const long = `[牛乳]${"あ".repeat(MAX_LINE_LENGTH - 4)}`;
+			await commitTo(stub, [
+				insertAfter(null, "a", "題"),
+				insertAfter("a", "b", long),
+				insertAfter("b", "c", "[牛乳]"),
+			]);
+
+			expect(await stub.rewriteLinks("牛乳", "豆乳ヨーグルト")).toBe(false);
+
+			expect((await read(stub)).lines).toEqual([
+				line("a", "題"),
+				line("b", long),
+				line("c", "[豆乳ヨーグルト]"),
+			]);
+		});
+
+		it("新しい名前がリンクとして書けないときは、書き換えない。前の名前へのリンクが残ったことを返す", async () => {
+			const stub = page("rewrite-unwritable");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
+
+			expect(await stub.rewriteLinks("牛乳", "a]b")).toBe(false);
+
+			expect((await read(stub)).version).toBe(1);
+		});
+
+		it("削除されたページでは、何もしない", async () => {
+			const stub = page("rewrite-deleted");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
+			await stub.destroy();
+
+			expect(await stub.rewriteLinks("牛乳", "豆乳")).toBe(true);
 
 			expect(await stub.getPage()).toBe("deleted");
 		});
