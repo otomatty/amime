@@ -335,7 +335,7 @@ describe("公開のプロジェクト", () => {
 
 		// メンバーのカーソルは、読むだけの人にも届く。
 		await vi.waitFor(() =>
-			expect(viewer.messages.at(-1)).toEqual({
+			expect(viewer.messages.at(-1)).toMatchObject({
 				type: "cursor",
 				client: "member-1",
 				cursor: { line: "t", column: 2 },

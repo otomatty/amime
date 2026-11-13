@@ -50,7 +50,11 @@ describe("parseRoute(アプリが使うパス)", () => {
 		expect(parseRoute("/invite/abc-DEF_123")).toEqual({ kind: "invite", token: "abc-DEF_123" });
 	});
 
-	it.each(["/settings", "/settings/", "/invite", "/invite/"])("%s だけなら、トップ", (path) => {
+	it.each(["/settings", "/settings/"])("%s だけなら、自分のプロフィール", (path) => {
+		expect(parseRoute(path)).toEqual({ kind: "profile" });
+	});
+
+	it.each(["/invite", "/invite/"])("%s だけなら、トップ", (path) => {
 		expect(parseRoute(path)).toEqual({ kind: "home" });
 	});
 });

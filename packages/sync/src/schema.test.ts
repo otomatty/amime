@@ -98,6 +98,24 @@ describe("parsePageInfo", () => {
 	});
 });
 
+describe("parseServerMessage(カーソルの知らせ)", () => {
+	const cursor = { type: "cursor", client: "c1", cursor: { line: "a", column: 1 } };
+
+	it("名前の付いたカーソルも、付いていないカーソルも受け付ける", () => {
+		const named = { ...cursor, name: "花子" };
+
+		expect(parseServerMessage(JSON.stringify(named))).toEqual({ ok: true, value: named });
+		expect(parseServerMessage(JSON.stringify(cursor))).toEqual({ ok: true, value: cursor });
+	});
+
+	it("名前が文字列でなければ、受け付けない", () => {
+		expect(parseServerMessage(JSON.stringify({ ...cursor, name: 1 }))).toEqual({
+			ok: false,
+			error: "invalid",
+		});
+	});
+});
+
 describe("parseSearchResults", () => {
 	const hit = { id: "p1", title: "買い物", updated: 2000, lines: ["牛乳を買う"] };
 

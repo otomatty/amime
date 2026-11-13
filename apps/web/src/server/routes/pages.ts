@@ -160,6 +160,8 @@ export const pages = new Hono<AppEnv>()
 		url.searchParams.set("at", String(c.var.authorizedAt));
 		// だれの接続かも、ここで付ける(権限がなくなったときに、その人の接続を閉じるため)。
 		url.searchParams.set("user", c.var.user?.id ?? "");
+		// カーソルに添える、表示名(メンバーだけ。読むだけの人のカーソルは、配らない)。
+		url.searchParams.set("name", canWrite(c) ? (c.var.user?.name ?? "") : "");
 		// ログインの状態が切れる時刻も、付ける(切れたあとは、変更を配らない)。
 		url.searchParams.set("expires", String(c.var.sessionExpires ?? ""));
 		return pageStub(c, page.value).fetch(new Request(url, c.req.raw));

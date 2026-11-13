@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { devLogin, loadAccount, loginHref, logout } from "./api.ts";
+import { devLogin, loadAccount, loginHref, logout, updateProfile } from "./api.ts";
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -62,6 +62,45 @@ describe("logout / devLogin", () => {
 
 		expect(await logout()).toBe(false);
 		expect(await devLogin("hanako")).toBe(false);
+	});
+});
+
+describe("updateProfile(表示名とアイコンを変える)", () => {
+	const profile = { name: "山田 花子", picture: "https://images.example/a.png" };
+
+	it("表示名とアイコンを送る。成功なら null", async () => {
+		const fetch = stubFetch(() => Response.json({ user: null, login: [] }));
+
+		expect(await updateProfile(profile)).toBeNull();
+		expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/me", {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(profile),
+		});
+	});
+
+	it.each([
+		[
+			"表示名を受け付けなかった",
+			() => Response.json({ error: "invalid-name" }, { status: 400 }),
+			"invalid-name",
+		],
+		[
+			"アイコンを受け付けなかった",
+			() => Response.json({ error: "invalid-picture" }, { status: 400 }),
+			"invalid-picture",
+		],
+		[
+			"ログインが切れていた",
+			() => Response.json({ error: "login-required" }, { status: 401 }),
+			"failed",
+		],
+		["理由のない失敗", () => new Response("x", { status: 500 }), "failed"],
+		["通信できない", () => Promise.reject(new Error("network")), "failed"],
+	])("%sときは、理由を返す", async (_name, reply, reason) => {
+		stubFetch(reply);
+
+		expect(await updateProfile(profile)).toBe(reason);
 	});
 });
 

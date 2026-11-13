@@ -8,6 +8,8 @@ export type Route =
 	| { readonly kind: "page"; readonly project: string; readonly name: string }
 	/** プロジェクトの設定(メンバー、招待リンク、公開範囲)。パスは「/settings/プロジェクト」。 */
 	| { readonly kind: "settings"; readonly project: string }
+	/** 自分のプロフィール(表示名とアイコン)。パスは「/settings」。 */
+	| { readonly kind: "profile" }
 	/** 招待リンク。パスは「/invite/リンクの値」。 */
 	| { readonly kind: "invite"; readonly token: string };
 
@@ -35,7 +37,7 @@ export function parseRoute(pathname: string): Route {
 		return second === "" ? { kind: "home" } : { kind: "invite", token: second };
 	if (first === "settings") {
 		return second === ""
-			? { kind: "home" }
+			? { kind: "profile" }
 			: { kind: "settings", project: decode(second).toLowerCase() };
 	}
 	// プロジェクトの名前は、大文字と小文字を区別しない(サーバーも、小文字にそろえて探す)。

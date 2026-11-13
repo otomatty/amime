@@ -47,14 +47,24 @@ function hasAudience(aud: unknown, audience: string): boolean {
 	return Array.isArray(aud) ? aud.includes(audience) : aud === audience;
 }
 
-/** https の、長すぎないURLなら、そのまま返す。 */
-function httpsUrl(value: unknown): string | null {
+/** アイコンの画像のURL。https の、長すぎないURLなら、そのまま返す。ほかは null。 */
+export function parsePictureUrl(value: unknown): string | null {
 	if (typeof value !== "string" || value.length > MAX_PICTURE_URL) return null;
 	return /^https:\/\/[^\s/]+\/\S*$/.test(value) ? value : null;
 }
 
 /** 前後の空白を取り除き、表示名の長さの上限に収める。 */
 const clip = (text: string) => [...text.trim()].slice(0, MAX_DISPLAY_NAME).join("").trim();
+
+/**
+ * 本人が決める表示名。前後の空白を取り除く。空のもの、長すぎるもの、改行などを含むものは null
+ * (ログインの提供元から受け取る名前と違って、切り詰めずに断る)。
+ */
+export function parseDisplayName(value: unknown): string | null {
+	if (typeof value !== "string" || /\p{Cc}/u.test(value)) return null;
+	const name = value.trim();
+	return name === "" || [...name].length > MAX_DISPLAY_NAME ? null : name;
+}
 
 /** 表示名。前後の空白を取り除き、長さを上限に収める。空なら null。 */
 function displayName(value: unknown): string | null {
@@ -100,6 +110,6 @@ export function readIdentity(
 		subject: sub,
 		email: address,
 		name: displayName(claims["name"]) ?? clip(address.slice(0, address.indexOf("@"))),
-		picture: httpsUrl(claims["picture"]),
+		picture: parsePictureUrl(claims["picture"]),
 	});
 }

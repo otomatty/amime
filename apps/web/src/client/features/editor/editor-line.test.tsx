@@ -1,7 +1,8 @@
 import type { LineKind } from "@amime/parser";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { EditorLine } from "./editor-line.tsx";
+import { EditorLine, type RemoteCaret } from "./editor-line.tsx";
+import { IconSourceProvider } from "./icons.tsx";
 
 afterEach(cleanup);
 
@@ -177,7 +178,7 @@ describe("EditorLine", () => {
 		/** 他の人のカーソルを付けて描画する。caretColumn を渡すと、自分のカーソルもある行にする。 */
 		function renderWith(
 			text: string,
-			others: readonly ReturnType<typeof other>[],
+			others: readonly RemoteCaret[],
 			caretColumn: number | null = null,
 			role: Role = TEXT,
 		) {
@@ -194,6 +195,19 @@ describe("EditorLine", () => {
 			);
 			return screen.getAllByTestId("remote-caret");
 		}
+
+		it("表示名のあるカーソルには、名前の札を添える。名前のないカーソルには、添えない", () => {
+			const [named, plain] = renderWith("abc", [
+				{ ...other(1), name: "山田 花子" },
+				{ ...other(2), key: "nameless" },
+			]);
+
+			expect(named?.querySelector(".remote-caret-name")?.textContent).toBe("山田 花子");
+			expect(named?.getAttribute("data-color")).toBe(String(other(1).color));
+			expect(plain?.querySelector(".remote-caret-name")).toBeNull();
+			// 札は、行の本文には数えない(文字の位置を、ずらさない)。
+			expect(named?.querySelector(".remote-caret-name")?.getAttribute("data-column")).toBeNull();
+		});
 
 		it("他の人のカーソルがなければ、描画しない", () => {
 			renderShown("abc");
@@ -442,7 +456,27 @@ describe("EditorLine", () => {
 			expect(image?.closest("a")?.getAttribute("target")).toBe("_blank");
 		});
 
-		it("[名前.icon] は名前の入った印を表示する(プロフィール画像はP4から)", () => {
+		it("[名前.icon] は、画像を引けたら、画像を表示する", async () => {
+			const { container } = render(
+				<IconSourceProvider source={async () => "https://images.example/yamada.png"}>
+					<EditorLine
+						index={1}
+						text="[山田.icon]"
+						kind="text"
+						blockIndent={0}
+						caretColumn={null}
+						composing={null}
+					/>
+				</IconSourceProvider>,
+			);
+
+			const image = await screen.findByRole("img", { name: "山田" });
+			expect(image.getAttribute("src")).toBe("https://images.example/yamada.png");
+			// 画像になっても、行の中の位置(押したときにカーソルが入る位置)は変わらない。
+			expect(container.querySelector(".icon")?.getAttribute("data-column")).toBe("0");
+		});
+
+		it("[名前.icon] は、画像を引けなければ、名前の入った印を表示する", () => {
 			const icon = renderShown("[山田.icon]").querySelector(".icon");
 
 			expect(icon?.textContent).toBe("山田");

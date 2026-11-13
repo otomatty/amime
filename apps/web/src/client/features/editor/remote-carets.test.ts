@@ -44,6 +44,15 @@ describe("caretsByLine", () => {
 		expect(byLine.size).toBe(2);
 	});
 
+	it("表示名があれば、カーソルに添える", () => {
+		const byLine = caretsByLine([{ ...at("bob", "a", 1), name: "ボブ" }, at("carol", "a", 2)]);
+
+		expect(byLine.get("a" as LineId)).toEqual([
+			{ key: "bob", column: 1, color: colorOf("bob"), name: "ボブ" },
+			{ key: "carol", column: 2, color: colorOf("carol") },
+		]);
+	});
+
 	it("だれもいなければ、空", () => {
 		expect(caretsByLine([]).size).toBe(0);
 	});

@@ -81,6 +81,24 @@ export async function findSession(
 	return { account, renewed, expires: renewed ? now + SESSION_TTL : expires };
 }
 
+/** 表示名とアイコンを変える。渡した項目だけを変える(picture の null は、アイコンをなくす)。 */
+export async function updateProfile(
+	db: D1Database,
+	user: UserId,
+	profile: { readonly name?: string; readonly picture?: string | null },
+): Promise<void> {
+	const statements: D1PreparedStatement[] = [];
+	if (profile.name !== undefined) {
+		statements.push(db.prepare("UPDATE users SET name = ? WHERE id = ?").bind(profile.name, user));
+	}
+	if (profile.picture !== undefined) {
+		statements.push(
+			db.prepare("UPDATE users SET picture = ? WHERE id = ?").bind(profile.picture, user),
+		);
+	}
+	if (statements.length > 0) await db.batch(statements);
+}
+
 /** ログインの状態を消す(ログアウト)。 */
 export async function endSession(db: D1Database, token: string): Promise<void> {
 	await db

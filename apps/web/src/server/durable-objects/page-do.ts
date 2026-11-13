@@ -97,12 +97,40 @@ const VIEWER_TAG = "access:read";
 const USER_TAG = "user:";
 /** その接続の権限を確かめた時刻を入れるタグの先頭。あとに、時刻(ミリ秒)が続く。 */
 const ACCEPTED_TAG = "at:";
+/** 表示名を入れるタグの先頭。あとに、名前が続く。 */
+const NAME_TAG = "name:";
 /** ログインの状態が切れる時刻を入れるタグの先頭。あとに、時刻(ミリ秒)が続く。 */
 const EXPIRES_TAG = "exp:";
 /** 権限を取り上げた相手を、台帳に聞き直すまでの長さ(ミリ秒)。 */
 const REVOCATION_CACHE_MS = 30_000;
 /** 権限を確かめ直させるために、接続を閉じるときのコード。 */
 const WS_REAUTHORIZE = 4001;
+
+/** カーソルの知らせに、表示名を添える(名前があるときだけ)。 */
+function withName<T extends { type: "cursor" }>(message: T, name: string | undefined): T {
+	return name === undefined ? message : { ...message, name };
+}
+
+/**
+ * 接続に付けるタグ。Worker が、接続を渡すときに付けた問い合わせから作る。
+ * 先頭は、端末の識別子(その端末のコミットを、本人の接続には配信しないため)。
+ */
+function socketTags(query: URLSearchParams, client: string): string[] {
+	// 読むだけの人(公開のプロジェクトを見ている、メンバーでない人)の接続か。Worker が付けた印で決まる。
+	const viewer = query.get("access") === "read";
+	// だれの接続か(メンバーのID)と、いつ権限を確かめたか。権限がなくなったあとで、接続を閉じるために使う。
+	const owner = viewer ? VIEWER_TAG : `${USER_TAG}${query.get("user") ?? ""}`;
+	// 時刻は、Worker が、権限を確かめ始めたときのもの(なければ、いま)。
+	const authorizedAt = Number(query.get("at") ?? "") || Date.now();
+	const tags = [client, `${ACCEPTED_TAG}${authorizedAt}`, owner];
+	// ログインの状態が切れる時刻(ログインしていない人の接続には、ない)。
+	const expires = Number(query.get("expires") ?? "");
+	if (expires > 0) tags.push(`${EXPIRES_TAG}${expires}`);
+	// カーソルに添える、表示名(ADR-0035)。
+	const name = query.get("name") ?? "";
+	if (name !== "") tags.push(`${NAME_TAG}${name}`);
+	return tags;
+}
 
 /**
  * 1ページ = 1インスタンス。ページへのコミットをここで直列化する。
@@ -160,16 +188,7 @@ export class PageDO extends DurableObject {
 	override fetch(request: Request): Response {
 		const query = new URL(request.url).searchParams;
 		const client = query.get("client") ?? "";
-		// 読むだけの人(公開のプロジェクトを見ている、メンバーでない人)の接続か。Worker が付けた印で決まる。
-		const viewer = query.get("access") === "read";
-		// だれの接続か(メンバーのID)と、いつ権限を確かめたか。権限がなくなったあとで、接続を閉じるために使う。
-		const owner = viewer ? VIEWER_TAG : `${USER_TAG}${query.get("user") ?? ""}`;
-		// 時刻は、Worker が、権限を確かめ始めたときのもの(なければ、いま)。
-		const authorizedAt = Number(query.get("at") ?? "") || Date.now();
-		const tags = [client, `${ACCEPTED_TAG}${authorizedAt}`, owner];
-		// ログインの状態が切れる時刻(ログインしていない人の接続には、ない)。
-		const expires = Number(query.get("expires") ?? "");
-		if (expires > 0) tags.push(`${EXPIRES_TAG}${expires}`);
+		const tags = socketTags(query, client);
 		const { 0: clientSocket, 1: serverSocket } = new WebSocketPair();
 		if (this.#deleted()) {
 			// 削除されたページ。接続は受け付けて、削除されたことだけを伝えて閉じる
@@ -181,11 +200,13 @@ export class PageDO extends DurableObject {
 		}
 		// いまいる他の端末のカーソルを、先に集めておく(自分の接続を数えないため)。
 		// 同じ端末の接続がいくつかあっても(つなぎ直しの途中)、端末ごとに1つにまとめる。
-		const others = new Map<ClientId, CursorPosition>();
+		const others = new Map<ClientId, { cursor: CursorPosition; name: string | undefined }>();
 		for (const socket of this.ctx.getWebSockets()) {
 			const owner = this.#clientOf(socket);
 			const cursor = this.#cursorOf(socket);
-			if (owner !== client && cursor !== null) others.set(owner, cursor);
+			if (owner !== client && cursor !== null) {
+				others.set(owner, { cursor, name: this.#nameOf(socket) });
+			}
 		}
 		// 端末の識別子をタグにする。その端末のコミットを、本人の接続には配信しないため。
 		this.ctx.acceptWebSocket(serverSocket, tags);
@@ -193,8 +214,8 @@ export class PageDO extends DurableObject {
 		// 台帳に確かめてあるページの名前も送る。切れているあいだに名前が変わっていても、追いつける。
 		const named = this.#named();
 		if (named !== null) this.#send(serverSocket, { type: "page", ...named });
-		for (const [owner, cursor] of others) {
-			this.#send(serverSocket, { type: "cursor", client: owner, cursor });
+		for (const [owner, { cursor, name }] of others) {
+			this.#send(serverSocket, withName({ type: "cursor", client: owner, cursor }, name));
 		}
 		return new Response(null, { status: 101, webSocket: clientSocket });
 	}
@@ -221,7 +242,7 @@ export class PageDO extends DurableObject {
 		// 同じ端末の接続がいくつかあっても(つなぎ直しの途中)、どの接続にも同じ位置を覚えさせる。
 		// 前の接続に古い位置が残っていると、あとから接続した端末に、それを伝えてしまう。
 		for (const own of this.ctx.getWebSockets(client)) own.serializeAttachment(cursor);
-		this.#broadcast({ type: "cursor", client, cursor }, socket);
+		this.#broadcast(withName({ type: "cursor", client, cursor }, this.#nameOf(socket)), socket);
 	}
 
 	/** 接続が閉じた。その端末のカーソルを消すように、他の端末に知らせる。 */
@@ -307,6 +328,12 @@ export class PageDO extends DurableObject {
 	#tagged(socket: WebSocket, prefix: string, fallback: number): number {
 		const tag = this.ctx.getTags(socket).find((item) => item.startsWith(prefix));
 		return tag === undefined ? fallback : Number(tag.slice(prefix.length));
+	}
+
+	/** その接続の人の表示名(接続を受け付けたときに付けたタグ)。なければ undefined。 */
+	#nameOf(socket: WebSocket): string | undefined {
+		const tag = this.ctx.getTags(socket).find((item) => item.startsWith(NAME_TAG));
+		return tag?.slice(NAME_TAG.length);
 	}
 
 	/** 接続している端末の識別子(接続を受け付けたときに付けたタグ)。 */

@@ -122,6 +122,23 @@ export async function deletePage(id: PageId): Promise<void> {
 	await send(pagePath(id), { method: "DELETE" });
 }
 
+/**
+ * `[名前.icon]` の画像のURLを引く(ADR-0035)。その名前のページの画像か、その表示名のメンバーのアイコン。
+ * なければ null。通信の失敗は、例外にする(次に引き直せるように)。
+ */
+export async function loadIcon(name: string): Promise<string | null> {
+	const project = encodeURIComponent(currentProject() ?? "");
+	const response = await fetch(
+		`/api/projects/${project}/icons/${encodeURIComponent(name)}`,
+		undefined,
+	);
+	if (response.status === STATUS_MISSING) return null;
+	if (!response.ok) throw new PageApiError("failed");
+	const body: unknown = await response.json().catch(() => null);
+	const url = typeof body === "object" && body !== null && "url" in body ? body.url : null;
+	return typeof url === "string" && url.startsWith("https://") ? url : null;
+}
+
 /** ページの WebSocket のURL。いま開いているページ(location)と同じ接続先にする。 */
 export function pageSocketUrl(location: URL | Location, id: PageId, client: ClientId): string {
 	const protocol = location.protocol === "https:" ? "wss:" : "ws:";

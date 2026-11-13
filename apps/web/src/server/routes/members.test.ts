@@ -767,6 +767,23 @@ describe("権限がなくなった人の接続", () => {
 		]);
 	});
 
+	it("メンバーのカーソルには、その人の表示名を添えて配る(あとから接続した人にも)", async () => {
+		const { path, admin } = await project();
+		await send("PATCH", "/api/me", admin, { name: "山田 花子" });
+		const other = await member(path, admin);
+		const hanako = await watch(path, admin, "hanako-1");
+		const first = await watch(path, other, "other-1");
+		const cursor = { line: "t", column: 2 };
+
+		hanako.socket.send(JSON.stringify({ type: "cursor", cursor }));
+
+		const expected = { type: "cursor", client: "hanako-1", cursor, name: "山田 花子" };
+		await vi.waitFor(() => expect(first.messages.at(-1)).toEqual(expected));
+		const late = await watch(path, other, "other-2");
+		await vi.waitFor(() => expect(late.messages).toContainEqual(expected));
+		for (const { socket } of [hanako, first, late]) socket.close();
+	});
+
 	it("外されたあとで、もう一度招待されて参加した人の、新しい接続は閉じない", async () => {
 		const { path, admin } = await project();
 		const back = await member(path, admin);

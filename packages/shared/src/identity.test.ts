@@ -1,5 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { readIdentity } from "./identity.ts";
+import { parseDisplayName, parsePictureUrl, readIdentity } from "./identity.ts";
+
+describe("parseDisplayName(表示名)", () => {
+	it("前後の空白を取り除く", () => {
+		expect(parseDisplayName("  山田 花子  ")).toBe("山田 花子");
+	});
+
+	it.each([
+		["文字列ではない", 1],
+		["空", ""],
+		["空白だけ", "   "],
+		["長すぎる", "あ".repeat(51)],
+		["改行が入っている", "花子\n太郎"],
+	])("%sものは、受け付けない", (_name, value) => {
+		expect(parseDisplayName(value)).toBeNull();
+	});
+
+	it("50文字までは、受け付ける(絵文字も、1文字として数える)", () => {
+		expect(parseDisplayName("あ".repeat(50))).toBe("あ".repeat(50));
+		expect(parseDisplayName("😀".repeat(50))).toBe("😀".repeat(50));
+	});
+});
+
+describe("parsePictureUrl(アイコンの画像のURL)", () => {
+	it("https のURLを受け付ける", () => {
+		expect(parsePictureUrl("https://images.example/a.png?x=1")).toBe(
+			"https://images.example/a.png?x=1",
+		);
+	});
+
+	it.each([
+		["文字列ではない", null],
+		["http", "http://images.example/a.png"],
+		["スクリプト", "javascript:alert(1)"],
+		["データ", "data:image/png;base64,AAAA"],
+		["空白が入っている", "https://images.example/a b.png"],
+		["長すぎる", `https://images.example/${"a".repeat(1000)}`],
+	])("%sものは、受け付けない", (_name, value) => {
+		expect(parsePictureUrl(value)).toBeNull();
+	});
+});
 
 const expected = {
 	issuers: ["https://accounts.example", "accounts.example"],

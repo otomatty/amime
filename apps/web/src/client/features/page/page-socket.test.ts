@@ -166,10 +166,20 @@ describe("connectPageSocket", () => {
 			latest().receive('{"type":"leave","client":"bob"}');
 
 			expect(handlers.onCursor.mock.calls).toEqual([
-				["bob", at("a", 2)],
-				["bob", null],
+				["bob", at("a", 2), undefined],
+				["bob", null, undefined],
 			]);
 			expect(handlers.onLeave).toHaveBeenCalledExactlyOnceWith("bob");
+		});
+
+		it("カーソルに添えられた表示名も受け取る", () => {
+			const { latest, handlers } = connect();
+
+			latest().receive(
+				'{"type":"cursor","client":"bob","cursor":{"line":"a","column":2},"name":"ボブ"}',
+			);
+
+			expect(handlers.onCursor.mock.calls).toEqual([["bob", at("a", 2), "ボブ"]]);
 		});
 
 		it("自分のカーソルの位置を送る", () => {

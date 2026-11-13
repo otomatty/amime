@@ -11,6 +11,15 @@ function setup() {
 }
 
 describe("createPresence(他の人のカーソルの一覧)", () => {
+	it("表示名が添えられていれば、一覧にも入れる。位置が変わっても、名前は残る", () => {
+		const { onChange, presence } = setup();
+
+		presence.onCursor(client("bob"), at("a", 2), "ボブ");
+		expect(onChange).toHaveBeenLastCalledWith([{ client: "bob", ...at("a", 2), name: "ボブ" }]);
+		presence.onCursor(client("bob"), at("b", 0), "ボブ");
+		expect(onChange).toHaveBeenLastCalledWith([{ client: "bob", ...at("b", 0), name: "ボブ" }]);
+	});
+
 	it("カーソルの位置が届いたら、一覧に加えて知らせる", () => {
 		const { onChange, presence } = setup();
 

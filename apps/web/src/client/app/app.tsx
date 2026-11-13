@@ -1,6 +1,7 @@
 import type { ProjectInfo } from "@amime/sync";
 import { AccountProvider, useAccount } from "../features/account/account.tsx";
 import { AccountMenu } from "../features/account/account-menu.tsx";
+import { Profile } from "../features/account/profile.tsx";
 import { Editor } from "../features/editor/editor.tsx";
 import { Page } from "../features/page/page.tsx";
 import { PageList } from "../features/pages/page-list.tsx";
@@ -86,6 +87,7 @@ function Content({ route }: { readonly route: Route }) {
 		);
 	}
 	if (route.kind === "invite") return <InvitePage token={route.token} />;
+	if (route.kind === "profile") return <Profile />;
 	return (
 		<ProjectGate name={route.project}>
 			{(project) => {
