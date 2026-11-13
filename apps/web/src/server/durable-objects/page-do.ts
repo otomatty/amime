@@ -193,13 +193,15 @@ export class PageDO extends DurableObject {
 			}
 		});
 		if (applied.length === 0) return { version, applied };
-		await this.#scheduleIndexing();
 
 		// 保存してから配信する。送った本人は応答で結果を受け取るので、本人の接続には送らない。
 		const skipped = new Set(client === undefined ? [] : this.ctx.getWebSockets(client));
 		for (const socket of this.ctx.getWebSockets()) {
 			if (!skipped.has(socket)) this.#send(socket, { type: "commit", version, applied });
 		}
+		// 台帳への知らせの予約は、配信のあとで行う。予約に失敗しても、保存したコミットは他の端末に届いている
+		// (送り直しは重複として扱うので、配信し直さない)。
+		await this.#scheduleIndexing();
 		return { version, applied };
 	}
 

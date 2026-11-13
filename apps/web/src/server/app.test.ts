@@ -1,4 +1,4 @@
-import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { app } from "./app.ts";
@@ -279,6 +279,22 @@ describe("ページの WebSocket", () => {
 			]),
 		);
 		expect(writer.messages).toEqual([{ type: "hello", version: 0 }]);
+	});
+
+	it("台帳への知らせの予約に失敗しても、保存したコミットは配信する", async () => {
+		const reader = await connect("ws-alarm-fails", "reader");
+		const stub = exports.PageDO.getByName("default/ws-alarm-fails");
+		await runInDurableObject(stub, (_instance, state) => {
+			vi.spyOn(state.storage, "setAlarm").mockRejectedValueOnce(new Error("alarm failed"));
+		});
+
+		const response = await commitFrom("ws-alarm-fails", "writer", insert("a"));
+
+		// 保存はできている。応答は失敗になり、端末は同じコミットを送り直す。
+		expect(response.status).toBe(500);
+		await vi.waitFor(() =>
+			expect(reader.messages.at(-1)).toMatchObject({ type: "commit", version: 1 }),
+		);
 	});
 
 	it("送り直された同じコミットは、配信しない", async () => {
