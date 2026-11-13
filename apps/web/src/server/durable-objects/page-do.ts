@@ -15,12 +15,15 @@ import {
 	type PageSnapshot,
 	parseClientMessage,
 	parseCursorPosition,
-	parsePageInfo,
+	parsePageTitle,
 	type ServerMessage,
 } from "@amime/sync";
 import { generateKeyBetween } from "fractional-indexing";
 
 type LineRow = { id: string; text: string };
+
+/** meta の表に持つ数値。deleted は、削除されたページなら 1。 */
+type MetaKey = "version" | "updated" | "dirty" | "deleted";
 
 /**
  * 覚えておくコミットのIDの数(ページごと)。
@@ -37,6 +40,8 @@ const INDEX_DELAY_MS = 2000;
 /** 変更が続いていても、最初の変更からこの時間がたったら知らせる。 */
 const INDEX_MAX_WAIT_MS = 10_000;
 
+/** WebSocket の終了コード: 正常に閉じた。 */
+const WS_NORMAL = 1000;
 /** WebSocket の終了コード: 方針に反するメッセージを受け取った。 */
 const WS_POLICY_VIOLATION = 1008;
 
@@ -84,6 +89,14 @@ export class PageDO extends DurableObject {
 	override fetch(request: Request): Response {
 		const client = new URL(request.url).searchParams.get("client") ?? "";
 		const { 0: clientSocket, 1: serverSocket } = new WebSocketPair();
+		if (this.#deleted()) {
+			// 削除されたページ。接続は受け付けて、削除されたことだけを伝えて閉じる
+			// (接続を断ると、画面には失敗の理由が伝わらず、つなぎ直し続ける)。
+			serverSocket.accept();
+			serverSocket.send(JSON.stringify({ type: "deleted" } satisfies ServerMessage));
+			serverSocket.close(WS_NORMAL, "page deleted");
+			return new Response(null, { status: 101, webSocket: clientSocket });
+		}
 		// いまいる他の端末のカーソルを、先に集めておく(自分の接続を数えないため)。
 		// 同じ端末の接続がいくつかあっても(つなぎ直しの途中)、端末ごとに1つにまとめる。
 		const others = new Map<ClientId, CursorPosition>();
@@ -161,8 +174,31 @@ export class PageDO extends DurableObject {
 		}
 	}
 
-	getPage(): PageSnapshot {
+	/** ページの内容。削除されたページなら "deleted"。 */
+	getPage(): PageSnapshot | "deleted" {
+		if (this.#deleted()) return "deleted";
 		return { version: this.#version(), lines: this.#lines() };
+	}
+
+	/**
+	 * ページを削除する(ADR-0026)。本文を消し、削除されたことを覚えておく。元には戻せない。
+	 * このあとのコミットは受け付けない。開いている端末には、削除されたことを知らせる。
+	 */
+	async destroy(): Promise<void> {
+		this.ctx.storage.transactionSync(() => {
+			this.ctx.storage.sql.exec("DELETE FROM page_lines; DELETE FROM commits; DELETE FROM notes;");
+			this.#setMeta("deleted", 1);
+			this.#setMeta("dirty", 0);
+		});
+		for (const socket of this.ctx.getWebSockets()) {
+			this.#send(socket, { type: "deleted" });
+			socket.close(WS_NORMAL, "page deleted");
+		}
+		await this.ctx.storage.deleteAlarm();
+	}
+
+	#deleted(): boolean {
+		return this.#meta("deleted") !== 0;
 	}
 
 	/**
@@ -170,7 +206,8 @@ export class PageDO extends DurableObject {
 	 * 実際に効いた変更と、適用後のバージョンを返す。何も効かなければ、バージョンは進まない。
 	 * 効いた変更は、接続している他の端末に配信する。client は、送った端末の識別子。
 	 */
-	async commit(commit: Commit, client?: ClientId): Promise<CommitResult> {
+	async commit(commit: Commit, client?: ClientId): Promise<CommitResult | "deleted"> {
+		if (this.#deleted()) return "deleted";
 		// 同じコミットを送り直してきた(前の応答が届かなかった)。もう適用してあるので、何もしない(ADR-0021)。
 		if (this.#seen(commit.id)) {
 			// 前回、保存したあとで台帳への知らせの予約に失敗していたら、ここで予約し直す。
@@ -224,7 +261,7 @@ export class PageDO extends DurableObject {
 	override async alarm(): Promise<void> {
 		// この Durable Object の名前は「プロジェクト/ページのID」。
 		const [project, page] = (this.ctx.id.name ?? "").split("/");
-		if (project === undefined || page === undefined) return;
+		if (project === undefined || page === undefined || this.#deleted()) return;
 		const version = this.#version();
 		const lines = this.#lines().map((line) => line.text);
 		const info = await exports.ProjectDO.getByName(project).index(page as PageId, {
@@ -233,6 +270,8 @@ export class PageDO extends DurableObject {
 			updated: this.#meta("updated"),
 			summary: summarizePage(lines),
 		});
+		// 知らせているあいだに削除されていたら、何も残さない。
+		if (this.#deleted()) return;
 		// 知らせているあいだに変更が入っていなければ、知らせ終えたことにする。
 		// 入っていたら、その変更が次の知らせを予約している。
 		if (this.#version() === version) this.#setMeta("dirty", 0);
@@ -252,9 +291,9 @@ export class PageDO extends DurableObject {
 			.toArray();
 		const stored = rows[0]?.value;
 		if (stored === undefined) return null;
-		// 自分で保存した値。ページのIDは、ここでは使わないので、形だけ合わせて検査する。
-		const parsed = parsePageInfo({ id: "self", ...JSON.parse(stored) });
-		return parsed.ok ? { title: parsed.value.title, problem: parsed.value.problem } : null;
+		// 自分で保存した値。
+		const parsed = parsePageTitle(JSON.parse(stored));
+		return parsed.ok ? parsed.value : null;
 	}
 
 	#send(socket: WebSocket, message: ServerMessage): void {
@@ -335,14 +374,14 @@ export class PageDO extends DurableObject {
 		return this.#meta("version");
 	}
 
-	#meta(key: "version" | "updated" | "dirty"): number {
+	#meta(key: MetaKey): number {
 		const rows = this.ctx.storage.sql
 			.exec<{ value: number }>("SELECT value FROM meta WHERE key = ?", key)
 			.toArray();
 		return rows[0]?.value ?? 0;
 	}
 
-	#setMeta(key: "version" | "updated" | "dirty", value: number): void {
+	#setMeta(key: MetaKey, value: number): void {
 		this.ctx.storage.sql.exec(
 			"INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
 			key,

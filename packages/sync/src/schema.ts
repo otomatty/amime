@@ -106,7 +106,8 @@ const pageTitle = {
 	title: v.string(),
 	problem: v.nullable(v.picklist(["taken", "empty", "too-long", "reserved"])),
 };
-const PageInfoSchema = v.object({ id: PageIdSchema, ...pageTitle });
+const PageTitleSchema = v.object(pageTitle);
+const PageInfoSchema = v.object({ id: PageIdSchema, ...pageTitle, pinned: v.boolean() });
 const TimeSchema = v.pipe(v.number(), v.minValue(0));
 const PageCardSchema = v.object({
 	id: PageIdSchema,
@@ -116,6 +117,7 @@ const PageCardSchema = v.object({
 	updated: TimeSchema,
 	created: TimeSchema,
 	linked: VersionSchema,
+	pinned: v.boolean(),
 });
 const PageListSchema = v.object({ pages: v.array(PageCardSchema), total: VersionSchema });
 const PageSortSchema = v.picklist(["updated", "created", "title", "linked"]);
@@ -132,6 +134,7 @@ const ServerMessageSchema = v.variant("type", [
 	v.object({ type: v.literal("cursor"), client: ClientIdSchema, cursor: CursorSchema }),
 	v.object({ type: v.literal("leave"), client: ClientIdSchema }),
 	v.object({ type: v.literal("page"), ...pageTitle }),
+	v.object({ type: v.literal("deleted") }),
 ]);
 
 function parse<T>(schema: v.GenericSchema<unknown, T>, input: unknown): Result<T, "invalid"> {
@@ -160,6 +163,11 @@ function parseJson<T>(schema: v.GenericSchema<unknown, T>, input: unknown): Resu
 /** 外部から届いたページのIDを検査する。 */
 export const parsePageId = (input: unknown): Result<PageId, "invalid"> =>
 	parse(PageIdSchema, input);
+
+/** ページの名前と、名前を1行目に合わせられない理由を検査する。 */
+export const parsePageTitle = (
+	input: unknown,
+): Result<Pick<PageInfo, "title" | "problem">, "invalid"> => parse(PageTitleSchema, input);
 
 /** サーバーから届いた、ページの情報を検査する。 */
 export const parsePageInfo = (input: unknown): Result<PageInfo, "invalid"> =>

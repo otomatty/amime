@@ -15,13 +15,21 @@ const BY_TITLE = "/api/pages/by-title/";
  * fetch を差し替える。名前からページを引く要求には、決まったIDと、URLの名前から作った名前を返す。
  * それ以外の要求(ページの読み込みと、コミット)を handler に渡す。返すのは、handler の呼び出しの記録。
  */
-function stubFetch(handler: Handler, info: { title?: string; problem?: string | null } = {}) {
+function stubFetch(
+	handler: Handler,
+	info: { title?: string; problem?: string | null; pinned?: boolean } = {},
+) {
 	const fetchMock = vi.fn(handler);
 	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
 		if (!url.startsWith(BY_TITLE)) return fetchMock(url, init);
 		const name = decodeURIComponent(url.slice(BY_TITLE.length));
 		const title = info.title ?? name.replaceAll("_", " ");
-		return json({ id: PAGE_ID, title, problem: info.problem ?? null });
+		return json({
+			id: PAGE_ID,
+			title,
+			problem: info.problem ?? null,
+			pinned: info.pinned ?? false,
+		});
 	});
 	return fetchMock;
 }
@@ -342,6 +350,61 @@ describe("Page", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	describe("固定と削除(ADR-0026)", () => {
+		it("保存されているページでは、固定と削除の操作を出す。固定しているかどうかが分かる", async () => {
+			stubFetch(() => json(saved), { pinned: true });
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			expect(screen.getByRole("button", { name: "固定を外す" })).toBeDefined();
+			expect(screen.getByRole("button", { name: "このページを削除" })).toBeDefined();
+		});
+
+		it("まだ保存されていないページでは、固定と削除の操作を出さない", async () => {
+			stubFetch(() => json({ version: 0, lines: [] }));
+
+			render(<Page name="新しい_ページ" />);
+
+			await waitFor(() => expect(lines()).toEqual(["新しい ページ"]));
+			expect(screen.queryByRole("button", { name: "このページを削除" })).toBeNull();
+		});
+
+		it("固定すると、ボタンが「固定を外す」に変わる", async () => {
+			stubFetch((_url, init) =>
+				init?.method === "PUT"
+					? json({ id: PAGE_ID, title: "買い物", problem: null, pinned: true })
+					: json(saved),
+			);
+			render(<Page name="買い物" />);
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+
+			fireEvent.click(screen.getByRole("button", { name: "一覧の先頭に固定する" }));
+
+			await waitFor(() => expect(screen.getByRole("button", { name: "固定を外す" })).toBeDefined());
+		});
+
+		it("開いているページが削除されたと知らされたら、そのことを表示し、操作を出すのをやめる", async () => {
+			const { receive } = await openWithSocket();
+
+			receive({ type: "deleted" });
+
+			expect(status()).toBe("このページは削除されました。ここに書いても、保存されません");
+			expect(screen.queryByRole("button", { name: "このページを削除" })).toBeNull();
+			// 書いてあった内容は、画面に残る(写しておける)。
+			expect(lines()).toEqual(["買い物"]);
+		});
+
+		it("読み込もうとしたページが削除されていたら、そのことを伝え、一覧へ戻れるようにする", async () => {
+			stubFetch(() => json({ error: "page-deleted" }, 410));
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(screen.getByText(/このページは削除されました/)).toBeDefined());
+			expect(screen.getByRole("link", { name: "ページの一覧" }).getAttribute("href")).toBe("/");
+		});
+	});
+
 	describe("ページの名前(ADR-0024)", () => {
 		const path = () => decodeURIComponent(window.location.pathname);
 
@@ -350,7 +413,7 @@ describe("Page", () => {
 			vi.stubGlobal("fetch", async (url: string) => {
 				if (failing) return json({ error: "x" }, 500);
 				return url.startsWith(BY_TITLE)
-					? json({ id: PAGE_ID, title: "買い物", problem: null })
+					? json({ id: PAGE_ID, title: "買い物", problem: null, pinned: false })
 					: json(saved);
 			});
 			render(<Page name="買い物" />);

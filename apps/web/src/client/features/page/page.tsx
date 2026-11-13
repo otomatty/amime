@@ -16,6 +16,7 @@ import { createClientId } from "./client-id.ts";
 import { createCommitId } from "./commit-id.ts";
 import { PageApiError } from "./page-api-error.ts";
 import { createPageSync, type PageApi, type SyncStatus } from "./page-sync.ts";
+import { PageTools } from "./page-tools.tsx";
 import {
 	browserLocks,
 	browserStorage,
@@ -74,6 +75,13 @@ function Pending({ state }: { readonly state: Loading<unknown> }) {
 		);
 	}
 	if (state.status === "ready") return null;
+	if (state.kind === "gone") {
+		return (
+			<p className="page-message">
+				このページは削除されました。<a href="/">ページの一覧</a>へ戻れます。
+			</p>
+		);
+	}
 	return state.kind === "disabled" ? (
 		<p className="page-message">
 			この環境では、ページの保存と読み込みはまだ使えません。ログインの仕組みができるまで、公開している環境では止めています。
@@ -97,6 +105,7 @@ const STATUS_LABELS: Record<SyncStatus, string> = {
 	retrying: "保存できませんでした。自動で再試行します",
 	rejected:
 		"保存できない内容があります。1行が20,000文字を超えていないか確かめてください。直すと保存されます",
+	deleted: "このページは削除されました。ここに書いても、保存されません",
 };
 
 /** 他の人の変更やカーソルを受け取る接続(WebSocket)の状態。 */
@@ -116,8 +125,10 @@ const TITLE_PROBLEMS: Record<TitleProblem, string> = {
 	reserved: "「.」と「..」は、ページの名前にできません。",
 };
 
-/** 保存を待っている変更がない状態。ページを離れても何も失われない。 */
-const SETTLED: ReadonlySet<SyncStatus> = new Set(["new", "saved"]);
+/** 保存を待っている変更がない状態。ページを離れても何も失われない(削除されたページは、保存する先がない)。 */
+const SETTLED: ReadonlySet<SyncStatus> = new Set(["new", "saved", "deleted"]);
+/** ページの操作(固定、削除)を出さない状態。まだ保存されていないページと、削除されたページ。 */
+const WITHOUT_TOOLS: ReadonlySet<SyncStatus> = new Set(["new", "deleted"]);
 
 /**
  * 保存されるページ。URLの中の名前からページを引き、読み込んでから編集欄を表示する。
@@ -178,6 +189,7 @@ function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEdi
 	const [title] = useState(info.title);
 	// ページのいまの名前と、名前を1行目に合わせられない理由。1行目を変えると、サーバーが名前を合わせて知らせてくる。
 	const [named, setNamed] = useState({ title: info.title, problem: info.problem });
+	const [pinned, setPinned] = useState(info.pinned);
 	useEffect(() => {
 		// URLを、ページのいまの名前に合わせる。再読み込みしても、共有しても、同じページが開く。
 		const target = new URL(pageHref(named.title), window.location.href);
@@ -254,6 +266,9 @@ function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEdi
 
 	return (
 		<>
+			{!WITHOUT_TOOLS.has(status) && (
+				<PageTools id={info.id} pinned={pinned} onPinned={setPinned} />
+			)}
 			<p className="page-status" role="status" data-status={status}>
 				{STATUS_LABELS[status]}
 			</p>

@@ -140,7 +140,12 @@ describe("ページのAPI", () => {
 
 			expect(response.status).toBe(200);
 			expect(response.headers.get("cache-control")).toBe("no-store");
-			expect(info).toEqual({ id: expect.any(String), title: "Api 名前", problem: null });
+			expect(info).toEqual({
+				id: expect.any(String),
+				title: "Api 名前",
+				problem: null,
+				pinned: false,
+			});
 			// 開いただけでは、ページは作られない。
 			expect(await (await get(`/api/pages/${info.id}`)).json()).toEqual({ version: 0, lines: [] });
 		});
@@ -249,6 +254,7 @@ describe("ページのAPI", () => {
 				updated: expect.any(Number),
 				created: expect.any(Number),
 				linked: 0,
+				pinned: false,
 			});
 			expect(body.pages.find((page) => page.id === egg)?.linked).toBe(1);
 			expect(body.total).toBeGreaterThanOrEqual(2);
@@ -282,6 +288,158 @@ describe("ページのAPI", () => {
 
 			expect(response.status).toBe(400);
 			expect(body).toEqual({ error: "invalid-query" });
+		});
+	});
+
+	describe("固定と削除(ADR-0026)", () => {
+		const send = (method: string, path: string, body?: unknown) =>
+			exports.default.fetch(`https://amime.test${path}`, {
+				method,
+				...(body !== undefined && {
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(body),
+				}),
+			});
+		/** 保存されたページを作り、台帳への知らせが済むのを待つ。 */
+		async function create(title: string) {
+			const info = (await (
+				await get(`/api/pages/by-title/${encodeURIComponent(title)}`)
+			).json()) as { id: string };
+			await post(`/api/pages/${info.id}/commits`, {
+				id: commitId(),
+				changes: [{ type: "insert", line: { id: "t", text: title }, after: null, before: null }],
+			});
+			await runDurableObjectAlarm(exports.PageDO.getByName(`default/${info.id}`));
+			return info.id;
+		}
+		const listed = async () => {
+			const body = (await (await get("/api/pages?sort=title")).json()) as {
+				pages: { id: string; pinned: boolean }[];
+			};
+			return body.pages;
+		};
+
+		it("ページを固定すると、一覧の先頭に並ぶ。固定を外すと戻る", async () => {
+			const id = await create("固定 するページ");
+
+			const pinned = await send("PUT", `/api/pages/${id}/pin`, { pinned: true });
+
+			expect(pinned.status).toBe(200);
+			expect(await pinned.json()).toMatchObject({ id, pinned: true });
+			expect((await listed())[0]).toMatchObject({ id, pinned: true });
+
+			const released = await send("PUT", `/api/pages/${id}/pin`, { pinned: false });
+			expect(await released.json()).toMatchObject({ id, pinned: false });
+		});
+
+		it.each([
+			["本文がない", undefined],
+			["pinned がない", {}],
+			["pinned が真偽値でない", { pinned: "yes" }],
+		])("固定の指定で、%sときは 400 で断る", async (_name, body) => {
+			const response = await send("PUT", "/api/pages/pin-invalid/pin", body);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({ error: "invalid-pin" });
+		});
+
+		it("台帳にないページは、固定できない(404)", async () => {
+			const response = await send("PUT", "/api/pages/pin-unknown/pin", { pinned: true });
+
+			expect(response.status).toBe(404);
+		});
+
+		it("ページを削除すると、一覧から消え、読み込みも書き込みも 410 になる", async () => {
+			const id = await create("削除 するページ");
+
+			const response = await send("DELETE", `/api/pages/${id}`);
+
+			expect(response.status).toBe(204);
+			expect((await listed()).map((page) => page.id)).not.toContain(id);
+			const read = await get(`/api/pages/${id}`);
+			expect(read.status).toBe(410);
+			expect(await read.json()).toEqual({ error: "page-deleted" });
+			const write = await post(`/api/pages/${id}/commits`, {
+				id: commitId(),
+				changes: [insertTitle],
+			});
+			expect(write.status).toBe(410);
+			// 削除は、何度呼んでも同じ結果になる。
+			expect((await send("DELETE", `/api/pages/${id}`)).status).toBe(204);
+		});
+
+		it("削除したあとで同じ名前を開くと、別の新しいページになる。書き込める", async () => {
+			const id = await create("削除して 作り直す");
+			await send("DELETE", `/api/pages/${id}`);
+
+			const reopened = (await (
+				await get(`/api/pages/by-title/${encodeURIComponent("削除して 作り直す")}`)
+			).json()) as { id: string };
+
+			expect(reopened.id).not.toBe(id);
+			expect(await (await get(`/api/pages/${reopened.id}`)).json()).toEqual({
+				version: 0,
+				lines: [],
+			});
+		});
+
+		it("削除が途中で止まり、台帳にだけ残ったページは、読もうとしたときに台帳からも消す", async () => {
+			const title = "削除が 途中で止まった";
+			const id = await create(title);
+			// 本文は消えたが、台帳から消す前に失敗した、という状態を作る。
+			await exports.PageDO.getByName(`default/${id}`).destroy();
+			expect((await listed()).map((page) => page.id)).toContain(id);
+
+			const read = await get(`/api/pages/${id}`);
+
+			expect(read.status).toBe(410);
+			expect((await listed()).map((page) => page.id)).not.toContain(id);
+			// 同じ名前で、新しいページを作り直せる。
+			const reopened = (await (
+				await get(`/api/pages/by-title/${encodeURIComponent(title)}`)
+			).json()) as { id: string };
+			expect(reopened.id).not.toBe(id);
+		});
+
+		it("削除すると、開いている端末に知らせる。あとから接続した端末にも、削除されたことだけを伝えて閉じる", async () => {
+			const id = await create("削除を 知らせる");
+			const connect = async (client: string) => {
+				const response = await exports.default.fetch(
+					`https://amime.test/api/pages/${id}/socket?client=${client}`,
+					{ headers: { Upgrade: "websocket" } },
+				);
+				const messages: unknown[] = [];
+				const closes: number[] = [];
+				response.webSocket?.accept();
+				response.webSocket?.addEventListener("message", ({ data }) => {
+					messages.push(JSON.parse(String(data)));
+				});
+				response.webSocket?.addEventListener("close", ({ code }) => closes.push(code));
+				return { messages, closes };
+			};
+			const open = await connect("open");
+
+			await send("DELETE", `/api/pages/${id}`);
+
+			await vi.waitFor(() => expect(open.messages.at(-1)).toEqual({ type: "deleted" }));
+			// 知らせたあとは、サーバーの側から接続を閉じる。
+			await vi.waitFor(() => expect(open.closes).toEqual([1000]));
+			const late = await connect("late");
+			await vi.waitFor(() => expect(late.closes).toEqual([1000]));
+			expect(late.messages).toEqual([{ type: "deleted" }]);
+		});
+
+		it("削除したページでは、台帳への知らせを行わない", async () => {
+			const id = await create("削除後に 知らせない");
+			const stub = exports.PageDO.getByName(`default/${id}`);
+			await post(`/api/pages/${id}/commits`, {
+				id: commitId(),
+				changes: [{ type: "update", id: "t", text: "書き換えた" }],
+			});
+
+			await send("DELETE", `/api/pages/${id}`);
+
+			expect(await runDurableObjectAlarm(stub)).toBe(false);
 		});
 	});
 

@@ -18,6 +18,9 @@ const MAX_COMMIT_BYTES = 2 * 1024 * 1024;
 /** 認証とプロジェクト(P4)が入るまで、プロジェクトは1つだけ。 */
 const PROJECT = "default";
 
+/** 削除されたページへの要求に返す本文。 */
+const DELETED = { error: "page-deleted" };
+
 /** プロジェクトのページの台帳。名前(タイトル)から、ページのIDを引く(ADR-0024)。 */
 const directory = () => exports.ProjectDO.getByName(PROJECT);
 
@@ -89,7 +92,30 @@ const pages = new Hono<AppEnv>()
 	.get("/:id", async (c) => {
 		const id = parsePageId(c.req.param("id"));
 		if (!id.ok) return c.json({ error: "invalid-page" }, 400);
-		return c.json(await pageStub(id.value).getPage());
+		const page = await pageStub(id.value).getPage();
+		if (page !== "deleted") return c.json(page);
+		// 削除が、本文を消したところで止まっていたら、台帳に残っている。ここで消して、同じ名前を使えるようにする。
+		await directory().remove(id.value);
+		return c.json(DELETED, 410);
+	})
+	// ページを削除する(ADR-0026)。本文を消してから、台帳から消す。何度呼んでも、結果は同じ。
+	.delete("/:id", async (c) => {
+		const id = parsePageId(c.req.param("id"));
+		if (!id.ok) return c.json({ error: "invalid-page" }, 400);
+		await pageStub(id.value).destroy();
+		await directory().remove(id.value);
+		return c.body(null, 204);
+	})
+	// ページを、一覧の先頭に固定する・固定を外す(ADR-0026)。
+	.put("/:id/pin", async (c) => {
+		const id = parsePageId(c.req.param("id"));
+		if (!id.ok) return c.json({ error: "invalid-page" }, 400);
+		const body = await readJson(c.req.raw);
+		const pinned =
+			typeof body === "object" && body !== null && "pinned" in body ? body.pinned : null;
+		if (typeof pinned !== "boolean") return c.json({ error: "invalid-pin" }, 400);
+		const info = await directory().pin(id.value, pinned);
+		return info === null ? c.json({ error: "unknown-page" }, 404) : c.json(info);
 	})
 	.post(
 		"/:id/commits",
@@ -103,7 +129,8 @@ const pages = new Hono<AppEnv>()
 			const commit = parseCommitRequest(await readJson(c.req.raw));
 			if (!commit.ok) return c.json({ error: "invalid-commit" }, 400);
 			const { id, changes, client } = commit.value;
-			return c.json(await pageStub(page.value).commit({ id, changes }, client));
+			const result = await pageStub(page.value).commit({ id, changes }, client);
+			return result === "deleted" ? c.json(DELETED, 410) : c.json(result);
 		},
 	)
 	// 他の端末のコミットを受け取るための WebSocket(ADR-0018)。

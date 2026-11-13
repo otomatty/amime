@@ -62,3 +62,40 @@
 	color: var(--color-muted);
 	font-size: 0.8rem;
 }
+
+/* ページの操作(固定、削除)。保存の状態の上に、小さく並べる。 */
+.page-tools {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-items: center;
+	justify-content: flex-end;
+	margin: 0 0 0.5rem;
+	color: var(--color-muted);
+	font-size: 0.75rem;
+}
+
+.page-tools button {
+	padding: 0.2rem 0.55rem;
+	border: 1px solid var(--color-border);
+	border-radius: 0.3rem;
+	background: transparent;
+	color: var(--color-muted);
+	font: inherit;
+	cursor: pointer;
+}
+
+.page-tools button[aria-pressed="true"] {
+	border-color: var(--color-link);
+	color: var(--color-link);
+}
+
+.page-tools button.danger,
+.page-tools [role="alert"] {
+	border-color: var(--color-warning);
+	color: var(--color-warning);
+}
+
+.page-status[data-status="deleted"] {
+	color: var(--color-warning);
+}
