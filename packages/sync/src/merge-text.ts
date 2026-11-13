@@ -67,8 +67,10 @@ function commonLengths(a: readonly string[], b: readonly string[]): Uint16Array 
 /**
  * 統合に使える手間の残り。本文を見比べるたびに減らす(減らすのは、渡した側の値)。
  * 1度にたくさんの行を統合させて、処理を長引かせることができないようにする。
+ * - chars: 見比べる本文の文字数。足りなければ、統合しない(あとから届いた本文にする)
+ * - cells: 細かく見比べる範囲の大きさ。足りなければ、範囲をまるごと置き換えたものとして統合する(どちらの入力も残る)
  */
-export type MergeBudget = { remaining: number };
+export type MergeBudget = { chars: number; cells: number };
 
 /**
  * base を side にする手順を求める。残す文字ができるだけ多くなるようにする。
@@ -168,26 +170,26 @@ type MergeOptions = {
  *   まったく同じ文字を足していたら、1度だけ足す。
  * - incoming が置き換えた語の直後に current が足していたら、置き換えた語を前にする(語のあとに足した文字が、語の前に来ないように)。
  *
- * 手間の残り(budget)が足りなければ、統合せずに incoming を返す。
+ * 見比べる本文の量が、手間の残り(budget.chars)を超えるなら、統合せずに incoming を返す。
  */
 export function mergeText(
 	base: string,
 	current: string,
 	incoming: string,
-	{ mode = "both", budget = { remaining: Number.POSITIVE_INFINITY } }: MergeOptions = {},
+	{ mode = "both", budget = { chars: Infinity, cells: Infinity } }: MergeOptions = {},
 ): string {
 	if (current === base || current === incoming) return incoming;
 	if (incoming === base) return current;
 
 	const cost = base.length + current.length + incoming.length;
-	if (cost > budget.remaining) return incoming;
-	budget.remaining -= cost;
+	if (cost > budget.chars) return incoming;
+	budget.chars -= cost;
 
 	const origin = graphemes(base);
-	const ours = editScript(origin, graphemes(current), Math.min(MAX_CELLS, budget.remaining));
-	budget.remaining -= ours.cells;
-	const theirs = editScript(origin, graphemes(incoming), Math.min(MAX_CELLS, budget.remaining));
-	budget.remaining -= theirs.cells;
+	const ours = editScript(origin, graphemes(current), Math.min(MAX_CELLS, budget.cells));
+	budget.cells -= ours.cells;
+	const theirs = editScript(origin, graphemes(incoming), Math.min(MAX_CELLS, budget.cells));
+	budget.cells -= theirs.cells;
 
 	let merged = "";
 	let replaced = NOT_REPLACED;

@@ -22,10 +22,13 @@ const neighbours = (lines: readonly Line[], index: number): Placement => ({
 });
 
 /**
- * 1回の applyChanges で、統合に使える手間(見比べる本文の文字数と、細かく見比べる範囲の大きさの合計)。
- * ふつうのコミットは、この中に十分に収まる。1つのコミットにたくさんの統合を詰め込んで、処理を長引かせることを防ぐ。
+ * 1回の applyChanges で、統合に使える手間(ADR-0022)。
+ * 1つのコミットにたくさんの統合を詰め込んで、処理を長引かせることを防ぐ。
+ * - chars: 見比べる本文の文字数の合計。超えた分は、統合せずに、あとから届いた本文にする。
+ *   端末が送るコミットは本文の合計を30万文字までに分けるので、ふつうは届かない
+ * - cells: 細かく見比べる範囲の大きさの合計。超えた分は、範囲をまるごと置き換えたものとして統合する
  */
-const MERGE_BUDGET = 2_000_000;
+const MERGE_BUDGET = { chars: 2_000_000, cells: 2_000_000 };
 
 /**
  * 本文を置き換える変更を適用したあとの、行の本文(ADR-0022)。
@@ -90,7 +93,7 @@ function applyChange(lines: Line[], change: Change, budget: MergeBudget): Change
  */
 export function applyChanges(lines: readonly Line[], changes: readonly Change[]): Applied {
 	const next = [...lines];
-	const budget = { remaining: MERGE_BUDGET };
+	const budget = { ...MERGE_BUDGET };
 	const applied = changes
 		.map((change) => applyChange(next, change, budget))
 		.filter((change) => change !== null);

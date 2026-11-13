@@ -148,33 +148,41 @@ describe("mergeText(譲る統合: 取り消しとやり直しのための規則)
 });
 
 describe("mergeText(手間の上限)", () => {
-	it("本文を見比べる手間が上限を超えたら、統合せずに、あとから届いた本文にする", () => {
-		const budget = { remaining: 10 };
+	it("見比べる本文の量が上限を超えたら、統合せずに、あとから届いた本文にする", () => {
+		const budget = { chars: 10, cells: 1000 };
 
 		expect(mergeText("今日は晴れ", "今日は晴れです", "たぶん今日は晴れ", { budget })).toBe(
 			"たぶん今日は晴れ",
 		);
+		expect(budget).toEqual({ chars: 10, cells: 1000 });
 	});
 
-	it("統合するたびに、使った手間を上限から引く", () => {
-		const budget = { remaining: 1000 };
+	it("統合するたびに、見比べた本文の量を上限から引く", () => {
+		const budget = { chars: 1000, cells: 1000 };
 
 		mergeText("abc", "aXbc", "abYc", { budget });
 
-		// 3つの本文の長さ(3 + 4 + 4)。変わった範囲に、見比べる文字はない。
-		expect(budget.remaining).toBe(1000 - 11);
+		// 3つの本文の長さ(3 + 4 + 4)。変わった範囲に、細かく見比べる文字はない。
+		expect(budget).toEqual({ chars: 1000 - 11, cells: 1000 });
 	});
 
-	it("変わった範囲を細かく見比べる手間が残っていなければ、範囲をまるごと置き換えたものとして統合する", () => {
-		const budget = { remaining: 20 };
+	it("変わった範囲を細かく見比べたら、その範囲の大きさを上限から引く", () => {
+		const budget = { chars: 1000, cells: 1000 };
 
-		// 「cd」と「XYZ」を見比べる手間(2 × 3)は、残り(20 - 17)を超える。
+		// 「cd」と「XYZ」を見比べる(2 × 3)。
 		expect(mergeText("abcde", "abXYZe", "abcdeQ", { budget })).toBe("abXYZeQ");
-		expect(budget.remaining).toBe(3);
+		expect(budget.cells).toBe(1000 - 6);
+	});
+
+	it("細かく見比べる手間が残っていなければ、範囲をまるごと置き換えたものとして統合する(どちらの入力も残る)", () => {
+		const budget = { chars: 1000, cells: 5 };
+
+		expect(mergeText("abcde", "abXcYe", "abcdeQ", { budget })).toBe("abXcYeQ");
+		expect(budget.cells).toBe(5);
 	});
 
 	it("片方しか変えていなければ、手間を使わない", () => {
-		const budget = { remaining: 0 };
+		const budget = { chars: 0, cells: 0 };
 
 		expect(mergeText("abc", "abc", "abXc", { budget })).toBe("abXc");
 	});
