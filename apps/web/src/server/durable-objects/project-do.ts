@@ -341,6 +341,8 @@ export class ProjectDO extends DurableObject {
 
 	/** 権限を取り上げた相手と、その時刻(取り上げている途中の相手は、先の時刻)。 */
 	revocations(): Revocation[] {
+		// 知らされないまま先の時刻を過ぎたものは、途中としては返さない(ページが、配信のたびに聞き続けないように)。
+		this.#foldRevoking(Date.now());
 		return this.ctx.storage.sql
 			.exec<{ subject: string; at: number; pending: number }>(
 				`SELECT subject, max(at) AS at, max(pending) AS pending FROM (

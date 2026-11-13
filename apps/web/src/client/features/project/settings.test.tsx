@@ -295,6 +295,32 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			expect(screen.queryByRole("button", { name: "太郎 を外す" })).toBeNull();
 		});
 
+		it("前に作ったリンクの読み直しが、あとから届いても、新しく作ったリンクを表示したままにする", async () => {
+			const server = stubServer({ members: [admin], invites: [] });
+			renderSettings();
+			// 1つ目を作ったあとの読み直しが、遅れる。
+			let deliver: () => void = () => {};
+			server.loads.push(
+				() =>
+					new Promise<Response>((resolve) => {
+						deliver = () => resolve(Response.json({ members: [admin], invites: [] }));
+					}),
+			);
+			server.replies["POST /api/projects/team/invites"] = () =>
+				Response.json({ ...invite, id: "i1", token: "first" }, { status: 201 });
+			fireEvent.click(await screen.findByRole("button", { name: "招待リンクを作る" }));
+			await screen.findByDisplayValue("https://amime.example/invite/first");
+
+			server.replies["POST /api/projects/team/invites"] = () =>
+				Response.json({ ...invite, id: "i2", token: "second" }, { status: 201 });
+			fireEvent.click(screen.getByRole("button", { name: "招待リンクを作る" }));
+			await screen.findByDisplayValue("https://amime.example/invite/second");
+			deliver();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			expect(screen.getByDisplayValue("https://amime.example/invite/second")).toBeDefined();
+		});
+
 		it("前に始めた読み直しが、あとから届いても、新しい一覧を古い一覧で上書きしない", async () => {
 			const second = { ...taro, role: "admin" };
 			const before = { members: [admin, second], invites: [invite] };

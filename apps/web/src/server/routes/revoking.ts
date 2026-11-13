@@ -19,14 +19,24 @@ export async function revoking<Result>(
 	/** 変更の結果から、権限を変えたかを決める。 */
 	applied: (result: Result) => boolean,
 ): Promise<Result> {
-	const operations = await Promise.all(directories.map((directory) => directory.revoke(subject)));
+	const started = await Promise.allSettled(
+		directories.map((directory) => directory.revoke(subject)),
+	);
 	const settle = (changed: boolean) =>
 		Promise.all(
-			directories.map((directory, index) =>
-				// 失敗は、無視する(上に書いたとおり、先の時刻が残る)。
-				directory.settle(subject, operations[index] ?? 0, changed).catch(() => {}),
+			started.map((operation, index) =>
+				operation.status === "fulfilled"
+					? // 失敗は、無視する(上に書いたとおり、先の時刻が残る)。
+						directories[index]?.settle(subject, operation.value, changed).catch(() => {})
+					: null,
 			),
 		);
+	const failed = started.find((operation) => operation.status === "rejected");
+	if (failed !== undefined) {
+		// 覚えさせられなかった台帳がある。権限は変えないので、覚えさせられた台帳には、取り上げなかったことを知らせる。
+		await settle(false);
+		throw failed.reason;
+	}
 	let result: Result;
 	try {
 		result = await change();

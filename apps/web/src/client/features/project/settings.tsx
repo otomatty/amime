@@ -126,13 +126,13 @@ function Invites({
 }) {
 	const [created, setCreated] = useState<NewInvite | null>(null);
 	const create = async () => {
-		let invite: NewInvite | null = null;
-		const made = await run(async () => {
-			invite = await createInvite(project);
+		await run(async () => {
+			const invite = await createInvite(project);
+			// 作れたら、すぐに表示する(一覧の読み直しを待つと、あとから作ったリンクを、前のリンクで上書きすることがある)。
+			// 作れなかったときは、前に作ったリンクを出したままにする(まだ使えるリンクを、見失わせない)。
+			if (invite !== null) setCreated(invite);
 			return invite === null ? "failed" : null;
 		});
-		// 作れなかったときは、前に作ったリンクを出したままにする(まだ使えるリンクを、見失わせない)。
-		if (made) setCreated(invite);
 	};
 	const revoke = async (id: string) => {
 		// 無効にできたときにだけ、表示を消す(できなかったリンクは、まだ使える)。

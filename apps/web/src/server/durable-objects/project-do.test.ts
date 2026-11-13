@@ -111,6 +111,18 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 5_000, pending: false }]);
 		});
 
+		it("知らされないままのものは、ほかに取り上げる人がいなくても、5分が過ぎたら、途中としては返さない(ページが、聞き続けないように)", async () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			vi.setSystemTime(5_000);
+			const stub = project("settle-expired");
+			await stub.revoke("u1");
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 305_000, pending: true }]);
+			vi.setSystemTime(305_001);
+
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 305_000, pending: false }]);
+			expect(await pending(stub)).toBe(0);
+		});
+
 		it("同じ相手から、重ねて取り上げているあいだは、どれも終わるまで、先の時刻のままにする(終わる順番によらない)", async () => {
 			vi.useFakeTimers({ toFake: ["Date"] });
 			vi.setSystemTime(5_000);

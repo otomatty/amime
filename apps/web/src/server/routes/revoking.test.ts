@@ -64,6 +64,21 @@ describe("revoking(権限を取り上げる変更)", () => {
 		expect(change).not.toHaveBeenCalled();
 	});
 
+	it("どれかの台帳に覚えさせられなかったら、覚えさせられた台帳には、取り上げなかったことを知らせる(途中のものを、残さない)", async () => {
+		const calls: string[] = [];
+		const [working, broken] = [directory(calls, "a", 100), directory(calls, "b", 200)];
+		broken.revoke.mockRejectedValue(new Error("the directory is down"));
+		const change = vi.fn(done);
+
+		await expect(revoking([working, broken], "u1", change, always)).rejects.toThrow(
+			"the directory is down",
+		);
+
+		expect(change).not.toHaveBeenCalled();
+		expect(working.settle).toHaveBeenCalledWith("u1", 100, false);
+		expect(broken.settle).not.toHaveBeenCalled();
+	});
+
 	it("終えたことを知らせるのに失敗しても、変更の結果を返す(先の時刻が残るので、接続は閉じられる)", async () => {
 		const calls: string[] = [];
 		const [broken, working] = [directory(calls, "a", 100), directory(calls, "b", 200)];
