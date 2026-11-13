@@ -8,6 +8,7 @@ import {
 	openPage,
 	pageSocketUrl,
 	pinPage,
+	searchTitles,
 } from "./api.ts";
 import { PageApiError } from "./page-api-error.ts";
 
@@ -72,6 +73,24 @@ describe("listPages(ページの一覧)", () => {
 		await expect(listPages({ sort: "updated", offset: 0 })).rejects.toMatchObject({
 			kind: "failed",
 		});
+	});
+});
+
+describe("searchTitles(名前でページを探す)", () => {
+	it("入力をURLに符号化して送り、合う名前を返す", async () => {
+		const fetchMock = stubFetch(json({ titles: ["買い物 メモ"] }));
+
+		expect(await searchTitles("買い物 &メモ")).toEqual(["買い物 メモ"]);
+		expect(fetchMock).toHaveBeenCalledWith(
+			`/api/pages/titles?q=${encodeURIComponent("買い物 &メモ")}`,
+			undefined,
+		);
+	});
+
+	it("失敗は、PageApiError になる", async () => {
+		stubFetch(json({ error: "page-api-disabled" }, 403));
+
+		await expect(searchTitles("a")).rejects.toMatchObject({ kind: "disabled" });
 	});
 });
 

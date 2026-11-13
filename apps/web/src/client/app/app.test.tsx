@@ -39,17 +39,36 @@ describe("App", () => {
 
 		await waitFor(() => expect(screen.getByText(/この画面は試し書き用です/)).toBeDefined());
 		expect(screen.getAllByTestId("line").length).toBeGreaterThan(1);
+		// 探せるページがないので、探す欄も出さない。
+		expect(screen.queryByRole("combobox", { name: "ページを探す" })).toBeNull();
 	});
 
-	it("URLに ?playground を付けると、試し書きのページを表示する(一覧は読み込まない)", () => {
-		const fetchMock = vi.fn();
+	it("名前でページを探す欄を出す(どのページからでも探せる)", async () => {
+		vi.stubGlobal("fetch", async (url: string) =>
+			url.startsWith("/api/pages/titles")
+				? new Response(JSON.stringify({ titles: ["買い物"] }))
+				: new Promise<Response>(() => {}),
+		);
+		window.history.replaceState(null, "", `/${encodeURIComponent("メモ")}`);
+
+		render(<App />);
+
+		await waitFor(() =>
+			expect(screen.getByRole("combobox", { name: "ページを探す" })).toBeDefined(),
+		);
+	});
+
+	it("URLに ?playground を付けると、試し書きのページを表示する(一覧は読み込まない)", async () => {
+		const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify({ titles: [] })));
 		vi.stubGlobal("fetch", fetchMock);
 		window.history.replaceState(null, "", "/?playground");
 
 		render(<App />);
 
 		expect(screen.getByText(/この画面は試し書き用です/)).toBeDefined();
-		expect(fetchMock).not.toHaveBeenCalled();
+		// 名前で探す欄のための問い合わせだけを行う。
+		await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+		expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/pages/titles?q="]);
 	});
 
 	it("トップ以外のパスでは、その名前のページを読み込む", async () => {

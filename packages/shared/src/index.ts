@@ -8,3 +8,4 @@ export {
 	titleOfLine,
 	toTitleLc,
 } from "./title.ts";
+export { likePatterns, rankTitles, searchTerms } from "./title-search.ts";

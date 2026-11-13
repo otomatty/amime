@@ -1,6 +1,14 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { PageSummary } from "@amime/parser";
-import { MAX_TITLE_LENGTH, titleFromName, titleOfLine, toTitleLc } from "@amime/shared";
+import {
+	likePatterns,
+	MAX_TITLE_LENGTH,
+	rankTitles,
+	searchTerms,
+	titleFromName,
+	titleOfLine,
+	toTitleLc,
+} from "@amime/shared";
 import type {
 	LinkGroup,
 	PageCard,
@@ -65,6 +73,14 @@ const CARD_COLUMNS = `p.id, p.title, p.descriptions, p.image, p.updated, p.creat
 	(SELECT COUNT(*) FROM links WHERE to_lc = p.title_lc AND from_id != p.id) AS linked`;
 
 const NO_LINKS: PageLinks = { missing: [], related: [], hops: [] };
+
+/** 名前で探すときに返す件数の、既定の値と上限(ADR-0029)。 */
+export const DEFAULT_TITLES = 20;
+export const MAX_TITLES = 50;
+/** 名前で探すときに、候補を絞るために SQL に渡す、LIKE の型の数の上限。 */
+const MAX_TITLE_PATTERNS = 40;
+/** 名前で探すときに、合う順を決めるために読み出す件数の上限。更新が新しいものから読む。 */
+const MAX_TITLE_CANDIDATES = 1000;
 
 /** 1度のアラームで、リンクを書き換えるページの数の上限(ADR-0028)。 */
 export const REWRITE_BATCH = 20;
@@ -447,6 +463,28 @@ export class ProjectDO extends DurableObject {
 				sql.exec("UPDATE rewrites SET attempts = 0 WHERE seq = ?", row.seq);
 			}
 		});
+	}
+
+	/**
+	 * 入力に合う名前のページを探す(ADR-0029)。保存されたページの名前を、合う順に返す。
+	 * 文字が飛び飛びに合う名前も含める。入力が空なら、更新が新しい順に返す。
+	 */
+	titles(query: string, limit = DEFAULT_TITLES): string[] {
+		const terms = searchTerms(query);
+		// 候補を、SQL で絞る(語の文字が、順に出てくる名前)。合う順は、そのあとで決める。
+		// 名前は、空白をアンダースコアにして保存してある。語は、空白もアンダースコアも含まない。
+		// 型の数には上限を設ける(問い合わせに渡せる値の数に、限りがある)。絞り方が粗くなるだけで、結果は変わらない。
+		const patterns = terms.flatMap(likePatterns).slice(0, MAX_TITLE_PATTERNS);
+		const conditions = patterns.map(() => " AND title_lc LIKE ? ESCAPE '\\'").join("");
+		const candidates = this.ctx.storage.sql
+			.exec<{ title: string }>(
+				`SELECT title FROM pages WHERE version > 0${conditions}
+				ORDER BY updated DESC, title_lc LIMIT ${MAX_TITLE_CANDIDATES}`,
+				...patterns,
+			)
+			.toArray()
+			.map((row) => row.title);
+		return rankTitles(query, candidates, Math.min(Math.max(limit, 0), MAX_TITLES));
 	}
 
 	/**
