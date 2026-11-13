@@ -88,12 +88,13 @@ describe("matchingLines(語を含む行を取り出す)", () => {
 		expect(snippet.replaceAll("…", "").length).toBe(SNIPPET_LENGTH - 1);
 	});
 
-	it("語が行のどこにあるか分からないとき(濁点が別の文字になっている半角カナなど)は、先頭から切り出す", () => {
+	it("前の文字と合わさって1つの形になる文字(濁点が別の文字になっている半角カナなど)に合うときも、語のまわりを切り出す", () => {
 		const long = `${"前".repeat(200)}ｶﾞｲﾄﾞ`;
 
 		const [snippet = ""] = matchingLines([long], textTerms("ガイド"), 3);
 
-		expect(snippet).toBe(`${"前".repeat(SNIPPET_LENGTH)}…`);
+		expect(snippet.startsWith("…")).toBe(true);
+		expect(snippet.endsWith("ｶﾞｲﾄﾞ")).toBe(true);
 	});
 });
 
@@ -122,6 +123,39 @@ describe("highlight(語に合うところに印を付けるために、文字列
 	it("合うところがなければ、全体を1つで返す。空の文字列なら、何も返さない", () => {
 		expect(highlight("牛乳", textTerms("卵"))).toEqual([{ text: "牛乳", hit: false }]);
 		expect(highlight("", textTerms("卵"))).toEqual([]);
+	});
+
+	it.each([
+		["濁点が別の文字になっている半角カナ", "ｶﾞｲﾄﾞを読む", "ｶﾞｲﾄﾞ"],
+		[
+			"濁点を、あとに付く別の文字で書いたかな(分解した形)",
+			"カ\u3099イト\u3099を読む",
+			"カ\u3099イト\u3099",
+		],
+	])("前の文字と合わさって1つの形になる文字にも、印を付けられる(%s)", (_name, text, hit) => {
+		expect(highlight(text, textTerms("ガイド"))).toEqual([
+			{ text: hit, hit: true },
+			{ text: "を読む", hit: false },
+		]);
+	});
+
+	it("あいだに別の記号をはさんで合わさる文字にも、印を付けられる", () => {
+		// a + セディーユ + アキュート。アキュートは、セディーユを越えて a と合わさる(á になる)。
+		expect(highlight("ca\u0327\u0301fe", textTerms("á"))).toEqual([
+			{ text: "c", hit: false },
+			{ text: "a\u0327\u0301", hit: true },
+			{ text: "fe", hit: false },
+		]);
+	});
+
+	it("合わさる文字の途中では、印を分けない(濁点だけを、印の外に残さない)", () => {
+		// 「カ」は、濁点と合わさった「ガ」には合わない。
+		expect(highlight("ｶﾞｲﾄﾞ", textTerms("カ"))).toEqual([{ text: "ｶﾞｲﾄﾞ", hit: false }]);
+		expect(highlight("ｶﾞｲﾄﾞ", textTerms("イ"))).toEqual([
+			{ text: "ｶﾞ", hit: false },
+			{ text: "ｲ", hit: true },
+			{ text: "ﾄﾞ", hit: false },
+		]);
 	});
 
 	it("1文字が複数の文字に変わる文字(㌔ など)にも、印を付けられる", () => {

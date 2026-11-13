@@ -114,7 +114,13 @@ export const RENAME_MEMORY_MS = 60 * 60 * 1000;
 
 /** まだ済んでいない、リンクの書き換え。page_id のページの中の、old_lc へのリンクを、new_title へのリンクにする。 */
 /** 本文を探して見つかったページ(本文は含めない)。 */
-type FoundPage = { id: string; title: string; updated: number };
+type FoundPage = {
+	id: string;
+	title: string;
+	updated: number;
+	/** 名前に、探した語のすべてがあるか(1 か 0)。 */
+	titled: number;
+};
 
 type RewriteRow = {
 	seq: number;
@@ -350,52 +356,66 @@ export class ProjectDO extends DurableObject {
 			title,
 			updated,
 			// 1行目は名前なので、添える行には含めない。
-			lines: matchingLines(
-				plainLines(this.#text(id, "body").split("\n")).slice(1),
-				terms,
-				MAX_HIT_LINES,
-			),
+			lines: matchingLines(plainLines(this.#body(id).split("\n")).slice(1), terms, MAX_HIT_LINES),
 		}));
 		return { hits, more: found.length > count };
 	}
 
 	/**
 	 * すべての語を本文に含む、保存されたページを、並べる順に、max 件まで返す。
-	 * 1つの問い合わせに書ける条件の数には、限りがある。語がとても多いときは、
-	 * 書けるだけの語で絞った候補を、残りの語で1ページずつ確かめる(件数は、確かめたあとで数える)。
+	 * 1つの問い合わせに書ける条件の数には、限りがある。語がとても多いときは、語を分けて探し、
+	 * そのすべてで見つかったページを残す(件数も、名前にすべての語があるかも、すべての語で決める)。
 	 */
 	#findText(terms: readonly string[], max: number): FoundPage[] {
-		const inSql = terms.slice(0, MAX_SQL_TERMS);
-		const rest = terms.slice(MAX_SQL_TERMS);
-		const inText = inSql.map(() => "instr(t.folded, ?) > 0").join(" AND ");
-		const inTitle = inSql.map(() => `instr(${FOLDED_TITLE}, ?) > 0`).join(" AND ");
-		// 残りの語がなければ、件数は問い合わせで絞れる。あれば、候補をすべて取り出す(本文は、ここでは取り出さない)。
-		const limited = rest.length === 0;
-		const candidates = this.ctx.storage.sql
-			.exec<FoundPage>(
-				`SELECT p.id, p.title, p.updated FROM texts t JOIN pages p ON p.id = t.id
-				WHERE p.version > 0 AND ${inText}
-				ORDER BY (${inTitle}) DESC, p.updated DESC, p.title_lc${limited ? " LIMIT ?" : ""}`,
-				...inSql,
-				...inSql,
-				...(limited ? [max] : []),
-			)
-			.toArray();
-		if (limited) return candidates;
-		const found: FoundPage[] = [];
-		for (const candidate of candidates) {
-			if (found.length >= max) break;
-			const folded = this.#text(candidate.id, "folded");
-			if (rest.every((term) => folded.includes(term))) found.push(candidate);
+		const groups: string[][] = [];
+		for (let at = 0; at < terms.length; at += MAX_SQL_TERMS) {
+			groups.push(terms.slice(at, at + MAX_SQL_TERMS));
 		}
-		return found;
+		const [first = [], ...others] = groups;
+		if (others.length === 0) return this.#textRows(first, max);
+		let found = this.#textRows(first, null);
+		for (const group of others) {
+			if (found.length === 0) break;
+			const titled = new Map(this.#textRows(group, null).map((row) => [row.id, row.titled]));
+			found = found.flatMap((row) => {
+				const also = titled.get(row.id);
+				return also === undefined ? [] : [{ ...row, titled: Math.min(row.titled, also) }];
+			});
+		}
+		// 名前にすべての語があるページを先に。それぞれの中は、更新が新しい順のまま。
+		return [
+			...found.filter((row) => row.titled > 0),
+			...found.filter((row) => row.titled === 0),
+		].slice(0, max);
 	}
 
-	/** 台帳に写した、ページの本文(body)か、照らし合わせるための形(folded)。 */
-	#text(id: string, column: "body" | "folded"): string {
+	/**
+	 * terms(1つの問い合わせに書ける数まで)のすべてを本文に含む、保存されたページ。本文は含めない。
+	 * limit があれば、名前にすべての語があるページを先に、あとは更新が新しい順に並べて、limit 件まで返す。
+	 * なければ、更新が新しい順に、すべて返す(名前で並べ直すのは、呼び出す側)。
+	 */
+	#textRows(terms: readonly string[], limit: number | null): FoundPage[] {
+		const inText = terms.map(() => "instr(t.folded, ?) > 0").join(" AND ");
+		const inTitle = terms.map(() => `instr(${FOLDED_TITLE}, ?) > 0`).join(" AND ");
 		return this.ctx.storage.sql
-			.exec<{ text: string }>(`SELECT ${column} AS text FROM texts WHERE id = ?`, id)
-			.one().text;
+			.exec<FoundPage>(
+				`SELECT p.id, p.title, p.updated, (${inTitle}) AS titled
+				FROM texts t JOIN pages p ON p.id = t.id
+				WHERE p.version > 0 AND ${inText}
+				ORDER BY ${limit === null ? "" : "titled DESC, "}p.updated DESC, p.title_lc
+				${limit === null ? "" : "LIMIT ?"}`,
+				...terms,
+				...terms,
+				...(limit === null ? [] : [limit]),
+			)
+			.toArray();
+	}
+
+	/** 台帳に写した、ページの本文。 */
+	#body(id: string): string {
+		return this.ctx.storage.sql
+			.exec<{ body: string }>("SELECT body FROM texts WHERE id = ?", id)
+			.one().body;
 	}
 
 	/** いちばん新しい、リンクの書き換えの番号。まだ1つもなければ 0。 */

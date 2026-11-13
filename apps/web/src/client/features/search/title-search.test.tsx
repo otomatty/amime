@@ -180,6 +180,32 @@ describe("TitleSearch(名前でページを探す)", () => {
 		expect(navigate).toHaveBeenCalledExactlyOnceWith(`/?q=${encodeURIComponent("ない 名前")}`);
 	});
 
+	it("入力を変えたら、選んでいた位置を最初に戻す(候補が届かなくても、出ている項目を選んでいる)", async () => {
+		let failing = false;
+		stubTitles((query) =>
+			failing
+				? json({ error: "x" }, 500)
+				: json({ titles: query === "" ? [] : ["買い物", "買い出し"] }),
+		);
+		const navigate = await renderSearch();
+		fireEvent.focus(input());
+		typeQuery("買");
+		await waitFor(() => expect(options()).toEqual(["買い物", "買い出し"]));
+		// 最後の項目(本文から探す)を選ぶ。
+		fireEvent.keyDown(input(), { key: "ArrowUp" });
+		expect(active()).toBe("「買」を本文から探す");
+
+		failing = true;
+		typeQuery("買う");
+
+		// 名前の候補は消え、「本文から探す」だけが出ている。それを選んでいる。
+		expect(options()).toEqual([]);
+		expect(active()).toBe("「買う」を本文から探す");
+		expect(input().getAttribute("aria-activedescendant")).toBe(fullText()?.id);
+		fireEvent.keyDown(input(), { key: "Enter" });
+		expect(navigate).toHaveBeenCalledExactlyOnceWith(`/?q=${encodeURIComponent("買う")}`);
+	});
+
 	it("入力があるあいだは、候補の最後に「本文から探す」の項目を出す。選ぶと、本文を探した結果へ移る", async () => {
 		stubTitles(() => json({ titles: ["買い物"] }));
 		const navigate = await renderSearch();

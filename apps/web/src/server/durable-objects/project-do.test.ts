@@ -1026,6 +1026,25 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			expect(await stub.search(`${all} ない語`, 1)).toEqual({ hits: [], more: false });
 		});
 
+		it("語がとても多いときも、名前にすべての語があるページを先に並べる", async () => {
+			const stub = project("search-many-terms-title");
+			const words = Array.from({ length: 41 }, (_value, index) => `w${index}x`);
+			const all = words.join(" ");
+			const withoutLast = words.slice(0, 40).join(" ");
+			await write(stub, [
+				// 名前に、すべての語がある。
+				[all, "中身"],
+				// 名前には最後の語がなく、本文にある。こちらのほうが新しい。
+				[withoutLast, words[40] ?? ""],
+			]);
+
+			const results = await stub.search(all);
+			expect(titles(results)).toEqual([all, withoutLast]);
+			const one = await stub.search(all, 1);
+			expect(titles(one)).toEqual([all]);
+			expect(one.more).toBe(true);
+		});
+
 		it("語がなければ、何も返さない", async () => {
 			const stub = project("search-empty");
 			await write(stub, [["メモ", "牛乳"]]);

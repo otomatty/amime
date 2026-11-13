@@ -119,6 +119,8 @@ export function TitleSearch({
 				value={query}
 				onChange={(event) => {
 					setQuery(event.target.value);
+					// 入力が変わると、候補も変わる。前の候補での位置を、持ち越さない。
+					setActive(0);
 					setOpen(true);
 				}}
 				onFocus={() => setOpen(true)}

@@ -27,21 +27,51 @@ export function textTerms(query: string): string[] {
 type Range = { readonly start: number; readonly end: number };
 
 /**
- * text の中で、語に合う範囲(元の文字列での位置)。前から順に、重なりはまとめる。
- * 照らし合わせるための形は、文字ごとに作る(元の文字列での位置に戻せるように)。
+ * 前の文字に付く記号(濁点、アクセントなど)。すぐ前の文字とは合わさらなくても、
+ * その前の文字と合わさることがあるので、いつも前の文字と同じまとまりに入れる。
  */
-function hitRanges(text: string, terms: readonly string[]): Range[] {
-	// 照らし合わせるための形の、それぞれの位置が、元のどの文字(始まりと終わり)から来たか。
+const MARK = /^\p{M}/u;
+
+/**
+ * 照らし合わせるための形と、そのそれぞれの位置が、元の文字列のどの範囲から来たか。
+ * 前の文字と合わさって1つの形になる文字(濁点が別の文字になっている半角カナ、あとに付く濁点など)は、
+ * 前の文字と同じ範囲にまとめる(文字列の全体を照らし合わせるための形にしたものと、同じ結果にする)。
+ */
+function foldWithOrigins(text: string): { folded: string; origins: Range[] } {
 	const origins: Range[] = [];
 	let folded = "";
+	// いま集めている、ひとまとまり(元の文字列)と、その照らし合わせるための形。
+	let piece = "";
+	let pieceFolded = "";
+	let start = 0;
 	let position = 0;
+	const close = () => {
+		const origin = { start, end: position };
+		for (let unit = 0; unit < pieceFolded.length; unit += 1) origins.push(origin);
+		folded += pieceFolded;
+	};
 	for (const character of text) {
-		const origin = { start: position, end: position + character.length };
-		const part = foldText(character);
-		folded += part;
-		for (let unit = 0; unit < part.length; unit += 1) origins.push(origin);
-		position = origin.end;
+		const joined = foldText(piece + character);
+		const alone = foldText(character);
+		if (joined === pieceFolded + alone && !MARK.test(character)) {
+			// 前の文字とは、合わさらない。ここから、新しいまとまりにする。
+			close();
+			start = position;
+			piece = character;
+			pieceFolded = alone;
+		} else {
+			piece += character;
+			pieceFolded = joined;
+		}
+		position += character.length;
 	}
+	close();
+	return { folded, origins };
+}
+
+/** text の中で、語に合う範囲(元の文字列での位置)。前から順に、重なりはまとめる。 */
+function hitRanges(text: string, terms: readonly string[]): Range[] {
+	const { folded, origins } = foldWithOrigins(text);
 
 	const ranges: Range[] = [];
 	for (const term of terms) {
@@ -78,7 +108,10 @@ function wellFormed(text: string): string {
 /** 長い行を、最初に語に合うところのまわりだけにする。切ったところには「…」を付ける。 */
 function clip(line: string, terms: readonly string[]): string {
 	if (line.length <= SNIPPET_LENGTH) return line;
-	const hit = hitRanges(line, terms)[0]?.start ?? 0;
+	// 最初に語に合うところ。なければ、先頭から切り出す。
+	const hit = hitRanges(line, terms)
+		.slice(0, 1)
+		.reduce((_head, range) => range.start, 0);
 	const start = Math.max(Math.min(hit - SNIPPET_LEAD, line.length - SNIPPET_LENGTH), 0);
 	const end = start + SNIPPET_LENGTH;
 	const body = wellFormed(line.slice(start, end));
