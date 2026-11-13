@@ -8,7 +8,8 @@ const lineTexts = (page: Page) =>
 async function clickLineEnd(page: Page, index: number) {
 	const box = await lines(page).nth(index).boundingBox();
 	if (!box) throw new Error(`line ${index} is not visible`);
-	await page.mouse.click(box.x + box.width - 2, box.y + box.height / 2);
+	// 長い行は、折り返して何段かになる。行末は最後の段にあるので、下の端の近くを押す。
+	await page.mouse.click(box.x + box.width - 2, box.y + box.height - 4);
 }
 
 test.describe("エディタ", () => {
