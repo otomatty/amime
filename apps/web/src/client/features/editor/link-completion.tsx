@@ -1,0 +1,138 @@
+import { type LinkQuery, linkQueryAt } from "@amime/editor-core";
+import { type Ref, useEffect, useMemo, useState } from "react";
+
+/** 入力が止まってから、候補を探し始めるまでの時間。打つたびに問い合わせない。 */
+const SEARCH_DELAY_MS = 100;
+
+/** 開いている候補。 */
+type Completion = {
+	/** 書いている途中のリンク。 */
+	readonly link: LinkQuery;
+	readonly titles: readonly string[];
+	/** 選んでいる候補の番号。どれも選んでいなければ -1。 */
+	readonly active: number;
+};
+
+type CompletionOptions = {
+	/**
+	 * カーソルのある行の本文。補完の対象にしないとき(フォーカスがない、変換中、範囲を選択している、
+	 * コードの行など)は null。
+	 */
+	readonly text: string | null;
+	/** カーソルの、行の中の位置。 */
+	readonly column: number;
+	/** カーソルのある行を区別する値(行ID)。 */
+	readonly line: string | null;
+	/** 名前の一部から、候補を探す。渡さなければ、補完しない。 */
+	readonly search: ((query: string) => Promise<readonly string[]>) | undefined;
+};
+
+/**
+ * リンクを書いている途中の、名前の候補(ADR-0030)。
+ * 候補は、最初はどれも選んでいない(Enter を、改行のために使えるように)。上下に動かすと選ぶ。
+ */
+export function useLinkCompletion({ text, column, line, search }: CompletionOptions) {
+	const link = useMemo(
+		() => (text === null || search === undefined ? null : linkQueryAt(text, column)),
+		[text, column, search],
+	);
+	// どのリンクか(行と、名前の始まりの位置)。
+	const anchor = link === null ? null : `${line}:${link.start}`;
+	const query = link?.query ?? null;
+	// 見つかった候補と、それが、どのリンクの、どの入力への候補か。
+	const [found, setFound] = useState<{
+		readonly anchor: string;
+		readonly query: string;
+		readonly titles: readonly string[];
+	} | null>(null);
+	const [active, setActive] = useState(-1);
+	// 候補を閉じたリンク。同じリンクを書いているあいだは、候補を出さない。
+	const [dismissed, setDismissed] = useState<string | null>(null);
+
+	useEffect(() => {
+		if (anchor === null || query === null || search === undefined) return;
+		let cancelled = false;
+		const timer = setTimeout(() => {
+			search(query).then(
+				(titles) => {
+					// 入力が進んだあとに届いた、前の入力への候補は使わない。
+					if (cancelled) return;
+					setFound({ anchor, query, titles });
+					setActive(-1);
+				},
+				// 探せなくても、入力は続けられる。
+				() => {},
+			);
+		}, SEARCH_DELAY_MS);
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
+	}, [anchor, query, search]);
+
+	const current =
+		link !== null && found?.anchor === anchor && found.query === query && dismissed !== anchor;
+	const titles = current ? found.titles : [];
+	const completion: Completion | null =
+		link === null || titles.length === 0 ? null : { link, titles, active };
+
+	return {
+		/** 開いている候補。開いていなければ null。 */
+		completion,
+		/** 選んでいる候補を、step だけ動かす。端まで行くと、反対の端に回る。 */
+		move(step: 1 | -1): void {
+			const count = titles.length;
+			if (count === 0) return;
+			// どれも選んでいないときは、下へ動かすと最初、上へ動かすと最後を選ぶ。
+			setActive((selected) => (Math.max(selected, step === 1 ? -1 : 0) + step + count) % count);
+		},
+		/** 候補を閉じる。同じリンクを書いているあいだは、もう出さない。 */
+		dismiss(): void {
+			setDismissed(anchor);
+		},
+	};
+}
+
+type CompletionListProps = {
+	/** 一覧の id。候補の id は、これに番号を付けたもの。 */
+	readonly id: string;
+	readonly titles: readonly string[];
+	/** 選んでいる候補の番号。どれも選んでいなければ -1。 */
+	readonly active: number;
+	/** 候補が押された。 */
+	readonly onPick: (title: string) => void;
+	readonly ref?: Ref<HTMLDivElement>;
+};
+
+/** 名前の候補の一覧。フォーカスは編集欄に置いたまま、選んでいる候補を示す。 */
+export function CompletionList({ id, titles, active, onPick, ref }: CompletionListProps) {
+	// 選んでいる候補を、一覧の見えるところに入れる。フォーカスは編集欄に置いたままなので、
+	// ブラウザは、自動ではスクロールしない。
+	useEffect(() => {
+		if (active >= 0)
+			document.getElementById(`${id}-${active}`)?.scrollIntoView({ block: "nearest" });
+	}, [id, active]);
+	return (
+		<div className="completion" id={id} ref={ref} role="listbox" aria-label="ページの名前の候補">
+			{titles.map((title, index) => (
+				<div
+					className="completion-option"
+					id={`${id}-${index}`}
+					key={title}
+					role="option"
+					aria-selected={index === active}
+					// フォーカスは編集欄に置いたまま、選んでいる候補を aria-activedescendant で伝える。
+					tabIndex={-1}
+					onMouseDown={(event) => {
+						// 編集欄からフォーカスを外さない。編集欄のカーソルも動かさない(押した位置へ移さない)。
+						event.preventDefault();
+						event.stopPropagation();
+						onPick(title);
+					}}
+				>
+					{title}
+				</div>
+			))}
+		</div>
+	);
+}

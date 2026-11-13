@@ -116,4 +116,36 @@ test.describe("リンクでつながる", () => {
 			.click();
 		await expect(other.getByTestId("line").nth(1)).toHaveAttribute("data-text", "中身");
 	});
+
+	test("リンクを書いている途中に、既存のページの名前が候補に出る。選ぶと、その名前へのリンクになる", async ({
+		page,
+	}) => {
+		// 他のテストのページと混ざらないように、このテストだけの語を名前に入れる。
+		const token = randomUUID().slice(0, 8);
+		await createPage(page, `${token}_買い物_メモ`, "牛乳");
+		await page.goto(`/${newPageName()}`);
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Enter");
+		const options = page.getByRole("option");
+
+		await page.keyboard.type(`[${token} 買`);
+		// 候補に出るのは、台帳に反映されてから(書き換えが落ち着いてから)。打ち直して、探し直す。
+		await expect(async () => {
+			await page.keyboard.press("Backspace");
+			await page.keyboard.type("買");
+			await expect(options).toHaveText([`${token} 買い物 メモ`], { timeout: 1000 });
+		}).toPass();
+		await page.keyboard.press("ArrowDown");
+		await expect(options.first()).toHaveAttribute("aria-selected", "true");
+		await page.keyboard.press("Enter");
+
+		// 括弧が閉じられ、カーソルはその後ろにある。続けて書ける。
+		await page.keyboard.type(" を見る");
+		await expect(page.getByTestId("line").nth(1)).toHaveAttribute(
+			"data-text",
+			`[${token} 買い物 メモ] を見る`,
+		);
+		await expect(options).toHaveCount(0);
+		await expect(status(page)).toHaveText("保存済み");
+	});
 });

@@ -2,6 +2,7 @@ import {
 	bindingForKey,
 	type Command,
 	type Cursor,
+	completeLink,
 	deleteSelection,
 	type EditGroup,
 	insertText,
@@ -20,6 +21,7 @@ import {
 	type KeyboardEvent,
 	type MouseEvent,
 	useEffect,
+	useId,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -32,6 +34,7 @@ import { createEditorStore } from "./editor-store.ts";
 import { cursorFromPoint, LINE_END } from "./hit-test.ts";
 import { groupLines } from "./line-groups.ts";
 import { lineSelection } from "./line-selection.ts";
+import { CompletionList, useLinkCompletion } from "./link-completion.tsx";
 import { caretsByLine, type RemoteCursor } from "./remote-carets.ts";
 import "./editor.css";
 
@@ -56,9 +59,16 @@ type EditorProps = {
 	readonly onCursor?: (cursor: { readonly line: LineId; readonly column: number } | null) => void;
 	/** まだないページの名前(正規化したもの)。そのページへのリンクに、印を付ける(ADR-0027)。 */
 	readonly missingLinks?: ReadonlySet<string>;
+	/**
+	 * リンクを書いている途中に、入力した名前の一部から、ページの名前の候補を探す(ADR-0030)。
+	 * 渡さなければ、補完しない。
+	 */
+	readonly completeTitles?: (query: string) => Promise<readonly string[]>;
 };
 
 const NO_OTHERS: readonly RemoteCursor[] = [];
+/** リンクを書ける行の種類。1行目(タイトル)と、コードの中では、リンクにならない。 */
+const LINKABLE_KINDS: ReadonlySet<string | undefined> = new Set(["text", "table-row"]);
 
 /** 外から届く文書の出どころ。apply を登録しておくと、文書が届くたびに呼ばれる。 */
 type RemoteSource = {
@@ -97,6 +107,7 @@ export function Editor({
 	others = NO_OTHERS,
 	onCursor,
 	missingLinks,
+	completeTitles,
 }: EditorProps) {
 	// 状態は、描画の外で、操作を受け取ったその場で進める(editor-store.ts を参照)。
 	const [store] = useState(() =>
@@ -150,6 +161,22 @@ export function Editor({
 		const role = roles[line];
 		return role?.kind === "table-row" ? role.blockIndent + 1 : null;
 	};
+	// 選択とカーソルは、編集欄にフォーカスがあるときだけ表示する。
+	const selection = focused ? selectionRange(state) : null;
+	// リンクを書いている途中の、名前の候補(ADR-0030)。変換中や、範囲を選択しているあいだは出さない。
+	const completable =
+		focused &&
+		composing === null &&
+		selection === null &&
+		LINKABLE_KINDS.has(roles[state.cursor.line]?.kind);
+	const { completion, move, dismiss } = useLinkCompletion({
+		text: completable ? (state.lines[state.cursor.line] ?? null) : null,
+		column: cursorColumn,
+		line: cursorLine,
+		search: completeTitles,
+	});
+	const completionId = useId();
+	const completionRef = useRef<HTMLDivElement>(null);
 	const rootRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	// 再描画を待たずに参照するため、変換中かどうかは ref にも持つ。
@@ -171,6 +198,14 @@ export function Editor({
 		// 変換候補のウィンドウがカーソルの近くに出るよう、textarea をカーソルの位置に重ねる。
 		input.style.top = `${caret.offsetTop}px`;
 		input.style.left = `${caret.offsetLeft}px`;
+		// 名前の候補は、カーソルのすぐ下に出す。編集欄の右端からは、はみ出させない。
+		const list = completionRef.current;
+		const root = rootRef.current;
+		if (list && root) {
+			const room = Math.max(root.clientWidth - list.offsetWidth, 0);
+			list.style.top = `${caret.offsetTop + caret.offsetHeight}px`;
+			list.style.left = `${Math.min(caret.offsetLeft, room)}px`;
+		}
 		// キー操作は既定の動作を止めているため、ブラウザは自動でスクロールしない。代わりに行う。
 		if (focused && revealCaret.current) {
 			caret.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -247,13 +282,38 @@ export function Editor({
 		return tabMovesFocus.current || (escaped && event.key === "Tab");
 	};
 
+	/** 書いている途中のリンクを、選んだ名前で補完する。 */
+	const pickTitle = (title: string) => {
+		if (completion !== null) run((current) => completeLink(current, completion.link, title));
+	};
+
+	/**
+	 * 名前の候補が出ているあいだの、候補のためのキー。扱ったら true。
+	 * 上下の矢印キーで選び、Enter で補完し、Esc で閉じる。
+	 * 候補を選んでいないときの Enter は、ここでは扱わない(改行になる)。
+	 */
+	const handleCompletionKey = (event: KeyboardEvent): boolean => {
+		if (completion === null || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) {
+			return false;
+		}
+		const picked = completion.titles[completion.active];
+		if (event.key === "ArrowDown") move(1);
+		else if (event.key === "ArrowUp") move(-1);
+		else if (event.key === "Escape") dismiss();
+		else if (event.key === "Enter" && picked !== undefined) pickTitle(picked);
+		else return false;
+		event.preventDefault();
+		return true;
+	};
+
 	const handleKeyDown = (event: KeyboardEvent) => {
 		// Shift+Tab では Shift 単独の keydown が先に届くので、修飾キーだけの押下では状態を変えない。
-		if (MODIFIER_KEYS.has(event.key) || leavesEditor(event)) return;
-
+		if (MODIFIER_KEYS.has(event.key)) return;
 		const composingNow =
 			isComposing.current || event.nativeEvent.isComposing || event.keyCode === KEY_CODE_COMPOSING;
-		if (composingNow || prepareClipboard(event)) return;
+		// 候補のためのキーは、編集の操作より先に扱う(Esc は、編集欄から抜ける準備にしない)。
+		if (!composingNow && handleCompletionKey(event)) return;
+		if (leavesEditor(event) || composingNow || prepareClipboard(event)) return;
 		const binding = bindingForKey(keyInput(event), {
 			tableRowIndent: tableRowIndentAt(state.cursor.line),
 			mac: IS_MAC,
@@ -319,9 +379,6 @@ export function Editor({
 		startDrag();
 	};
 
-	// 選択とカーソルは、編集欄にフォーカスがあるときだけ表示する。
-	const selection = focused ? selectionRange(state) : null;
-
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: 操作を受け付けるのは中の textarea。ここはマウスでカーソル位置を決めるための領域で、キーボード操作は textarea が受ける。
 		<div
@@ -341,6 +398,11 @@ export function Editor({
 				autoCorrect="off"
 				spellCheck={false}
 				rows={1}
+				aria-autocomplete={completeTitles ? "list" : undefined}
+				aria-controls={completion ? completionId : undefined}
+				aria-activedescendant={
+					completion && completion.active >= 0 ? `${completionId}-${completion.active}` : undefined
+				}
 				onInput={handleInput}
 				onKeyDown={handleKeyDown}
 				onCopy={copySelection}
@@ -389,6 +451,15 @@ export function Editor({
 					</div>
 				);
 			})}
+			{completion && (
+				<CompletionList
+					ref={completionRef}
+					id={completionId}
+					titles={completion.titles}
+					active={completion.active}
+					onPick={pickTitle}
+				/>
+			)}
 		</div>
 	);
 }

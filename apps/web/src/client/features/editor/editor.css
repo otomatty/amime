@@ -328,3 +328,32 @@ a.link[data-missing]:hover {
 	height: 1.3em;
 	vertical-align: text-bottom;
 }
+
+/* リンクを書いている途中に出す、ページの名前の候補(ADR-0030)。カーソルのすぐ下に重ねる。 */
+.completion {
+	position: absolute;
+	z-index: 5;
+	box-sizing: border-box;
+	max-width: min(22rem, 100%);
+	max-height: 14rem;
+	margin-top: 0.15rem;
+	padding: 0.25rem;
+	overflow-y: auto;
+	border: 1px solid var(--color-border);
+	border-radius: 0.4rem;
+	background: var(--color-paper);
+	box-shadow: 0 0.25rem 0.75rem rgb(0 0 0 / 12%);
+	font-size: 0.9rem;
+}
+
+.completion-option {
+	padding: 0.3rem 0.5rem;
+	border-radius: 0.3rem;
+	overflow-wrap: anywhere;
+	cursor: pointer;
+}
+
+.completion-option[aria-selected="true"],
+.completion-option:hover {
+	background: var(--color-selection);
+}
