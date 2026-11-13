@@ -491,6 +491,33 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			expect(list.pages.map((page) => page.pinned)).toEqual([true, true, false]);
 		});
 
+		it("同じ時刻に続けて固定しても、あとから固定したものが前に並ぶ", async () => {
+			const stub = project("pin-same-time");
+			const newer = await add(stub, "更新が新しい", 3000);
+			const older = await add(stub, "更新が古い", 1000);
+
+			// 1回の呼び出しの中では、時刻が進まない。
+			await runInDurableObject(stub, (instance) => {
+				instance.pin(newer, true);
+				instance.pin(older, true);
+			});
+
+			expect(titles(await stub.list({ sort: "updated" }))).toEqual(["更新が古い", "更新が新しい"]);
+		});
+
+		it("すでに固定しているページを、もう一度固定しても、順は変わらない", async () => {
+			const stub = project("pin-again");
+			const first = await add(stub, "先に固定", 1000);
+			const second = await add(stub, "あとで固定", 2000);
+			await runInDurableObject(stub, (instance) => {
+				instance.pin(first, true);
+				instance.pin(second, true);
+				instance.pin(first, true);
+			});
+
+			expect(titles(await stub.list({ sort: "title" }))).toEqual(["あとで固定", "先に固定"]);
+		});
+
 		it("固定を外すと、ふつうの並びに戻る", async () => {
 			const stub = project("pin-off");
 			const old = await add(stub, "古い", 1000);

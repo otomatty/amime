@@ -174,12 +174,21 @@ export function createPageSync({
 	};
 
 	/**
+	 * サーバーの応答を待っているあいだにページが削除されていたら、応答を使わずにやめる(ADR-0026)。
+	 * 削除されたあとは、画面の文書を置き換えない。開いていた画面に残っている内容が、最後の写しかもしれない。
+	 */
+	const unlessDeleted = <T>(response: T): T => {
+		if (deleted) throw new PageApiError("gone");
+		return response;
+	};
+
+	/**
 	 * 読み直して、サーバーに追いつく。送信中のコミットがないときにだけ呼ぶ。
 	 * 読み直したページのほうが古ければ(待っているあいだに、配信でそれより先まで進んでいたら)、
 	 * 何もせず false を返す。
 	 */
 	async function catchUp(): Promise<boolean> {
-		const latest = await api.load();
+		const latest = unlessDeleted(await api.load());
 		if (latest.version < session.version) return false;
 		// 待っているあいだに送信が始まることはない(保存を進めるのは、1度に1つだけ)。
 		if (latest.version > session.version) settle(resync(receiving(), latest));
@@ -203,7 +212,7 @@ export function createPageSync({
 		}
 		// 自分のコミットは、サーバーに入っている(いま入ったか、送り直す前に入っていた)。
 		// 読み直したページには、それが含まれている。
-		const latest = await api.load();
+		const latest = unlessDeleted(await api.load());
 		if (latest.version < result.version) throw new PageApiError("failed");
 		settle(resync(session, latest));
 	}
@@ -266,7 +275,7 @@ export function createPageSync({
 			publish();
 
 			committing = true;
-			const result = await api.commit(commit);
+			const result = unlessDeleted(await api.commit(commit));
 			committing = false;
 			await confirm(result);
 			failure = "none";

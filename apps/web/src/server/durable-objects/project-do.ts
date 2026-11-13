@@ -215,9 +215,16 @@ export class ProjectDO extends DurableObject {
 	 * 台帳にないページなら null。
 	 */
 	pin(id: PageId, pinned: boolean): PageInfo | null {
+		// 固定した順を、時刻で持つ。同じ時刻に続けて固定しても、あとのものが大きくなるようにする。
+		// すでに固定しているページは、そのままにする(順を変えない)。
 		this.ctx.storage.sql.exec(
-			"UPDATE pages SET pinned = ? WHERE id = ?",
-			pinned ? Date.now() : 0,
+			`UPDATE pages SET pinned = CASE
+				WHEN ?1 = 0 THEN 0
+				WHEN pinned > 0 THEN pinned
+				ELSE MAX(?2, (SELECT COALESCE(MAX(pinned), 0) + 1 FROM pages))
+			END WHERE id = ?3`,
+			pinned ? 1 : 0,
+			Date.now(),
 			id,
 		);
 		const row = this.#byId(id);
