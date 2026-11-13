@@ -246,6 +246,9 @@ type PageEditorProps = {
 	readonly readOnly: boolean;
 };
 
+/** 端末内の未送信の変更を、そのままにする(読むだけの表示で使う)。 */
+const keepPending = () => {};
+
 function PageEditor({
 	info,
 	snapshot,
@@ -309,7 +312,8 @@ function PageEditor({
 			onStatus: setStatus,
 			onRemote: remote.emit,
 			// まだサーバーに入っていない変更を、端末内に残す。タブを閉じても、次に開いたときに送れる。
-			onPending: pending.save,
+			// 読むだけの表示では、端末内の未送信の変更に触れない(前に書いて残したものを、消さない)。
+			onPending: readOnly ? keepPending : pending.save,
 			createCommitId,
 		});
 		sync.current = current;
@@ -321,7 +325,7 @@ function PageEditor({
 			current.dispose();
 			sync.current = null;
 		};
-	}, [snapshot, initial, placeholder, api, remote, pending, refreshLinks]);
+	}, [snapshot, initial, placeholder, api, remote, pending, refreshLinks, readOnly]);
 
 	const unsaved = !SETTLED.has(status);
 	useEffect(() => {

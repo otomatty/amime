@@ -262,6 +262,25 @@ describe("Page", () => {
 			expect(pendingRecords()).toEqual([left]);
 		});
 
+		it("書いている途中で、読むだけの表示に変わっても(ログアウトした)、端末内に残した未送信の変更を消さない", async () => {
+			// 保存は、終わらない(送信中のまま)。
+			stubFetch((_url, init) => (init?.method === "POST" ? new Promise(() => {}) : json(saved)));
+			const { rerender } = render(<Page name="買い物" />);
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			fireEvent.mouseDown(screen.getByTestId("line"));
+			type("牛乳");
+			const left = [{ type: "update", id: "a", text: "買い物牛乳", base: "買い物" }];
+			await waitFor(() => expect(status()).toBe("保存しています…"));
+			expect(pendingRecords()).toEqual([left]);
+
+			rerender(<Page name="買い物" readOnly />);
+
+			// サーバーにある内容に戻る。書いていた分は、端末内に残っている(メンバーとして開き直せば、送れる)。
+			await waitFor(() => expect(status()).toMatch(/読むだけの表示です/));
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			expect(pendingRecords()).toEqual([left]);
+		});
+
 		it("前回送れなかった変更が残っていたら、復元して表示し、そのまま保存する", async () => {
 			leavePending([{ type: "update", id: "a", text: "買い物 前回の入力" }]);
 			const fetchMock = stubFetch(echo);
