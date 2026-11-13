@@ -3,10 +3,10 @@ import type { UserId } from "@amime/sync";
 import { beforeAll, describe, expect, it } from "vitest";
 import { signIn } from "../auth/accounts.ts";
 import {
+	acceptInvite,
 	createInvite,
 	findInvite,
 	INVITE_TTL,
-	join,
 	listInvites,
 	listMembers,
 	removeMember,
@@ -35,19 +35,28 @@ async function project() {
 	return { id: found?.id ?? "", name, admin };
 }
 
+/** テストの準備として、メンバーを足す(招待リンクを通さずに)。 */
+const join = (id: string, member: UserId, joined: number) =>
+	env.DB.prepare(
+		`INSERT INTO members (project, user, role, joined) VALUES (?, ?, 'member', ?)
+		ON CONFLICT (project, user) DO NOTHING`,
+	)
+		.bind(id, member, joined)
+		.run();
+
 const roles = async (id: string) =>
 	Object.fromEntries((await listMembers(env.DB, id)).map((member) => [member.id, member.role]));
 
 beforeAll(() => ready(env.DB));
 
-describe("join / listMembers", () => {
-	it("参加した人は member になる。一覧は、参加した順", async () => {
+describe("listMembers", () => {
+	it("メンバーを、参加した順に返す", async () => {
 		const { id, admin } = await project();
 		const [second, third] = [await user("m-second"), await user("m-third")];
 
-		await join(env.DB, id, third, 3_000);
-		await join(env.DB, id, second, 2_000);
-		await join(env.DB, id, admin, 9_000);
+		await join(id, third, 3_000);
+		await join(id, second, 2_000);
+		await join(id, admin, 9_000);
 
 		expect(await listMembers(env.DB, id)).toEqual([
 			{ id: admin, name: expect.any(String), picture: null, role: "admin", joined: 1_000 },
@@ -60,7 +69,7 @@ describe("join / listMembers", () => {
 describe("setRole / removeMember(管理者を、0人にしない)", () => {
 	it("管理者が1人だけのとき、その人を member にも、外すこともできない", async () => {
 		const { id, admin } = await project();
-		await join(env.DB, id, await user(), 2_000);
+		await join(id, await user(), 2_000);
 
 		expect(await setRole(env.DB, id, admin, "member")).toBe("last-admin");
 		expect(await removeMember(env.DB, id, admin)).toBe("last-admin");
@@ -72,7 +81,7 @@ describe("setRole / removeMember(管理者を、0人にしない)", () => {
 	it("管理者が2人いれば、片方を member に戻せる。もう片方は、最後の管理者になる", async () => {
 		const { id, admin } = await project();
 		const other = await user();
-		await join(env.DB, id, other, 2_000);
+		await join(id, other, 2_000);
 
 		expect(await setRole(env.DB, id, other, "admin")).toBe("changed");
 		expect(await setRole(env.DB, id, admin, "member")).toBe("changed");
@@ -119,6 +128,35 @@ describe("招待リンク", () => {
 		expect(await findInvite(env.DB, invite.token, 1_000 + INVITE_TTL - 1)).toEqual({ id, name });
 		expect(await findInvite(env.DB, invite.token, 1_000 + INVITE_TTL)).toBeNull();
 		expect(await findInvite(env.DB, invite.id, 2_000)).toBeNull();
+	});
+
+	it("acceptInvite: 使えるリンクなら、メンバーにして、招待先を返す。もうメンバーなら、役割を変えない", async () => {
+		const { id, name, admin } = await project();
+		const guest = await user();
+		const invite = await createInvite(env.DB, id, admin, 1_000);
+
+		expect(await acceptInvite(env.DB, invite.token, guest, 2_000)).toEqual({ id, name });
+		expect(await acceptInvite(env.DB, invite.token, guest, 3_000)).toEqual({ id, name });
+		expect(await acceptInvite(env.DB, invite.token, admin, 3_000)).toEqual({ id, name });
+
+		expect(await listMembers(env.DB, id)).toMatchObject([
+			{ id: admin, role: "admin", joined: 1_000 },
+			{ id: guest, role: "member", joined: 2_000 },
+		]);
+	});
+
+	it("acceptInvite: 無効にされたリンク、期限の切れたリンク、ないリンクでは、メンバーにしない", async () => {
+		const { id, admin } = await project();
+		const guest = await user();
+		const revoked = await createInvite(env.DB, id, admin, 1_000);
+		const expired = await createInvite(env.DB, id, admin, 1_000);
+		await revokeInvite(env.DB, id, revoked.id, 2_000);
+
+		expect(await acceptInvite(env.DB, revoked.token, guest, 3_000)).toBeNull();
+		expect(await acceptInvite(env.DB, expired.token, guest, 1_000 + INVITE_TTL)).toBeNull();
+		expect(await acceptInvite(env.DB, "unknown", guest, 3_000)).toBeNull();
+
+		expect((await listMembers(env.DB, id)).map((member) => member.id)).toEqual([admin]);
 	});
 
 	it("一覧は、まだ使えるものだけを、新しい順に返す", async () => {

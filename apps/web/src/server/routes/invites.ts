@@ -1,7 +1,7 @@
 import type { InviteTarget } from "@amime/sync";
 import { Hono } from "hono";
 import type { AppEnv } from "../context.ts";
-import { findInvite, join } from "../db/members.ts";
+import { acceptInvite, findInvite } from "../db/members.ts";
 import { findProject } from "../db/projects.ts";
 
 /** 使えない招待リンク(ない、無効にされた、期限が切れた)への応答。理由は、区別して返さない。 */
@@ -21,9 +21,8 @@ export const invites = new Hono<AppEnv>()
 	.post("/:token/accept", async (c) => {
 		const user = c.var.user;
 		if (user === null) return c.json({ error: "login-required" }, 401);
-		const now = Date.now();
-		const invite = await findInvite(c.env.DB, c.req.param("token"), now);
+		// リンクが使えることを確かめるのと、メンバーにするのを、まとめて行う。
+		const invite = await acceptInvite(c.env.DB, c.req.param("token"), user.id, Date.now());
 		if (invite === null) return c.json(UNKNOWN, 404);
-		await join(c.env.DB, invite.id, user.id, now);
 		return c.json({ project: invite.name, member: true } satisfies InviteTarget);
 	});

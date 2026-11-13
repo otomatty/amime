@@ -137,24 +137,42 @@ export async function findInvite(
 	return db
 		.prepare(
 			`SELECT p.id, p.name FROM invites i JOIN projects p ON p.id = i.project
-			WHERE i.hash = ? AND i.revoked IS NULL AND i.expires > ?`,
+			WHERE ${USABLE_INVITE}`,
 		)
 		.bind(await hashToken(token), now)
 		.first<{ id: string; name: string }>();
 }
 
-/** メンバーにする。もうメンバーなら、そのまま(役割は変えない)。 */
-export async function join(
+/** 使える招待リンク(無効にされていない、期限が切れていない)であること。 */
+const USABLE_INVITE = "i.hash = ? AND i.revoked IS NULL AND i.expires > ?";
+
+/**
+ * 招待リンクで、メンバーにする。リンクが使えることを確かめるのと、メンバーにするのを、まとめて行う
+ * (確かめたあとでリンクが無効にされても、メンバーにならない)。
+ * 使えるリンクなら、招待先のプロジェクトを返す。もうメンバーなら、そのまま(役割は変えない)。使えなければ null。
+ */
+export async function acceptInvite(
 	db: D1Database,
-	project: string,
+	token: string,
 	user: UserId,
 	now: number,
-): Promise<void> {
-	await db
-		.prepare(
-			`INSERT INTO members (project, user, role, joined) VALUES (?, ?, 'member', ?)
-			ON CONFLICT (project, user) DO NOTHING`,
-		)
-		.bind(project, user, now)
-		.run();
+): Promise<{ id: string; name: string } | null> {
+	const hash = await hashToken(token);
+	// 2つの文を、まとめて実行する(D1 の batch は、1つのトランザクションになる)。
+	const [, found] = await db.batch<{ id: string; name: string }>([
+		db
+			.prepare(
+				`INSERT INTO members (project, user, role, joined)
+				SELECT i.project, ?, 'member', ? FROM invites i WHERE ${USABLE_INVITE}
+				ON CONFLICT (project, user) DO NOTHING`,
+			)
+			.bind(user, now, hash, now),
+		db
+			.prepare(
+				`SELECT p.id, p.name FROM invites i JOIN projects p ON p.id = i.project
+				WHERE ${USABLE_INVITE}`,
+			)
+			.bind(hash, now),
+	]);
+	return found?.results[0] ?? null;
 }
