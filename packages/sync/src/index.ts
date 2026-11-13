@@ -3,6 +3,7 @@ export { type LineTracker, startTracking, trackLines } from "./line-ids.ts";
 export { mapColumn } from "./merge-text.ts";
 export { type OwnEdit, reapplyEdit, recordEdit, revertEdit } from "./own-edit.ts";
 export {
+	MAX_LINE_LENGTH,
 	parseClientId,
 	parseClientMessage,
 	parseCommitRequest,

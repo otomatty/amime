@@ -1,4 +1,4 @@
-import type { LineId } from "@amime/sync";
+import { type LineId, MAX_LINE_LENGTH } from "@amime/sync";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CURSOR_INTERVAL_MS, connectPageSocket, HEARTBEAT_MS } from "./page-socket.ts";
 
@@ -242,6 +242,15 @@ describe("connectPageSocket", () => {
 			expect(cursors()).toEqual([]);
 		});
 
+		it("行の長さの上限より後ろの位置は、上限に丸めて送る(サーバーが受け付けない位置を送ると、接続を閉じられる)", () => {
+			const { latest, sendCursor, cursors } = connect();
+			latest().receive(HELLO);
+
+			sendCursor(at("a", MAX_LINE_LENGTH + 5));
+
+			expect(cursors()).toEqual([at("a", MAX_LINE_LENGTH)]);
+		});
+
 		it("閉じたあとは、送らない", () => {
 			const { sockets, latest, sendCursor, close, cursors } = connect();
 			latest().receive(HELLO);
@@ -272,14 +281,32 @@ describe("connectPageSocket", () => {
 			expect(handlers.onConnection.mock.calls).toEqual([[true], [false], [true]]);
 		});
 
-		it("つながらないまま切れたときは、知らせを繰り返さない", () => {
+		it("1度もつながらないまま切れたときも、切れたと知らせる。知らせを繰り返さない", () => {
 			const { latest, handlers } = connect();
 
 			latest().close();
+			expect(handlers.onConnection.mock.calls).toEqual([[false]]);
+
 			vi.advanceTimersByTime(1000);
 			latest().close();
+			expect(handlers.onConnection.mock.calls).toEqual([[false]]);
 
-			expect(handlers.onConnection).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(2000);
+			latest().receive(HELLO);
+			expect(handlers.onConnection.mock.calls).toEqual([[false], [true]]);
+		});
+
+		it("切れた知らせの中で接続を閉じたら、つなぎ直さない", () => {
+			const { sockets, latest, handlers, close } = connect();
+			latest().receive(HELLO);
+			handlers.onConnection.mockImplementation((connected: boolean) => {
+				if (!connected) close();
+			});
+
+			latest().close();
+			vi.advanceTimersByTime(60_000);
+
+			expect(sockets).toHaveLength(1);
 		});
 	});
 });

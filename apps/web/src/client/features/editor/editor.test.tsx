@@ -1,5 +1,5 @@
 import type { LineId } from "@amime/sync";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "./editor.tsx";
 
@@ -535,6 +535,39 @@ describe("Editor", () => {
 
 			expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
 			expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getByTestId("caret"));
+		});
+
+		it("他の人のカーソルが動いただけでは、スクロールしない(離れた場所を読んでいる人を、引き戻さない)", () => {
+			const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+			const document = [{ id: "a" as LineId, text: "abc" }];
+			const other = (column: number) => [{ client: "bob", line: "a" as LineId, column }];
+			const { rerender } = render(<Editor initialDocument={document} others={other(1)} />);
+			clickChar(0, 0);
+			scrollIntoView.mockClear();
+
+			rerender(<Editor initialDocument={document} others={other(2)} />);
+
+			expect(scrollIntoView).not.toHaveBeenCalled();
+		});
+
+		it("他の人の変更を取り込んだだけでは、スクロールしない", () => {
+			const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+			const document = [{ id: "a" as LineId, text: "abc" }];
+			let apply: (lines: typeof document) => void = () => {};
+			const remote = {
+				subscribe(listener: typeof apply) {
+					apply = listener;
+					return () => {};
+				},
+			};
+			render(<Editor initialDocument={document} remote={remote} />);
+			clickChar(0, 0);
+			scrollIntoView.mockClear();
+
+			act(() => apply([{ id: "x" as LineId, text: "他の人の行" }, ...document]));
+
+			expect(lines()).toEqual(["他の人の行", "abc"]);
+			expect(scrollIntoView).not.toHaveBeenCalled();
 		});
 
 		it("フォーカスがないときはスクロールしない", () => {

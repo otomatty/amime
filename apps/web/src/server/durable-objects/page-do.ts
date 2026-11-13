@@ -69,15 +69,19 @@ export class PageDO extends DurableObject {
 		const client = new URL(request.url).searchParams.get("client") ?? "";
 		const { 0: clientSocket, 1: serverSocket } = new WebSocketPair();
 		// いまいる他の端末のカーソルを、先に集めておく(自分の接続を数えないため)。
-		const others = this.ctx.getWebSockets().flatMap((socket): ServerMessage[] => {
+		// 同じ端末の接続がいくつかあっても(つなぎ直しの途中)、端末ごとに1つにまとめる。
+		const others = new Map<ClientId, CursorPosition>();
+		for (const socket of this.ctx.getWebSockets()) {
 			const owner = this.#clientOf(socket);
 			const cursor = this.#cursorOf(socket);
-			return owner === client || cursor === null ? [] : [{ type: "cursor", client: owner, cursor }];
-		});
+			if (owner !== client && cursor !== null) others.set(owner, cursor);
+		}
 		// 端末の識別子をタグにする。その端末のコミットを、本人の接続には配信しないため。
 		this.ctx.acceptWebSocket(serverSocket, [client]);
 		this.#send(serverSocket, { type: "hello", version: this.#version() });
-		for (const message of others) this.#send(serverSocket, message);
+		for (const [owner, cursor] of others) {
+			this.#send(serverSocket, { type: "cursor", client: owner, cursor });
+		}
 		return new Response(null, { status: 101, webSocket: clientSocket });
 	}
 
@@ -93,8 +97,11 @@ export class PageDO extends DurableObject {
 			return;
 		}
 		const { cursor } = parsed.value;
-		socket.serializeAttachment(cursor);
-		this.#broadcast({ type: "cursor", client: this.#clientOf(socket), cursor }, socket);
+		const client = this.#clientOf(socket);
+		// 同じ端末の接続がいくつかあっても(つなぎ直しの途中)、どの接続にも同じ位置を覚えさせる。
+		// 前の接続に古い位置が残っていると、あとから接続した端末に、それを伝えてしまう。
+		for (const own of this.ctx.getWebSockets(client)) own.serializeAttachment(cursor);
+		this.#broadcast({ type: "cursor", client, cursor }, socket);
 	}
 
 	/** 接続が閉じた。その端末のカーソルを消すように、他の端末に知らせる。 */

@@ -3,6 +3,7 @@ import {
 	type ClientMessage,
 	type CommitResult,
 	type CursorPosition,
+	MAX_LINE_LENGTH,
 	parseServerMessage,
 	type ServerMessage,
 } from "@amime/sync";
@@ -60,6 +61,13 @@ export function connectPageSocket({
 	let awaitingPong = false;
 	/** あいさつが届いて、つながっていると分かっているか。 */
 	let connected = false;
+	/** 最後に知らせた、接続の状態。まだ知らせていなければ null。同じ状態は、続けて知らせない。 */
+	let reported: boolean | null = null;
+	const report = (state: boolean) => {
+		if (reported === state) return;
+		reported = state;
+		handlers.onConnection?.(state);
+	};
 	/** 最後に知らせるよう頼まれた、自分のカーソルの位置。まだ頼まれていなければ undefined。 */
 	let cursor: CursorPosition | null | undefined;
 	/** いまの接続で、最後に送ったカーソルの位置(JSON)。 */
@@ -69,7 +77,11 @@ export function connectPageSocket({
 	/** いまのカーソルの位置を送る。つながっていないときと、送ってある位置と同じときは、送らない。 */
 	const flushCursor = () => {
 		if (!connected || socket === null || cursor === undefined) return;
-		const message: ClientMessage = { type: "cursor", cursor };
+		// 編集欄は、送れない長さの行も持てる。サーバーが受け付ける範囲に丸める(範囲の外を送ると、接続を閉じられる)。
+		const message: ClientMessage = {
+			type: "cursor",
+			cursor: cursor && { ...cursor, column: Math.min(cursor.column, MAX_LINE_LENGTH) },
+		};
 		const data = JSON.stringify(message);
 		if (data === sentCursor) return;
 		socket.send(data);
@@ -97,10 +109,12 @@ export function connectPageSocket({
 	const lost = (current: WebSocket) => {
 		if (socket !== current) return;
 		release();
-		if (connected) handlers.onConnection?.(false);
 		connected = false;
 		retryTimer = setTimeout(open, retryDelay);
 		retryDelay = Math.min(retryDelay * 2, MAX_RETRY_MS);
+		// つなぎ直しの予約を済ませてから知らせる。知らせの中で close が呼ばれても、予約が取り消される。
+		// 1度もつながらないまま切れたときも知らせる(つながらない環境で、いつまでも「接続中」に見えないように)。
+		report(false);
 	};
 
 	const receive = (message: ServerMessage) => {
@@ -108,7 +122,7 @@ export function connectPageSocket({
 			case "hello":
 				retryDelay = FIRST_RETRY_MS;
 				connected = true;
-				handlers.onConnection?.(true);
+				report(true);
 				handlers.onHello(message.version);
 				// サーバーは、前の接続のカーソルの位置を覚えていない。いまの位置を送り直す。
 				flushCursor();

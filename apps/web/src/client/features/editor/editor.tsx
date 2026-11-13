@@ -27,7 +27,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { EditorLine } from "./editor-line.tsx";
-import { createIdPrefix, createModel } from "./editor-model.ts";
+import { createIdPrefix, createModel, type EditorAction } from "./editor-model.ts";
 import { createEditorStore } from "./editor-store.ts";
 import { cursorFromPoint, LINE_END } from "./hit-test.ts";
 import { groupLines } from "./line-groups.ts";
@@ -100,7 +100,17 @@ export function Editor({
 		createEditorStore(createModel({ initialLines, initialDocument }, createIdPrefix())),
 	);
 	const { present: state, tracker } = useSyncExternalStore(store.subscribe, store.getModel);
-	const { dispatch } = store;
+	/**
+	 * 次の描画のあとで、カーソルが見える位置までスクロールするか。
+	 * 自分の操作のあとにだけスクロールする。他の人の変更やカーソルが届いただけでは、スクロールしない
+	 * (フォーカスを残したまま離れた場所を読んでいる人を、引き戻さないため)。
+	 */
+	const revealCaret = useRef(false);
+	/** 自分の操作を実行する。 */
+	const dispatch = (action: EditorAction) => {
+		revealCaret.current = true;
+		store.dispatch(action);
+	};
 
 	// 呼び出し側が渡す関数が変わっても、登録はし直さず、いつも最新のものを呼ぶ。
 	const latestOnChange = useRef(onChange);
@@ -159,7 +169,10 @@ export function Editor({
 		input.style.top = `${caret.offsetTop}px`;
 		input.style.left = `${caret.offsetLeft}px`;
 		// キー操作は既定の動作を止めているため、ブラウザは自動でスクロールしない。代わりに行う。
-		if (focused) caret.scrollIntoView({ block: "nearest", inline: "nearest" });
+		if (focused && revealCaret.current) {
+			caret.scrollIntoView({ block: "nearest", inline: "nearest" });
+		}
+		revealCaret.current = false;
 	});
 
 	// 画面から外れるときに、ドラッグの監視が残らないようにする。
@@ -191,6 +204,8 @@ export function Editor({
 	};
 
 	const handleCompositionUpdate = (event: CompositionEvent) => {
+		// 変換中の文字列が伸びると、カーソルも動く。
+		revealCaret.current = true;
 		setComposing(event.data);
 	};
 
@@ -330,7 +345,10 @@ export function Editor({
 				onCompositionStart={handleCompositionStart}
 				onCompositionUpdate={handleCompositionUpdate}
 				onCompositionEnd={handleCompositionEnd}
-				onFocus={() => setFocused(true)}
+				onFocus={() => {
+					revealCaret.current = true;
+					setFocused(true);
+				}}
 				onBlur={() => setFocused(false)}
 			/>
 			{groups.map((group) => {
