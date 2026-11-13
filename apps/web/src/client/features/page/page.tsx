@@ -1,8 +1,16 @@
-import { type CursorPosition, type Line, type PageSnapshot, startTracking } from "@amime/sync";
+import {
+	type CursorPosition,
+	type Line,
+	type PageInfo,
+	type PageSnapshot,
+	startTracking,
+	type TitleProblem,
+} from "@amime/sync";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "../editor/editor.tsx";
 import { createIdPrefix } from "../editor/editor-model.ts";
-import { createPageApi } from "./api.ts";
+import { pageHref } from "../editor/links.ts";
+import { createPageApi, openPage } from "./api.ts";
 import { createChannel } from "./channel.ts";
 import { createClientId } from "./client-id.ts";
 import { createCommitId } from "./commit-id.ts";
@@ -16,7 +24,6 @@ import {
 } from "./pending-store.ts";
 import { createPresence, type RemoteCursor } from "./presence.ts";
 import { restorePage } from "./restore.ts";
-import { titleFromName } from "./route.ts";
 import "./page.css";
 
 type PageProps = {
@@ -24,17 +31,63 @@ type PageProps = {
 	readonly name: string;
 };
 
-type Loaded =
+/** サーバーからの読み込みの進み具合。 */
+type Loading<T> =
 	| { readonly status: "loading" }
-	| {
-			readonly status: "ready";
-			readonly snapshot: PageSnapshot;
-			/** 前回送れなかった変更を載せた文書。載せるものがなければ null。 */
-			readonly restored: readonly Line[] | null;
-			/** 前回送れなかった変更を復元したことを、画面に伝えるか。 */
-			readonly noticed: boolean;
-	  }
-	| { readonly status: "error"; readonly kind: PageApiError["kind"] };
+	| { readonly status: "ready"; readonly value: T }
+	| { readonly status: "error"; readonly kind: PageApiError["kind"]; readonly retry: () => void };
+
+/** 読み込みを行い、進み具合を返す。load が変わると、読み込み直す。 */
+function useLoading<T>(load: () => Promise<T>): Loading<T> {
+	const [state, setState] = useState<Loading<T>>({ status: "loading" });
+	const [attempt, setAttempt] = useState(0);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt は、読み込みをやり直すためのきっかけとして使う。
+	useEffect(() => {
+		let cancelled = false;
+		setState({ status: "loading" });
+		load().then(
+			(value) => {
+				if (!cancelled) setState({ status: "ready", value });
+			},
+			(error: unknown) => {
+				const kind = error instanceof PageApiError ? error.kind : "failed";
+				const retry = () => setAttempt((count) => count + 1);
+				if (!cancelled) setState({ status: "error", kind, retry });
+			},
+		);
+		return () => {
+			cancelled = true;
+		};
+	}, [load, attempt]);
+
+	return state;
+}
+
+/** 読み込みが終わっていないあいだの表示。終わっていれば null。 */
+function Pending({ state }: { readonly state: Loading<unknown> }) {
+	if (state.status === "loading") {
+		return (
+			<p className="page-status" role="status">
+				読み込んでいます…
+			</p>
+		);
+	}
+	if (state.status === "ready") return null;
+	return state.kind === "disabled" ? (
+		<p className="page-message">
+			この環境では、ページの保存と読み込みはまだ使えません。ログインの仕組みができるまで、公開している環境では止めています。
+			<a href="/">試し書きのページ</a>は使えます。
+		</p>
+	) : (
+		<p className="page-message">
+			ページを読み込めませんでした。
+			<button type="button" onClick={state.retry}>
+				もう一度読み込む
+			</button>
+		</p>
+	);
+}
 
 const STATUS_LABELS: Record<SyncStatus, string> = {
 	new: "新しいページです。書き始めると保存されます",
@@ -55,77 +108,54 @@ const CONNECTION_LABELS: Record<Connection, string> = {
 	offline: "オフライン(つなぎ直しています…)",
 };
 
+/** ページの名前を1行目に合わせられないときの案内(ADR-0024)。 */
+const TITLE_PROBLEMS: Record<TitleProblem, string> = {
+	taken: "1行目と同じ名前のページが、すでにあります。",
+	empty: "1行目が空です。",
+	"too-long": "1行目が長すぎて、ページの名前にできません(200文字まで)。",
+};
+
 /** 保存を待っている変更がない状態。ページを離れても何も失われない。 */
 const SETTLED: ReadonlySet<SyncStatus> = new Set(["new", "saved"]);
 
-/** 保存されるページ。読み込んでから編集欄を表示し、編集を保存する。 */
+/**
+ * 保存されるページ。URLの中の名前からページを引き、読み込んでから編集欄を表示する。
+ * ページは、名前を変えても変わらないIDで識別する(ADR-0024)。
+ */
 export function Page({ name }: PageProps) {
+	const opened = useLoading(useCallback(() => openPage(name), [name]));
+	if (opened.status !== "ready") return <Pending state={opened} />;
+	return <OpenedPage key={opened.value.id} info={opened.value} />;
+}
+
+/** IDの分かったページ。保存されている内容を読み込み、前回送れなかった変更を復元する。 */
+function OpenedPage({ info }: { readonly info: PageInfo }) {
 	// 端末(タブ)の識別子は、ページを開くたびに作る。
 	const { api, pending } = useMemo(() => {
 		const client = createClientId();
 		return {
-			api: createPageApi(name, client),
+			api: createPageApi(info.id, client),
 			pending: createPendingStore({
 				storage: browserStorage(),
 				locks: browserLocks(),
-				page: name,
+				page: info.id,
 				client,
 			}),
 		};
-	}, [name]);
-	const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
-	const [attempt, setAttempt] = useState(0);
+	}, [info.id]);
 
 	// このタブが開いているあいだ、このタブの未送信の変更を、他のタブに引き取らせない(ADR-0020)。
 	useEffect(() => pending.hold(), [pending]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt は、読み込みをやり直すためのきっかけとして使う。
-	useEffect(() => {
-		let cancelled = false;
-		setLoaded({ status: "loading" });
-		// 前回送れなかった変更が端末内に残っていたら、復元する(ADR-0020)。
-		restorePage(api, pending).then(
-			(result) => {
-				if (!cancelled) setLoaded({ status: "ready", ...result });
-			},
-			(error: unknown) => {
-				const kind = error instanceof PageApiError ? error.kind : "failed";
-				if (!cancelled) setLoaded({ status: "error", kind });
-			},
-		);
-		return () => {
-			cancelled = true;
-		};
-	}, [api, pending, attempt]);
-
-	if (loaded.status === "loading") {
-		return (
-			<p className="page-status" role="status">
-				読み込んでいます…
-			</p>
-		);
-	}
-	if (loaded.status === "error") {
-		return loaded.kind === "disabled" ? (
-			<p className="page-message">
-				この環境では、ページの保存と読み込みはまだ使えません。ログインの仕組みができるまで、公開している環境では止めています。
-				<a href="/">試し書きのページ</a>は使えます。
-			</p>
-		) : (
-			<p className="page-message">
-				ページを読み込めませんでした。
-				<button type="button" onClick={() => setAttempt((count) => count + 1)}>
-					もう一度読み込む
-				</button>
-			</p>
-		);
-	}
+	// 前回送れなかった変更が端末内に残っていたら、復元する(ADR-0020)。
+	const loaded = useLoading(useCallback(() => restorePage(api, pending), [api, pending]));
+	if (loaded.status !== "ready") return <Pending state={loaded} />;
 	return (
 		<PageEditor
-			title={titleFromName(name)}
-			snapshot={loaded.snapshot}
-			restored={loaded.restored}
-			noticed={loaded.noticed}
+			info={info}
+			snapshot={loaded.value.snapshot}
+			restored={loaded.value.restored}
+			noticed={loaded.value.noticed}
 			api={api}
 			pending={pending}
 		/>
@@ -133,8 +163,8 @@ export function Page({ name }: PageProps) {
 }
 
 type PageEditorProps = {
-	/** まだないページを開いたときに、1行目に入れるタイトル。 */
-	readonly title: string;
+	/** 台帳にある、ページのIDと名前。まだないページを開いたときは、名前を1行目に入れる。 */
+	readonly info: PageInfo;
 	readonly snapshot: PageSnapshot;
 	readonly restored: readonly Line[] | null;
 	readonly noticed: boolean;
@@ -142,7 +172,18 @@ type PageEditorProps = {
 	readonly pending: PendingStore;
 };
 
-function PageEditor({ title, snapshot, restored, noticed, api, pending }: PageEditorProps) {
+function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEditorProps) {
+	// ページを開いたときの名前。まだないページの1行目に入れる(あとで名前が変わっても、入れ直さない)。
+	const [title] = useState(info.title);
+	// ページのいまの名前と、名前を1行目に合わせられない理由。1行目を変えると、サーバーが名前を合わせて知らせてくる。
+	const [named, setNamed] = useState({ title: info.title, problem: info.problem });
+	useEffect(() => {
+		// URLを、ページのいまの名前に合わせる。再読み込みしても、共有しても、同じページが開く。
+		const target = new URL(pageHref(named.title), window.location.href);
+		if (target.pathname !== window.location.pathname) {
+			window.history.replaceState(window.history.state, "", target);
+		}
+	}, [named.title]);
 	// まだないページは、タイトルだけを入れた仮の文書から始める。この内容のままなら保存しない。
 	const placeholder = restored === null && snapshot.lines.length === 0;
 	const initial = useMemo(() => {
@@ -164,13 +205,18 @@ function PageEditor({ title, snapshot, restored, noticed, api, pending }: PageEd
 			initial,
 			placeholder,
 			api,
-			presence: {
+			listeners: {
 				onCursor: presence.onCursor,
 				onLeave: presence.onLeave,
 				onConnection(connected) {
 					presence.onConnection(connected);
 					setConnection(connected ? "online" : "offline");
 				},
+				// サーバーは、名前が変わっていなくても知らせてくる。同じなら、描き直さない。
+				onPage: (title, problem) =>
+					setNamed((current) =>
+						current.title === title && current.problem === problem ? current : { title, problem },
+					),
 			},
 			onStatus: setStatus,
 			onRemote: remote.emit,
@@ -214,6 +260,12 @@ function PageEditor({ title, snapshot, restored, noticed, api, pending }: PageEd
 			<p className="page-connection" data-testid="connection" data-connection={connection}>
 				{CONNECTION_LABELS[connection]}
 			</p>
+			{named.problem !== null && (
+				<p className="page-notice" role="note" data-testid="title-problem">
+					{TITLE_PROBLEMS[named.problem]}
+					このページの名前は「{named.title}」のままです。1行目を変えると、ページの名前も変わります。
+				</p>
+			)}
 			{noticed && (
 				<p className="page-notice" role="note">
 					前回、送信できなかった変更を復元しました。

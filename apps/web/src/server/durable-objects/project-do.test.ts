@@ -1,0 +1,209 @@
+import { runInDurableObject } from "cloudflare:test";
+import { exports } from "cloudflare:workers";
+import type { PageId } from "@amime/sync";
+import { describe, expect, it } from "vitest";
+import { PLACEHOLDER_MAX_AGE_MS } from "./project-do.ts";
+
+/** テストごとに別のプロジェクト(=別の Durable Object)を使い、状態を共有しない。 */
+const project = (name: string) => exports.ProjectDO.getByName(`test-${name}`);
+/** 保存されたページの状態(1行目と、バージョン)。 */
+const saved = (title: string, version = 1) => ({ title, version, updated: 1000 * version });
+
+describe("ProjectDO(プロジェクトのページの台帳)", () => {
+	describe("open(名前からページを引く)", () => {
+		it("まだない名前を開くと、新しいIDを決める。名前は、URLの名前から作る", async () => {
+			const info = await project("open-new").open("買い物_メモ");
+
+			expect(info).toEqual({ id: expect.any(String), title: "買い物 メモ", problem: null });
+			expect(info.id).toMatch(/^[\w-]{1,64}$/);
+		});
+
+		it("同じ名前をもう一度開くと、同じIDになる。大文字小文字と、空白かアンダースコアかの違いは、同じ名前", async () => {
+			const stub = project("open-same");
+			const first = await stub.open("Page Title");
+
+			expect(await stub.open("Page Title")).toEqual(first);
+			expect((await stub.open("page_title")).id).toBe(first.id);
+			// 名前の表記は、最初に決めたもののまま。
+			expect((await stub.open("PAGE_TITLE")).title).toBe("Page Title");
+		});
+
+		it("名前が違えば、別のIDになる", async () => {
+			const stub = project("open-other");
+
+			expect((await stub.open("a")).id).not.toBe((await stub.open("b")).id);
+		});
+
+		it("プロジェクトが違えば、同じ名前でも別のページ", async () => {
+			const here = await project("open-here").open("a");
+			const there = await project("open-there").open("a");
+
+			expect(here.id).not.toBe(there.id);
+		});
+	});
+
+	describe("retitle(ページの名前を、1行目に合わせる)", () => {
+		it("1行目が名前と同じなら、名前は変わらない。保存されたページになる", async () => {
+			const stub = project("retitle-same");
+			const page = await stub.open("メモ");
+
+			expect(await stub.retitle(page.id, saved("メモ"))).toEqual(page);
+		});
+
+		it("表記だけを変えたとき(大文字小文字、空白)は、名前の表記が変わる。IDは変わらない", async () => {
+			const stub = project("retitle-case");
+			const page = await stub.open("page title");
+
+			expect(await stub.retitle(page.id, saved("Page_Title"))).toEqual({
+				...page,
+				title: "Page_Title",
+			});
+			expect(await stub.open("page title")).toMatchObject({ id: page.id, title: "Page_Title" });
+		});
+
+		it("1行目を変えると、ページの名前が変わる。新しい名前で、同じページが開く", async () => {
+			const stub = project("retitle-rename");
+			const page = await stub.open("旧い名前");
+			await stub.retitle(page.id, saved("旧い名前"));
+
+			const renamed = await stub.retitle(page.id, saved("新しい名前", 2));
+
+			expect(renamed).toEqual({ id: page.id, title: "新しい名前", problem: null });
+			expect((await stub.open("新しい名前")).id).toBe(page.id);
+			// 前の名前は空く。開くと、別の新しいページになる。
+			expect((await stub.open("旧い名前")).id).not.toBe(page.id);
+		});
+
+		it("1行目の前後の空白は、名前に含めない", async () => {
+			const stub = project("retitle-trim");
+			const page = await stub.open("a");
+
+			expect((await stub.retitle(page.id, saved("  新しい 名前　"))).title).toBe("新しい 名前");
+		});
+
+		it("同じ名前の保存されたページがあれば、名前を変えない。理由を返す", async () => {
+			const stub = project("retitle-taken");
+			const other = await stub.open("先にある名前");
+			await stub.retitle(other.id, saved("先にある名前"));
+			const page = await stub.open("自分の名前");
+			await stub.retitle(page.id, saved("自分の名前"));
+
+			const blocked = await stub.retitle(page.id, saved("先にある名前", 2));
+
+			expect(blocked).toEqual({ id: page.id, title: "自分の名前", problem: "taken" });
+			expect((await stub.open("先にある名前")).id).toBe(other.id);
+			expect(await stub.open("自分の名前")).toEqual(blocked);
+		});
+
+		it("名前を変えられなかったあとで、空いている名前にすれば変わる", async () => {
+			const stub = project("retitle-recover");
+			const other = await stub.open("a");
+			await stub.retitle(other.id, saved("a"));
+			const page = await stub.open("b");
+			await stub.retitle(page.id, saved("a"));
+
+			expect(await stub.retitle(page.id, saved("c", 2))).toEqual({
+				id: page.id,
+				title: "c",
+				problem: null,
+			});
+		});
+
+		it("開いただけで保存されていないページの名前は、空いているものとして扱う", async () => {
+			const stub = project("retitle-placeholder");
+			const placeholder = await stub.open("取りたい名前");
+			const page = await stub.open("自分の名前");
+			await stub.retitle(page.id, saved("自分の名前"));
+
+			const renamed = await stub.retitle(page.id, saved("取りたい名前", 2));
+
+			expect(renamed).toEqual({ id: page.id, title: "取りたい名前", problem: null });
+			expect((await stub.open("取りたい名前")).id).toBe(page.id);
+			expect(placeholder.id).not.toBe(page.id);
+		});
+
+		it("名前を取られたあとで保存されたページは、重ならない名前で台帳に載る", async () => {
+			const stub = project("retitle-orphan");
+			const placeholder = await stub.open("名前");
+			const page = await stub.open("別の名前");
+			await stub.retitle(page.id, saved("名前"));
+
+			// 開いたままだったタブが、あとから書き始めた。
+			const adopted = await stub.retitle(placeholder.id, saved("名前"));
+
+			expect(adopted).toEqual({ id: placeholder.id, title: "名前 (2)", problem: "taken" });
+			expect((await stub.open("名前 (2)")).id).toBe(placeholder.id);
+			expect((await stub.open("名前")).id).toBe(page.id);
+		});
+
+		it("重ならない名前は、空いている番号を探して決める", async () => {
+			const stub = project("retitle-orphan-number");
+			for (const title of ["名前", "名前 (2)"]) {
+				const page = await stub.open(title);
+				await stub.retitle(page.id, saved(title));
+			}
+
+			const adopted = await stub.retitle("unknown-page" as PageId, saved("名前"));
+
+			expect(adopted.title).toBe("名前 (3)");
+		});
+
+		it("台帳にないページの1行目が空なら、「無題」から名前を決める", async () => {
+			const adopted = await project("retitle-orphan-empty").retitle(
+				"unknown-page" as PageId,
+				saved("  "),
+			);
+
+			expect(adopted).toEqual({ id: "unknown-page", title: "無題", problem: "empty" });
+		});
+
+		it("1行目が空なら、名前を変えない。理由を返す", async () => {
+			const stub = project("retitle-empty");
+			const page = await stub.open("名前");
+
+			expect(await stub.retitle(page.id, saved(" 　"))).toEqual({ ...page, problem: "empty" });
+		});
+
+		it("1行目が長すぎるなら、名前を変えない。理由を返す", async () => {
+			const stub = project("retitle-long");
+			const page = await stub.open("名前");
+
+			expect(await stub.retitle(page.id, saved("あ".repeat(201)))).toEqual({
+				...page,
+				problem: "too-long",
+			});
+			expect((await stub.retitle(page.id, saved("あ".repeat(200)))).problem).toBeNull();
+		});
+	});
+
+	describe("開いただけのページの片づけ", () => {
+		const backdate = (stub: ReturnType<typeof project>, id: string, age: number) =>
+			runInDurableObject(stub, (_instance, state) => {
+				state.storage.sql.exec("UPDATE pages SET created = ? WHERE id = ?", Date.now() - age, id);
+			});
+
+		it("開いただけで保存されないまま1日たったページは、台帳から消す", async () => {
+			const stub = project("gc-old");
+			const stale = await stub.open("開いただけ");
+			await backdate(stub, stale.id, PLACEHOLDER_MAX_AGE_MS + 1);
+
+			await stub.open("別のページ");
+
+			expect((await stub.open("開いただけ")).id).not.toBe(stale.id);
+		});
+
+		it("1日たっていないページと、保存されたページは消さない", async () => {
+			const stub = project("gc-keep");
+			const recent = await stub.open("最近開いた");
+			const kept = await stub.open("保存した");
+			await stub.retitle(kept.id, saved("保存した"));
+			await backdate(stub, recent.id, PLACEHOLDER_MAX_AGE_MS - 60_000);
+			await backdate(stub, kept.id, PLACEHOLDER_MAX_AGE_MS * 30);
+
+			await stub.open("別のページ");
+
+			expect((await stub.open("最近開いた")).id).toBe(recent.id);
+			expect((await stub.open("保存した")).id).toBe(kept.id);
+		});
+	});
+});

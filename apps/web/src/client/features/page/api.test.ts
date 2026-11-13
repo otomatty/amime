@@ -1,6 +1,6 @@
-import type { ClientId, Commit, CommitId, LineId } from "@amime/sync";
+import type { ClientId, Commit, CommitId, LineId, PageId } from "@amime/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPageApi, pageSocketUrl } from "./api.ts";
+import { createPageApi, openPage, pageSocketUrl } from "./api.ts";
 import { PageApiError } from "./page-api-error.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -20,38 +20,62 @@ afterEach(() => {
 });
 
 const client = "tab-1" as ClientId;
+const pageId = "p-1" as PageId;
+
+describe("openPage(名前からページを引く)", () => {
+	const info = { id: "p-1", title: "買い物/メモ", problem: null };
+
+	it("名前をURLに符号化して引く。ページのIDと名前を返す", async () => {
+		const fetchMock = stubFetch(json(info));
+
+		expect(await openPage("買い物/メモ")).toEqual(info);
+		expect(fetchMock).toHaveBeenCalledWith(
+			`/api/pages/by-title/${encodeURIComponent("買い物/メモ")}`,
+			undefined,
+		);
+	});
+
+	it("ページのAPIが無効な環境では、そのことが分かる失敗になる", async () => {
+		stubFetch(json({ error: "page-api-disabled" }, 403));
+
+		await expect(openPage("a")).rejects.toMatchObject({ kind: "disabled" });
+	});
+
+	it("形の違う応答は、読み込みの失敗になる", async () => {
+		stubFetch(json({ id: "p-1" }));
+
+		await expect(openPage("a")).rejects.toMatchObject({ kind: "failed" });
+	});
+});
 
 describe("pageSocketUrl", () => {
 	it("いま開いているページと同じ接続先の、WebSocket のURLを作る", () => {
 		const page = new URL("https://amime.example/notes/x");
 
-		expect(pageSocketUrl(page, "買い物/メモ", client)).toBe(
-			`wss://amime.example/api/pages/${encodeURIComponent("買い物/メモ")}/socket?client=tab-1`,
+		expect(pageSocketUrl(page, pageId, client)).toBe(
+			"wss://amime.example/api/pages/p-1/socket?client=tab-1",
 		);
 	});
 
 	it("http で開いているときは、暗号化しない接続にする(手元での開発)", () => {
 		const page = new URL("http://localhost:5173/");
 
-		expect(pageSocketUrl(page, "a", client)).toBe(
-			"ws://localhost:5173/api/pages/a/socket?client=tab-1",
+		expect(pageSocketUrl(page, pageId, client)).toBe(
+			"ws://localhost:5173/api/pages/p-1/socket?client=tab-1",
 		);
 	});
 });
 
 describe("createPageApi", () => {
-	const api = createPageApi("買い物/メモ", client);
+	const api = createPageApi(pageId, client);
 	const snapshot = { version: 2, lines: [{ id: "a", text: "題" }] };
 
 	describe("load", () => {
-		it("ページ名をURLに符号化して読み込む", async () => {
+		it("ページのIDを指して読み込む", async () => {
 			const fetchMock = stubFetch(json(snapshot));
 
 			expect(await api.load()).toEqual(snapshot);
-			expect(fetchMock).toHaveBeenCalledWith(
-				`/api/pages/${encodeURIComponent("買い物/メモ")}`,
-				undefined,
-			);
+			expect(fetchMock).toHaveBeenCalledWith("/api/pages/p-1", undefined);
 		});
 
 		it("ページのAPIが無効な環境では、そのことが分かる失敗になる", async () => {
@@ -83,14 +107,11 @@ describe("createPageApi", () => {
 			const fetchMock = stubFetch(json({ version: 3, applied: changes }));
 
 			expect(await api.commit(commit)).toEqual({ version: 3, applied: changes });
-			expect(fetchMock).toHaveBeenCalledWith(
-				`/api/pages/${encodeURIComponent("買い物/メモ")}/commits`,
-				{
-					method: "POST",
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ id: "c1", changes, client: "tab-1" }),
-				},
-			);
+			expect(fetchMock).toHaveBeenCalledWith("/api/pages/p-1/commits", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ id: "c1", changes, client: "tab-1" }),
+			});
 		});
 
 		it.each([

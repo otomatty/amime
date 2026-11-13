@@ -1,5 +1,13 @@
 import type { Result } from "@amime/shared";
-import { type ClientId, type Commit, parseCommitResult, parseSnapshot } from "@amime/sync";
+import {
+	type ClientId,
+	type Commit,
+	type PageId,
+	type PageInfo,
+	parseCommitResult,
+	parsePageInfo,
+	parseSnapshot,
+} from "@amime/sync";
 import { PageApiError } from "./page-api-error.ts";
 import { connectPageSocket } from "./page-socket.ts";
 import type { PageApi } from "./page-sync.ts";
@@ -24,23 +32,31 @@ async function request<T>(
 	return parsed.value;
 }
 
-const pagePath = (name: string): string => `/api/pages/${encodeURIComponent(name)}`;
+const pagePath = (id: PageId): string => `/api/pages/${id}`;
+
+/**
+ * 名前(URLの中の名前)から、ページを引く(ADR-0024)。
+ * まだないページには、サーバーがIDを決める。ページの本文は、書き込むまで作られない。
+ */
+export function openPage(name: string): Promise<PageInfo> {
+	return request(`/api/pages/by-title/${encodeURIComponent(name)}`, undefined, parsePageInfo);
+}
 
 /** ページの WebSocket のURL。いま開いているページ(location)と同じ接続先にする。 */
-export function pageSocketUrl(location: URL | Location, name: string, client: ClientId): string {
+export function pageSocketUrl(location: URL | Location, id: PageId, client: ClientId): string {
 	const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-	return `${protocol}//${location.host}${pagePath(name)}/socket?client=${client}`;
+	return `${protocol}//${location.host}${pagePath(id)}/socket?client=${client}`;
 }
 
 /**
- * 指定したページを読み書きするAPI。
+ * 指定したページを読み書きするAPI。ページは、名前を変えても変わらないIDで指す。
  * client は、この端末(タブ)の識別子。自分のコミットが、自分の WebSocket に配信されないようにするために送る。
  */
-export function createPageApi(name: string, client: ClientId): PageApi {
-	const url = pagePath(name);
+export function createPageApi(id: PageId, client: ClientId): PageApi {
+	const url = pagePath(id);
 	return {
 		subscribe: (handlers) =>
-			connectPageSocket({ url: pageSocketUrl(window.location, name, client), handlers }),
+			connectPageSocket({ url: pageSocketUrl(window.location, id, client), handlers }),
 		load: () => request(url, undefined, parseSnapshot),
 		commit: (commit: Commit) =>
 			request(

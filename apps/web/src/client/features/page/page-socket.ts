@@ -6,6 +6,7 @@ import {
 	MAX_LINE_LENGTH,
 	parseServerMessage,
 	type ServerMessage,
+	type TitleProblem,
 } from "@amime/sync";
 
 /** 接続が生きているかを確かめる間隔。 */
@@ -26,6 +27,8 @@ export type PageSocketHandlers = {
 	readonly onLeave?: (client: ClientId) => void;
 	/** つながった(true)、切れた(false)。切れているあいだは、他の端末の変更もカーソルも届かない。 */
 	readonly onConnection?: (connected: boolean) => void;
+	/** ページの名前を、サーバーが1行目に合わせて確かめた(ADR-0024)。 */
+	readonly onPage?: (title: string, problem: TitleProblem | null) => void;
 };
 
 /** ページの WebSocket の接続。 */
@@ -135,6 +138,9 @@ export function connectPageSocket({
 				return;
 			case "leave":
 				handlers.onLeave?.(message.client);
+				return;
+			case "page":
+				handlers.onPage?.(message.title, message.problem);
 				return;
 		}
 	};

@@ -8,6 +8,8 @@ import type {
 	CommitResult,
 	CursorPosition,
 	LineId,
+	PageId,
+	PageInfo,
 	PageSnapshot,
 	PendingRecord,
 	ServerMessage,
@@ -92,6 +94,17 @@ const PendingRecordSchema = v.object({
 		}),
 	),
 });
+// ページのIDも外部から届く文字列。形を検査したうえで、ここでブランド型にする。
+const PageIdSchema = v.pipe(
+	v.string(),
+	v.regex(IDENTIFIER),
+	v.transform((value) => value as PageId),
+);
+const pageTitle = {
+	title: v.string(),
+	problem: v.nullable(v.picklist(["taken", "empty", "too-long"])),
+};
+const PageInfoSchema = v.object({ id: PageIdSchema, ...pageTitle });
 const CursorSchema = v.nullable(
 	v.object({
 		line: LineIdSchema,
@@ -104,6 +117,7 @@ const ServerMessageSchema = v.variant("type", [
 	v.object({ type: v.literal("commit"), ...commitResult }),
 	v.object({ type: v.literal("cursor"), client: ClientIdSchema, cursor: CursorSchema }),
 	v.object({ type: v.literal("leave"), client: ClientIdSchema }),
+	v.object({ type: v.literal("page"), ...pageTitle }),
 ]);
 
 function parse<T>(schema: v.GenericSchema<unknown, T>, input: unknown): Result<T, "invalid"> {
@@ -128,6 +142,14 @@ function parseJson<T>(schema: v.GenericSchema<unknown, T>, input: unknown): Resu
 		return err("invalid");
 	}
 }
+
+/** 外部から届いたページのIDを検査する。 */
+export const parsePageId = (input: unknown): Result<PageId, "invalid"> =>
+	parse(PageIdSchema, input);
+
+/** サーバーから届いた、ページの情報を検査する。 */
+export const parsePageInfo = (input: unknown): Result<PageInfo, "invalid"> =>
+	parse(PageInfoSchema, input);
 
 /** クライアントから WebSocket で届いたメッセージを検査する。 */
 export const parseClientMessage = (input: unknown): Result<ClientMessage, "invalid"> =>

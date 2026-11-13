@@ -67,8 +67,8 @@ function createServer(initial: readonly Line[] = []) {
 type Observed = { readonly status: SyncStatus; readonly remote: readonly Line[] | null };
 
 type StartOptions = {
-	/** 他の人のカーソルと、接続の状態の知らせの届け先。 */
-	readonly presence?: Pick<PageSocketHandlers, "onCursor" | "onLeave" | "onConnection">;
+	/** 保存には関わらない知らせ(他の人のカーソル、接続の状態、ページの名前)の届け先。 */
+	readonly listeners?: Omit<PageSocketHandlers, "onHello" | "onCommit">;
 	/** 編集欄に最初に表示する文書。省くと、読み込んだページの行。 */
 	readonly initial?: readonly Line[];
 	/** initial が、まだないページの仮のタイトルか。 */
@@ -85,7 +85,7 @@ function start(server: ReturnType<typeof createServer>, options: StartOptions = 
 		initial: options.initial ?? server.snapshot().lines,
 		placeholder: options.placeholder ?? false,
 		api: server.api,
-		...(options.presence && { presence: options.presence }),
+		...(options.listeners && { listeners: options.listeners }),
 		onPending: (pending) => pendings.push(pending),
 		createCommitId: () => {
 			commitSerial += 1;
@@ -712,21 +712,28 @@ describe("createPageSync", () => {
 		expect(states).toHaveLength(count);
 	});
 
-	describe("他の人のカーソルと接続の状態(ADR-0023)", () => {
+	describe("保存には関わらない知らせ(ADR-0023、ADR-0024)", () => {
 		it("届いた知らせを、そのまま渡す", () => {
 			const server = createServer([line("a")]);
-			const presence = { onCursor: vi.fn(), onLeave: vi.fn(), onConnection: vi.fn() };
-			start(server, { presence });
+			const listeners = {
+				onCursor: vi.fn(),
+				onLeave: vi.fn(),
+				onConnection: vi.fn(),
+				onPage: vi.fn(),
+			};
+			start(server, { listeners });
 			const bob = "bob" as ClientId;
 			const cursor = { line: line("a").id, column: 1 };
 
 			server.handlers?.onConnection?.(true);
 			server.handlers?.onCursor?.(bob, cursor);
 			server.handlers?.onLeave?.(bob);
+			server.handlers?.onPage?.("新しい名前", null);
 
-			expect(presence.onConnection).toHaveBeenCalledExactlyOnceWith(true);
-			expect(presence.onCursor).toHaveBeenCalledExactlyOnceWith(bob, cursor);
-			expect(presence.onLeave).toHaveBeenCalledExactlyOnceWith(bob);
+			expect(listeners.onConnection).toHaveBeenCalledExactlyOnceWith(true);
+			expect(listeners.onCursor).toHaveBeenCalledExactlyOnceWith(bob, cursor);
+			expect(listeners.onLeave).toHaveBeenCalledExactlyOnceWith(bob);
+			expect(listeners.onPage).toHaveBeenCalledExactlyOnceWith("新しい名前", null);
 		});
 
 		it("自分のカーソルの位置を、接続に渡す", () => {

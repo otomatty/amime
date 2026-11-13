@@ -30,7 +30,10 @@ describe("App", () => {
 		render(<App />);
 
 		await waitFor(() =>
-			expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${encodeURIComponent("メモ")}`, undefined),
+			expect(fetchMock).toHaveBeenCalledWith(
+				`/api/pages/by-title/${encodeURIComponent("メモ")}`,
+				undefined,
+			),
 		);
 		expect(screen.getByRole("status").textContent).toBe("読み込んでいます…");
 	});

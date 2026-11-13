@@ -1,4 +1,4 @@
-import { evictDurableObject } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { app } from "./app.ts";
@@ -61,15 +61,16 @@ describe("ページのAPI", () => {
 		});
 	});
 
-	it("ページ名は、空白と大文字小文字の違いを同じページとして扱う", async () => {
-		await post(`/api/pages/${encodeURIComponent("API Title メモ")}/commits`, {
+	it("ページのIDに使えない文字があれば 400 で断る", async () => {
+		const read = await get(`/api/pages/${encodeURIComponent("メモ")}`);
+		const write = await post(`/api/pages/${encodeURIComponent("a b")}/commits`, {
 			id: commitId(),
 			changes: [insertTitle],
 		});
 
-		const response = await get(`/api/pages/${encodeURIComponent("api_title メモ")}`);
-
-		expect(await response.json()).toMatchObject({ version: 1 });
+		expect(read.status).toBe(400);
+		expect(await read.json()).toEqual({ error: "invalid-page" });
+		expect(write.status).toBe(400);
 	});
 
 	it.each([
@@ -99,11 +100,72 @@ describe("ページのAPI", () => {
 		expect(await response.json()).toEqual({ version: 1, applied: [], duplicate: true });
 	});
 
-	it("長すぎるページ名は 400 で断る", async () => {
-		const response = await get(`/api/pages/${"a".repeat(201)}`);
+	describe("名前からページを引く(ADR-0024)", () => {
+		const open = async (title: string) => {
+			const response = await get(`/api/pages/by-title/${encodeURIComponent(title)}`);
+			return { response, info: (await response.json()) as { id: string; title: string } };
+		};
 
-		expect(response.status).toBe(400);
-		expect(await response.json()).toEqual({ error: "invalid-page-name" });
+		it("名前から、ページのIDと名前を返す。まだないページには、IDを決める", async () => {
+			const { response, info } = await open("Api 名前");
+
+			expect(response.status).toBe(200);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			expect(info).toEqual({ id: expect.any(String), title: "Api 名前", problem: null });
+			// 開いただけでは、ページは作られない。
+			expect(await (await get(`/api/pages/${info.id}`)).json()).toEqual({ version: 0, lines: [] });
+		});
+
+		it("大文字小文字と、空白かアンダースコアかの違いは、同じページとして扱う", async () => {
+			const first = await open("API Title メモ");
+			const second = await open("api_title メモ");
+
+			expect(second.info.id).toBe(first.info.id);
+		});
+
+		it("引いたIDで、ページを読み書きできる", async () => {
+			const { info } = await open("api-by-id");
+
+			await post(`/api/pages/${info.id}/commits`, { id: commitId(), changes: [insertTitle] });
+
+			expect(await (await get(`/api/pages/${info.id}`)).json()).toMatchObject({ version: 1 });
+		});
+
+		it("長すぎる名前は 400 で断る", async () => {
+			const { response, info } = await open("a".repeat(201));
+
+			expect(response.status).toBe(400);
+			expect(info).toEqual({ error: "invalid-page-name" });
+		});
+
+		it("ページを書き換えたあと、少しして、ページの名前が1行目に合う。接続している端末に知らせる", async () => {
+			const { info } = await open("api-rename");
+			const stub = exports.PageDO.getByName(`default/${info.id}`);
+			const response = await exports.default.fetch(
+				`https://amime.test/api/pages/${info.id}/socket?client=reader`,
+				{ headers: { Upgrade: "websocket" } },
+			);
+			const messages: unknown[] = [];
+			response.webSocket?.accept();
+			response.webSocket?.addEventListener("message", ({ data }) => {
+				messages.push(JSON.parse(String(data)));
+			});
+
+			await post(`/api/pages/${info.id}/commits`, {
+				id: commitId(),
+				changes: [
+					{ type: "insert", line: { id: "t", text: "新しい名前" }, after: null, before: null },
+				],
+				client: "writer",
+			});
+			// 台帳への知らせは、書き換えが落ち着いてから送る。テストでは、待たずに実行する。
+			expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+			expect((await open("新しい名前")).info.id).toBe(info.id);
+			await vi.waitFor(() =>
+				expect(messages.at(-1)).toEqual({ type: "page", title: "新しい名前", problem: null }),
+			);
+		});
 	});
 
 	it("大きすぎる本文は 413 で断る", async () => {

@@ -7,6 +7,8 @@ import {
 	parseCommitRequest,
 	parseCommitResult,
 	parseCursorPosition,
+	parsePageId,
+	parsePageInfo,
 	parsePendingRecord,
 	parseServerMessage,
 	parseSnapshot,
@@ -52,6 +54,37 @@ describe("parseClientId", () => {
 
 	it.each([[""], ["a b"], ["a".repeat(65)], [null]])("%j は受け付けない", (input) => {
 		expect(parseClientId(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parsePageId", () => {
+	it("英数字と _ - からなる 64 文字までのIDを受け付ける", () => {
+		expect(parsePageId("0f8fad5b-d9cb-469f-a165-70867728950e")).toEqual({
+			ok: true,
+			value: "0f8fad5b-d9cb-469f-a165-70867728950e",
+		});
+	});
+
+	it.each([[""], ["a b"], ["a/b"], ["a".repeat(65)], [null]])("%j は受け付けない", (input) => {
+		expect(parsePageId(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parsePageInfo", () => {
+	it("ページのID、名前、名前を1行目に合わせられない理由を受け付ける", () => {
+		const named = { id: "p1", title: "買い物 メモ", problem: null };
+		const blocked = { id: "p1", title: "買い物 メモ", problem: "taken" };
+
+		expect(parsePageInfo(named)).toEqual({ ok: true, value: named });
+		expect(parsePageInfo(blocked)).toEqual({ ok: true, value: blocked });
+	});
+
+	it.each([
+		["IDがない", { title: "a", problem: null }],
+		["名前が文字列でない", { id: "p1", title: 1, problem: null }],
+		["知らない理由", { id: "p1", title: "a", problem: "other" }],
+	])("%s入力は受け付けない", (_name, input) => {
+		expect(parsePageInfo(input)).toEqual({ ok: false, error: "invalid" });
 	});
 });
 
@@ -120,6 +153,12 @@ describe("parseServerMessage", () => {
 
 		expect(parseServerMessage(JSON.stringify(moved))).toEqual({ ok: true, value: moved });
 		expect(parseServerMessage(JSON.stringify(hidden))).toEqual({ ok: true, value: hidden });
+	});
+
+	it("ページの名前の知らせを受け付ける", () => {
+		const message = { type: "page", title: "買い物", problem: "empty" };
+
+		expect(parseServerMessage(JSON.stringify(message))).toEqual({ ok: true, value: message });
 	});
 
 	it("他の端末が接続を閉じた知らせを受け付ける", () => {
