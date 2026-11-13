@@ -1,3 +1,4 @@
+import { parseLine, writePageLink } from "@amime/parser";
 import { ceilToBoundary } from "./graphemes.ts";
 import { lineAtCursor } from "./state.ts";
 import type { EditorState } from "./types.ts";
@@ -61,12 +62,17 @@ function hashtagQuery(text: string, column: number): LinkQuery | null {
 	return { kind: "hashtag", start: start + 1, end, closed: true, query };
 }
 
-/**
- * 行の中のカーソルの位置で、ページへのリンクを書いている途中なら、その範囲と、入力した名前の一部を返す。
- * 括弧のリンク([名前)と、タグ(#名前)を対象にする。装飾や外部リンクなど、他の記法は対象にしない。
- * 行がコードブロックの中かどうかは、呼ぶ側で確かめる。
- */
-export function linkQueryAt(text: string, column: number): LinkQuery | null {
+/** 行が、リンクを書けない行(`$ コマンド`、`% コマンド`、`? ヘルプ`)か。 */
+function withoutLinks(text: string): boolean {
+	const parsed = parseLine(text, { kind: "text", blockIndent: 0 });
+	return (
+		parsed.kind === "text" &&
+		parsed.nodes.some((node) => node.type === "command-line" || node.type === "helpfeel")
+	);
+}
+
+/** text の中の、カーソルの位置で、リンクを書いている途中かを調べる。 */
+function queryIn(text: string, column: number): LinkQuery | null {
 	// カーソルより前の、いちばん近い括弧。開く括弧なら、その中にいる。
 	const bracket = scanBack(text, column, (character) => character !== "[" && character !== "]");
 	if (text.charAt(bracket - 1) === "[") return bracketQuery(text, bracket - 1, column);
@@ -74,27 +80,53 @@ export function linkQueryAt(text: string, column: number): LinkQuery | null {
 }
 
 /**
+ * 行の中のカーソルの位置で、ページへのリンクを書いている途中なら、その範囲と、入力した名前の一部を返す。
+ * 括弧のリンク([名前)と、タグ(#名前)を対象にする。装飾や外部リンクなど、他の記法は対象にしない。
+ * kind は、行の種類。テーブルの行では、カーソルのあるセルの中だけを読む(記法は、セルをまたがない)。
+ * コードブロックの中など、リンクを書けない種類の行かどうかは、呼ぶ側で確かめる。
+ */
+export function linkQueryAt(
+	text: string,
+	column: number,
+	kind: "text" | "table-row" = "text",
+): LinkQuery | null {
+	if (kind === "text") return withoutLinks(text) ? null : queryIn(text, column);
+	// セルは、タブで区切る。
+	const start = text.lastIndexOf("\t", column - 1) + 1;
+	const next = text.indexOf("\t", column);
+	const link = queryIn(text.slice(start, next === -1 ? text.length : next), column - start);
+	return link && { ...link, start: link.start + start, end: link.end + start };
+}
+
+/** title へのリンクの書き方。そのページへのリンクとして書けない名前なら null。 */
+const written = (link: LinkQuery, title: string): string | null =>
+	writePageLink(title, link.kind === "bracket" ? "page-link" : "hashtag");
+
+/**
+ * 書いている途中のリンクを、title へのリンクとして補完できるか。
+ * 書いても別のものとして読まれる名前(括弧を含む、URL、アイコン、など)は、補完できない。
+ */
+export function canCompleteLink(link: LinkQuery, title: string): boolean {
+	return written(link, title) !== null;
+}
+
+/**
  * 書いている途中のリンク(カーソルのある行の link)を、title へのリンクにする。
  * 括弧のリンクは、閉じる括弧がなければ足す。タグは、タグとして書けない名前なら [名前] にする。
- * カーソルは、リンクの後ろに置く。
+ * カーソルは、リンクの後ろに置く。title へのリンクとして書けない名前なら、何も変えない。
  */
 export function completeLink(state: EditorState, link: LinkQuery, title: string): EditorState {
 	const text = lineAtCursor(state);
-	const tag = title.replaceAll(" ", "_");
-	// 置き換える範囲の始まりと、そこに入れる文字列。
-	const [from, written] =
-		link.kind === "bracket"
-			? [link.start, `${title}]`]
-			: DELIMITER.test(tag)
-				? [link.start - 1, `[${title}]`]
-				: [link.start, tag];
-	// 閉じる括弧がもうあれば、それも置き換える範囲に含める(足した括弧と重ねない)。
+	const replacement = written(link, title);
+	if (replacement === null) return state;
+	// 記号([ か #)から、名前の終わりまでを置き換える。閉じる括弧がもうあれば、それも含める。
+	const from = link.start - 1;
 	const to = link.kind === "bracket" && link.closed ? link.end + 1 : link.end;
-	const completed = text.slice(0, from) + written + text.slice(to);
+	const completed = text.slice(0, from) + replacement + text.slice(to);
 	const { line } = state.cursor;
 	return {
 		lines: state.lines.toSpliced(line, 1, completed),
 		// 補完した文字が後ろの文字と結合することがある。その場合は、結合した文字の後ろに置く。
-		cursor: { line, column: ceilToBoundary(completed, from + written.length) },
+		cursor: { line, column: ceilToBoundary(completed, from + replacement.length) },
 	};
 }

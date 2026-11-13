@@ -1,4 +1,4 @@
-import { type LinkQuery, linkQueryAt } from "@amime/editor-core";
+import { canCompleteLink, type LinkQuery, linkQueryAt } from "@amime/editor-core";
 import { type Ref, useEffect, useMemo, useState } from "react";
 
 /** 入力が止まってから、候補を探し始めるまでの時間。打つたびに問い合わせない。 */
@@ -23,6 +23,8 @@ type CompletionOptions = {
 	readonly column: number;
 	/** カーソルのある行を区別する値(行ID)。 */
 	readonly line: string | null;
+	/** カーソルのある行の種類。テーブルの行では、カーソルのあるセルの中だけを読む。 */
+	readonly kind: "text" | "table-row";
 	/** 名前の一部から、候補を探す。渡さなければ、補完しない。 */
 	readonly search: ((query: string) => Promise<readonly string[]>) | undefined;
 };
@@ -31,10 +33,10 @@ type CompletionOptions = {
  * リンクを書いている途中の、名前の候補(ADR-0030)。
  * 候補は、最初はどれも選んでいない(Enter を、改行のために使えるように)。上下に動かすと選ぶ。
  */
-export function useLinkCompletion({ text, column, line, search }: CompletionOptions) {
+export function useLinkCompletion({ text, column, line, kind, search }: CompletionOptions) {
 	const link = useMemo(
-		() => (text === null || search === undefined ? null : linkQueryAt(text, column)),
-		[text, column, search],
+		() => (text === null || search === undefined ? null : linkQueryAt(text, column, kind)),
+		[text, column, kind, search],
 	);
 	// どのリンクか(行と、名前の始まりの位置)。
 	const anchor = link === null ? null : `${line}:${link.start}`;
@@ -48,6 +50,11 @@ export function useLinkCompletion({ text, column, line, search }: CompletionOpti
 	const [active, setActive] = useState(-1);
 	// 候補を閉じたリンク。同じリンクを書いているあいだは、候補を出さない。
 	const [dismissed, setDismissed] = useState<string | null>(null);
+	// そのリンクから離れたら(消した、別のリンクへ移った)、閉じたことを忘れる。
+	// 同じ位置に新しく書いたリンクには、また候補を出す。
+	useEffect(() => {
+		if (dismissed !== null && dismissed !== anchor) setDismissed(null);
+	}, [dismissed, anchor]);
 
 	useEffect(() => {
 		if (anchor === null || query === null || search === undefined) return;
@@ -72,7 +79,12 @@ export function useLinkCompletion({ text, column, line, search }: CompletionOpti
 
 	const current =
 		link !== null && found?.anchor === anchor && found.query === query && dismissed !== anchor;
-	const titles = current ? found.titles : [];
+	// 書いても、そのページへのリンクにならない名前(括弧を含む、など)は、候補に出さない。
+	const titles = useMemo(
+		() =>
+			current && link !== null ? found.titles.filter((title) => canCompleteLink(link, title)) : [],
+		[current, found, link],
+	);
 	const completion: Completion | null =
 		link === null || titles.length === 0 ? null : { link, titles, active };
 

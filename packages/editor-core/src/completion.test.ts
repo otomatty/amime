@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { completeLink, linkQueryAt } from "./completion.ts";
+import { canCompleteLink, completeLink, linkQueryAt } from "./completion.ts";
 
 /** 「|」をカーソルの位置として、書いている途中のリンクを求める。 */
-function queryAt(marked: string) {
+function queryAt(marked: string, kind: "text" | "table-row" = "text") {
 	const column = marked.indexOf("|");
-	return linkQueryAt(marked.replace("|", ""), column);
+	return linkQueryAt(marked.replace("|", ""), column, kind);
 }
 
 /** 「|」をカーソルの位置として、title で補完したあとの行を「|」つきで返す。 */
-function complete(marked: string, title: string): string {
+function complete(marked: string, title: string, kind: "text" | "table-row" = "text"): string {
 	const column = marked.indexOf("|");
 	const text = marked.replace("|", "");
-	const link = linkQueryAt(text, column);
+	const link = linkQueryAt(text, column, kind);
 	if (link === null) throw new Error("no link at the cursor");
 	const state = completeLink({ lines: ["題", text], cursor: { line: 1, column } }, link, title);
 	const [, line = ""] = state.lines;
@@ -69,6 +69,14 @@ describe("linkQueryAt(書いている途中のリンク)", () => {
 			expect(queryAt(marked)).toBeNull();
 		});
 
+		it.each([
+			["コマンドの行", "$ echo [買い|"],
+			["コマンドの行(%)", "% ls [買い|"],
+			["ヘルプの行", "? 探す [買い|"],
+		])("%sでは、リンクにならないので、対象にしない", (_name, marked) => {
+			expect(queryAt(marked)).toBeNull();
+		});
+
 		it("閉じたコードのあとの括弧は、対象にする", () => {
 			expect(queryAt("`code` [買い|")).toMatchObject({ kind: "bracket", query: "買い" });
 		});
@@ -104,6 +112,65 @@ describe("linkQueryAt(書いている途中のリンク)", () => {
 	});
 });
 
+describe("テーブルの行", () => {
+	it("リンクは、カーソルのあるセルの中だけで読む。他のセルの括弧を、閉じる括弧として扱わない", () => {
+		expect(queryAt(" [買|\t別のセル]", "table-row")).toEqual({
+			kind: "bracket",
+			start: 2,
+			end: 3,
+			closed: false,
+			query: "買",
+		});
+		// 前のセルの、閉じていない括弧の続きとしても扱わない。
+		expect(queryAt(" [前のセル\t買|", "table-row")).toBeNull();
+	});
+
+	it("2つめ以降のセルの中のリンクも、行の中の位置で返す", () => {
+		expect(queryAt(" 月\t[買|い物]\t水", "table-row")).toEqual({
+			kind: "bracket",
+			start: 4,
+			end: 7,
+			closed: true,
+			query: "買",
+		});
+		expect(queryAt(" 月\t#買|\t水", "table-row")).toMatchObject({
+			kind: "hashtag",
+			start: 4,
+			end: 5,
+		});
+	});
+
+	it("補完しても、他のセルは変えない", () => {
+		expect(complete(" [買|\t別のセル]", "買い物", "table-row")).toBe(" [買い物]|\t別のセル]");
+	});
+});
+
+describe("canCompleteLink(その名前へのリンクとして、補完できるか)", () => {
+	const link = linkQueryAt("[買", 2);
+	const tag = linkQueryAt("#買", 2);
+
+	it("[名前] と書いて、そのページへのリンクになる名前なら、補完できる", () => {
+		if (link === null || tag === null) throw new Error("no link");
+		expect(canCompleteLink(link, "買い物 メモ")).toBe(true);
+		expect(canCompleteLink(tag, "買い物 メモ")).toBe(true);
+	});
+
+	it.each([
+		["括弧を含む", "買い物[仮]"],
+		["アイコンとして読まれる", "買い物.icon"],
+		["URLとして読まれる", "https://example.com/買い物"],
+	])("%s名前は、[名前] と書いても別のものとして読まれるので、補完できない", (_name, title) => {
+		if (link === null) throw new Error("no link");
+		expect(canCompleteLink(link, title)).toBe(false);
+	});
+
+	it("タグは、タグとして書ければ補完できる。タグとしても [名前] としても書けない名前は、補完できない", () => {
+		if (tag === null) throw new Error("no link");
+		expect(canCompleteLink(tag, "買い物.icon")).toBe(true);
+		expect(canCompleteLink(tag, "買い物[仮]")).toBe(false);
+	});
+});
+
 describe("completeLink(書いている途中のリンクを、名前で補完する)", () => {
 	it("括弧の中を名前に置き換え、括弧を閉じて、その後ろにカーソルを置く", () => {
 		expect(complete("前の文 [買い| 後ろ", "買い物 メモ")).toBe("前の文 [買い物 メモ]| 後ろ");
@@ -118,8 +185,12 @@ describe("completeLink(書いている途中のリンクを、名前で補完す
 	});
 
 	it("タグとして書けない名前は、[名前] にする", () => {
-		expect(complete("今日の #買い| です", "買い物[仮]")).toBe("今日の [買い物[仮]]| です");
-		expect(complete("#a|", "a`b")).toBe("[a`b]|");
+		expect(complete("今日の #a| です", "a`b")).toBe("今日の [a`b]| です");
+	});
+
+	it("そのページへのリンクとして書けない名前では、何も変えない", () => {
+		expect(complete("今日の #買い| です", "買い物[仮]")).toBe("今日の #買い| です");
+		expect(complete("[買い|", "買い物.icon")).toBe("[買い|");
 	});
 
 	it("補完した文字が、後ろの文字と1文字に結合するときは、その文字の後ろにカーソルを置く", () => {

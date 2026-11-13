@@ -924,7 +924,22 @@ describe("Editor", () => {
 			expect(options()).toEqual([]);
 		});
 
+		it("テーブルの行で補完しても、他のセルは変えない", async () => {
+			render(
+				<Editor initialLines={["題", "table:予定", " [買\t別のセル]"]} completeTitles={search} />,
+			);
+			clickChar(2, 2);
+			press("ArrowRight");
+			await waitFor(() => expect(options()).toEqual(["買い物", "買い物 メモ"]));
+
+			press("ArrowDown");
+			press("Enter");
+
+			expect(lines()).toEqual(["題", "table:予定", " [買い物]\t別のセル]"]);
+		});
+
 		it.each([
+			["コマンドの行(リンクにならない)", ["題", "$ echo "], 1],
 			["1行目(タイトル)", ["", "本文"], 0],
 			["コードブロックの中", ["題", "code:memo", " "], 2],
 		])("%sでは、候補を出さない", async (_name, initial, line) => {

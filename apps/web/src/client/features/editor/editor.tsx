@@ -164,15 +164,14 @@ export function Editor({
 	// 選択とカーソルは、編集欄にフォーカスがあるときだけ表示する。
 	const selection = focused ? selectionRange(state) : null;
 	// リンクを書いている途中の、名前の候補(ADR-0030)。変換中や、範囲を選択しているあいだは出さない。
+	const cursorKind = roles[state.cursor.line]?.kind;
 	const completable =
-		focused &&
-		composing === null &&
-		selection === null &&
-		LINKABLE_KINDS.has(roles[state.cursor.line]?.kind);
+		focused && composing === null && selection === null && LINKABLE_KINDS.has(cursorKind);
 	const { completion, move, dismiss } = useLinkCompletion({
 		text: completable ? (state.lines[state.cursor.line] ?? null) : null,
 		column: cursorColumn,
 		line: cursorLine,
+		kind: cursorKind === "table-row" ? "table-row" : "text",
 		search: completeTitles,
 	});
 	const completionId = useId();

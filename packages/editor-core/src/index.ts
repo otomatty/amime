@@ -1,5 +1,5 @@
 export { deleteSelection, insertText } from "./commands.ts";
-export { completeLink, type LinkQuery, linkQueryAt } from "./completion.ts";
+export { canCompleteLink, completeLink, type LinkQuery, linkQueryAt } from "./completion.ts";
 export { type Grapheme, segmentGraphemes } from "./graphemes.ts";
 export {
 	applyEdit,

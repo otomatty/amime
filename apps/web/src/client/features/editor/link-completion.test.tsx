@@ -11,12 +11,14 @@ function Harness(props: {
 	text: string | null;
 	column: number;
 	line?: string;
+	kind?: "text" | "table-row";
 	search?: Search | undefined;
 }) {
 	const { completion, move, dismiss } = useLinkCompletion({
 		text: props.text,
 		column: props.column,
 		line: props.line ?? "a",
+		kind: props.kind ?? "text",
 		search: props.search,
 	});
 	return (
@@ -133,6 +135,43 @@ describe("useLinkCompletion(リンクを書いている途中の、名前の候�
 		await act(async () => releaseOld(["古い候補"]));
 
 		expect(state()).toBe(opened("新", ["新しい候補"], -1));
+	});
+
+	it("そのページへのリンクとして書けない名前(括弧を含む、など)は、候補に出さない", async () => {
+		const search: Search = async () => ["買い物[仮]", "買い物", "買い物.icon"];
+
+		render(<Harness text="[買い" column={3} search={search} />);
+
+		await waitFor(() => expect(state()).toBe(opened("買い", ["買い物"], -1)));
+	});
+
+	it("書ける候補が1つもなければ、閉じたままにする", async () => {
+		render(<Harness text="[買い" column={3} search={async () => ["買い物[仮]"]} />);
+		await new Promise((resolve) => setTimeout(resolve, 150));
+
+		expect(state()).toBe("closed");
+	});
+
+	it("テーブルの行では、カーソルのあるセルの中だけを、リンクとして読む", async () => {
+		const search = vi.fn<Search>(async () => ["買い物"]);
+
+		render(<Harness text={" [買\t別のセル]"} column={3} kind="table-row" search={search} />);
+
+		await waitFor(() => expect(state()).not.toBe("closed"));
+		expect(search).toHaveBeenCalledExactlyOnceWith("買");
+	});
+
+	it("閉じたリンクを消して、同じ位置に新しいリンクを書いたら、また候補を出す", async () => {
+		const search: Search = async () => ["買い物"];
+		const { rerender } = render(<Harness text="[買" column={2} search={search} />);
+		await waitFor(() => expect(state()).not.toBe("closed"));
+		press("dismiss");
+
+		// リンクを消した(リンクを書いている途中でなくなった)。
+		rerender(<Harness text="" column={0} search={search} />);
+		rerender(<Harness text="[旅" column={2} search={search} />);
+
+		await waitFor(() => expect(state()).toBe(opened("旅", ["買い物"], -1)));
 	});
 
 	it("閉じたら、同じリンクを書いているあいだは、候補を出さない。別のリンクを書き始めたら、また出す", async () => {
