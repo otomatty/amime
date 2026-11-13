@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { foldText, highlight, matchingLines, SNIPPET_LENGTH, textTerms } from "./text-search.ts";
 
 describe("foldText(照らし合わせるための形にする)", () => {
@@ -95,6 +95,24 @@ describe("matchingLines(語を含む行を取り出す)", () => {
 
 		expect(snippet.startsWith("…")).toBe(true);
 		expect(snippet.endsWith("ｶﾞｲﾄﾞ")).toBe(true);
+	});
+	it.each([
+		["前の文字に付く記号", `a${"\u0301".repeat(19_990)}`],
+		["前後の文字で形が変わる文字(ギリシャ文字のシグマ)", "Σ".repeat(19_990)],
+	])("合わさる文字がとても長く続いても、行の長さに比例する手間で済ませる(%s)", (_name, run) => {
+		const line = `${run} needle`;
+		const normalize = vi.spyOn(String.prototype, "normalize");
+
+		const [snippet = ""] = matchingLines([line], textTerms("needle"), 3);
+
+		// 照らし合わせるための形にした文字の、のべの数。続いた分を、1文字ごとに作り直さない。
+		const work = normalize.mock.contexts.reduce<number>(
+			(sum, text) => sum + String(text).length,
+			0,
+		);
+		normalize.mockRestore();
+		expect(work).toBeLessThan(line.length * 200);
+		expect(snippet.endsWith("needle")).toBe(true);
 	});
 });
 

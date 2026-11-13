@@ -31,6 +31,11 @@ type Range = { readonly start: number; readonly end: number };
  * その前の文字と合わさることがあるので、いつも前の文字と同じまとまりに入れる。
  */
 const MARK = /^\p{M}/u;
+/**
+ * ひとまとまりにする長さの上限(UTF-16 の符号単位)。合わさる文字がとても長く続いても、
+ * まとまりを作り直す手間を、行の長さに比例する量に抑える。ふつうの文章では、届かない長さ。
+ */
+const MAX_PIECE = 64;
 
 /**
  * 照らし合わせるための形と、そのそれぞれの位置が、元の文字列のどの範囲から来たか。
@@ -53,8 +58,9 @@ function foldWithOrigins(text: string): { folded: string; origins: Range[] } {
 	for (const character of text) {
 		const joined = foldText(piece + character);
 		const alone = foldText(character);
-		if (joined === pieceFolded + alone && !MARK.test(character)) {
-			// 前の文字とは、合わさらない。ここから、新しいまとまりにする。
+		const joins = MARK.test(character) || joined !== pieceFolded + alone;
+		if (!joins || piece.length >= MAX_PIECE) {
+			// 前の文字とは、合わさらない(または、まとまりが長くなりすぎた)。ここから、新しいまとまりにする。
 			close();
 			start = position;
 			piece = character;
