@@ -250,9 +250,11 @@ describe("Page", () => {
 			expect(screen.getByRole("note").textContent).toMatch(
 				/前回、送信できなかった変更を復元しました/,
 			);
+			// 復元した変更を送るまでのあいだも、表示は「保存済み」になることがある。送ったことを先に確かめる。
+			const sent = () => fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+			await waitFor(() => expect(sent()).toBeDefined());
 			await waitFor(() => expect(status()).toBe("保存済み"));
-			const commit = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
-			expect(JSON.parse(String(commit?.[1]?.body))).toMatchObject({
+			expect(JSON.parse(String(sent()?.[1]?.body))).toMatchObject({
 				changes: [{ type: "update", id: "a", text: "買い物 前回の入力" }],
 			});
 			expect(pendingRecords()).toEqual([]);

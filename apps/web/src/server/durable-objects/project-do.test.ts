@@ -1,14 +1,17 @@
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import type { PageSummary } from "@amime/parser";
-import type { PageId } from "@amime/sync";
-import { describe, expect, it } from "vitest";
+import { type CommitId, type LineId, MAX_LINE_LENGTH, type PageId } from "@amime/sync";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	MAX_GROUP_PAGES,
 	MAX_LIST_LIMIT,
+	MAX_REWRITE_ATTEMPTS,
 	MIGRATIONS,
 	migrate,
 	PLACEHOLDER_MAX_AGE_MS,
+	RENAME_MEMORY_MS,
+	REWRITE_BATCH,
 } from "./project-do.ts";
 
 /** テストごとに別のプロジェクト(=別の Durable Object)を使い、状態を共有しない。 */
@@ -455,13 +458,13 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			const stub = project("index-atomic");
 			const page = await stub.open("前の名前");
 			await stub.index(page.id, saved("前の名前", 1, { links: ["卵"] }));
-			await runInDurableObject(stub, (instance, state) => {
+			await runInDurableObject(stub, async (instance, state) => {
 				// リンクを書き込むところで失敗させる(名前は、その前に書き込まれる)。
 				state.storage.sql.exec("ALTER TABLE links RENAME TO links_away");
 
-				expect(() =>
+				await expect(
 					instance.index(page.id, saved("新しい名前", 2, { links: ["牛乳"] })),
-				).toThrow();
+				).rejects.toThrow();
 
 				state.storage.sql.exec("ALTER TABLE links_away RENAME TO links");
 			});
@@ -759,6 +762,462 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 		});
 	});
 
+	describe("名前を変えたときの、リンクの書き換え(ADR-0028)", () => {
+		let serial = 0;
+		const nextCommit = () => {
+			serial += 1;
+			return `rewrite-${serial}` as CommitId;
+		};
+		const pageOf = (name: string, id: PageId) => exports.PageDO.getByName(`test-${name}/${id}`);
+		/** 本文のあるページを保存する。台帳には、まだ反映しない。 */
+		async function save(name: string, title: string, ...body: string[]) {
+			const { id } = await project(name).open(title);
+			const lines = [title, ...body].map((text, index) => ({ id: `l${index}` as LineId, text }));
+			await pageOf(name, id).commit({
+				id: nextCommit(),
+				changes: lines.map((line, index) => ({
+					type: "insert",
+					line,
+					after: lines[index - 1]?.id ?? null,
+					before: null,
+				})),
+			});
+			return id;
+		}
+		/** 本文のあるページを作り、台帳に反映する。 */
+		async function write(name: string, title: string, ...body: string[]) {
+			const id = await save(name, title, ...body);
+			await runDurableObjectAlarm(pageOf(name, id));
+			return id;
+		}
+		/** ページの1行目を書き換えて(名前を変えて)、台帳に反映する。 */
+		async function retitle(name: string, id: PageId, title: string) {
+			await pageOf(name, id).commit({
+				id: nextCommit(),
+				changes: [{ type: "update", id: "l0" as LineId, text: title }],
+			});
+			await runDurableObjectAlarm(pageOf(name, id));
+		}
+		const textsOf = async (name: string, id: PageId) => {
+			const page = await pageOf(name, id).getPage();
+			return page === "deleted" ? [] : page.lines.map((line) => line.text);
+		};
+		/** 台帳に残っている、まだ済んでいない書き換えの数。 */
+		const queued = (name: string) =>
+			runInDurableObject(
+				project(name),
+				(_instance, state) =>
+					state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM rewrites").one().n,
+			);
+		/** 台帳の、書き換えのアラームを動かす。予約されていなければ false。 */
+		const rewrite = (name: string) => runDurableObjectAlarm(project(name));
+		/**
+		 * 指定したページの書き換えの前に、割り込む。before が例外を出せば、書き換えは失敗する。
+		 * 外から呼べるのは、クラスに定義したメソッドだけなので、クラスの側を差し替える。
+		 */
+		async function intercept(name: string, id: PageId, before: (call: number) => Promise<void>) {
+			await runInDurableObject(pageOf(name, id), (instance) => {
+				const prototype = Object.getPrototypeOf(instance) as typeof instance;
+				const original = prototype.rewriteLinks;
+				let calls = 0;
+				vi.spyOn(prototype, "rewriteLinks").mockImplementation(async function (
+					this: typeof instance,
+					renames,
+				) {
+					if (this === instance) {
+						calls += 1;
+						await before(calls);
+					}
+					return original.call(this, renames);
+				});
+			});
+		}
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		it("名前を変えると、そのページへリンクしているページの本文が、新しい名前に書き換わる", async () => {
+			const name = "rw-basic";
+			const milk = await write(name, "牛乳");
+			const list = await write(name, "買い物", "[牛乳] を買う", "#牛乳 と [卵]");
+
+			await retitle(name, milk, "豆乳");
+			expect(await rewrite(name)).toBe(true);
+
+			expect(await textsOf(name, list)).toEqual(["買い物", "[豆乳] を買う", "#豆乳 と [卵]"]);
+			expect(await queued(name)).toBe(0);
+			// つながりも、書き換えたページの反映を待たずに、新しい名前になる。
+			const links = await project(name).links(list);
+			expect(links.related.map((page) => page.title)).toEqual(["豆乳"]);
+			expect(links.missing).toEqual(["卵"]);
+		});
+
+		it("自分自身へのリンクも、書き換える", async () => {
+			const name = "rw-self";
+			const milk = await write(name, "牛乳", "[牛乳] は、このページ");
+
+			await retitle(name, milk, "豆乳");
+			await rewrite(name);
+
+			expect(await textsOf(name, milk)).toEqual(["豆乳", "[豆乳] は、このページ"]);
+		});
+
+		it("大文字小文字と、空白かアンダースコアかの違いだけの変更では、書き換えない(同じ名前として読める)", async () => {
+			const name = "rw-same";
+			const tea = await write(name, "Milk Tea");
+			const list = await write(name, "買い物", "[Milk Tea]");
+
+			await retitle(name, tea, "milk_tea");
+
+			expect(await rewrite(name)).toBe(false);
+			expect(await textsOf(name, list)).toEqual(["買い物", "[Milk Tea]"]);
+		});
+
+		it("同じ名前のページがあって名前を変えられなかったときは、書き換えない", async () => {
+			const name = "rw-taken";
+			const milk = await write(name, "牛乳");
+			await write(name, "豆乳");
+			const list = await write(name, "買い物", "[牛乳]");
+
+			await retitle(name, milk, "豆乳");
+
+			expect(await rewrite(name)).toBe(false);
+			expect(await textsOf(name, list)).toEqual(["買い物", "[牛乳]"]);
+		});
+
+		it("開いただけだったページに、別の名前を付けて保存しても、書き換えない(前の名前のページは、なかった)", async () => {
+			const name = "rw-placeholder";
+			const list = await write(name, "買い物", "[仮の名前]");
+			const { id } = await project(name).open("仮の名前");
+
+			await project(name).index(id, saved("本当の名前"));
+
+			expect(await rewrite(name)).toBe(false);
+			expect(await textsOf(name, list)).toEqual(["買い物", "[仮の名前]"]);
+		});
+
+		it("書き換える前に、もう1度名前を変えたら、最後の名前に書き換える", async () => {
+			const name = "rw-chain-before";
+			const milk = await write(name, "牛乳");
+			const list = await write(name, "買い物", "[牛乳]");
+
+			await retitle(name, milk, "豆乳");
+			await retitle(name, milk, "オーツ");
+			await rewrite(name);
+
+			expect(await textsOf(name, list)).toEqual(["買い物", "[オーツ]"]);
+			expect(await queued(name)).toBe(0);
+		});
+
+		it("書き換えた直後(書き換えたページの反映の前)に、もう1度名前を変えても、最後の名前に書き換える", async () => {
+			const name = "rw-chain-after";
+			const milk = await write(name, "牛乳");
+			const list = await write(name, "買い物", "[牛乳]");
+			await retitle(name, milk, "豆乳");
+			await rewrite(name);
+
+			await retitle(name, milk, "オーツ");
+			await rewrite(name);
+
+			expect(await textsOf(name, list)).toEqual(["買い物", "[オーツ]"]);
+		});
+
+		it("書き換えているあいだに、もう1度名前が変わったら、続けて、いまの名前に書き換える", async () => {
+			const name = "rw-chain-during";
+			const milk = await write(name, "牛乳");
+			const list = await write(name, "買い物", "[牛乳]");
+			await retitle(name, milk, "豆乳");
+			await intercept(name, list, async (call) => {
+				// 書き換えの最中に、もう1度名前が変わる。
+				if (call === 1) await project(name).index(milk, saved("オーツ", 3));
+			});
+
+			await rewrite(name);
+			expect(await textsOf(name, list)).toEqual(["買い物", "[豆乳]"]);
+			await rewrite(name);
+
+			expect(await textsOf(name, list)).toEqual(["買い物", "[オーツ]"]);
+			expect(await queued(name)).toBe(0);
+		});
+
+		it("一部の行だけを書き換えられたページも、そのあとの名前の変更で、見つけて書き換える", async () => {
+			const name = "rw-partial";
+			const milk = await write(name, "牛乳");
+			// 2行目は、書き換えると長さの上限を超える。
+			const long = `[牛乳]${"あ".repeat(MAX_LINE_LENGTH - 4)}`;
+			const list = await write(name, "買い物", "[牛乳] を買う", long);
+			await retitle(name, milk, "豆乳ヨーグルト");
+			await rewrite(name);
+			expect(await textsOf(name, list)).toEqual(["買い物", "[豆乳ヨーグルト] を買う", long]);
+
+			// 書き換えたページの反映より先に、もう1度名前が変わる。
+			await retitle(name, milk, "オーツ");
+			await rewrite(name);
+
+			expect((await textsOf(name, list))[1]).toBe("[オーツ] を買う");
+		});
+
+		it("書き換えるリンクがもうなかったページを、新しい名前へリンクしていることにしない", async () => {
+			const name = "rw-stale";
+			const milk = await write(name, "牛乳");
+			const list = await write(name, "買い物", "[牛乳]");
+			// リンクを消した。台帳には、まだ反映していない(台帳は、リンクがあると思っている)。
+			await pageOf(name, list).commit({
+				id: nextCommit(),
+				changes: [{ type: "update", id: "l1" as LineId, text: "リンクは消した" }],
+			});
+
+			await retitle(name, milk, "豆乳");
+			await rewrite(name);
+
+			expect((await project(name).links(list)).related).toEqual([]);
+		});
+
+		describe("リンクを書いたページの反映より先に、リンク先の名前が変わったとき", () => {
+			it("あとから反映されたリンクも、新しい名前に書き換える", async () => {
+				const name = "rw-late";
+				const milk = await write(name, "牛乳");
+				const list = await save(name, "買い物", "[牛乳] を買う");
+
+				await retitle(name, milk, "豆乳");
+				// 台帳は、まだ「買い物」のリンクを知らない。
+				expect(await rewrite(name)).toBe(false);
+				await runDurableObjectAlarm(pageOf(name, list));
+
+				expect(await rewrite(name)).toBe(true);
+				expect(await textsOf(name, list)).toEqual(["買い物", "[豆乳] を買う"]);
+			});
+
+			it("続けて名前が変わっていたら、いまの名前に書き換える", async () => {
+				const name = "rw-late-chain";
+				const milk = await write(name, "牛乳");
+				const list = await save(name, "買い物", "[牛乳]");
+				await retitle(name, milk, "豆乳");
+				await retitle(name, milk, "オーツ");
+
+				await runDurableObjectAlarm(pageOf(name, list));
+				await rewrite(name);
+
+				expect(await textsOf(name, list)).toEqual(["買い物", "[オーツ]"]);
+			});
+
+			it("名前を元に戻していたら、元の名前へのリンクは、そのままにする", async () => {
+				const name = "rw-late-back";
+				const milk = await write(name, "牛乳");
+				const list = await save(name, "買い物", "[牛乳] と [豆乳]");
+				await retitle(name, milk, "豆乳");
+				await retitle(name, milk, "牛乳");
+
+				await runDurableObjectAlarm(pageOf(name, list));
+				await rewrite(name);
+
+				// 途中の名前へのリンクは、いまの名前に書き換える。
+				expect(await textsOf(name, list)).toEqual(["買い物", "[牛乳] と [牛乳]"]);
+			});
+
+			it("前の名前で、新しいページができていたら、書き換えない(そのページへのリンクとして読む)", async () => {
+				const name = "rw-late-taken";
+				const milk = await write(name, "牛乳");
+				await retitle(name, milk, "豆乳");
+				await write(name, "牛乳", "新しく作った");
+
+				const list = await write(name, "買い物", "[牛乳]");
+
+				expect(await rewrite(name)).toBe(false);
+				expect(await textsOf(name, list)).toEqual(["買い物", "[牛乳]"]);
+			});
+
+			it("名前を変えてから時間がたったあとに書いたリンクは、書き換えない(まだないページへのリンクとして残す)", async () => {
+				const name = "rw-late-old";
+				const milk = await write(name, "牛乳");
+				await retitle(name, milk, "豆乳");
+				await runInDurableObject(project(name), (_instance, state) => {
+					state.storage.sql.exec("UPDATE renames SET at = ?", Date.now() - RENAME_MEMORY_MS - 1);
+				});
+
+				const list = await write(name, "買い物", "[牛乳]");
+
+				expect(await rewrite(name)).toBe(false);
+				expect(await textsOf(name, list)).toEqual(["買い物", "[牛乳]"]);
+			});
+
+			it("もう台帳が知っているリンクは、反映のたびに書き換えの予定に入れ直さない", async () => {
+				// 書けない名前に変わったので、リンクは前の名前のまま残る。
+				const name = "rw-late-known";
+				const milk = await write(name, "牛乳");
+				const list = await write(name, "買い物", "[牛乳]");
+				await retitle(name, milk, "a]b");
+				await rewrite(name);
+				expect(await queued(name)).toBe(0);
+
+				// 他の行を書き換えて、もう1度反映する。
+				await pageOf(name, list).commit({
+					id: nextCommit(),
+					changes: [
+						{
+							type: "insert",
+							line: { id: "l9" as LineId, text: "追記" },
+							after: "l1" as LineId,
+							before: null,
+						},
+					],
+				});
+				await runDurableObjectAlarm(pageOf(name, list));
+
+				expect(await queued(name)).toBe(0);
+			});
+		});
+
+		it("2つのページの名前を入れ替えても、それぞれへのリンクは、行き先を保つ", async () => {
+			const name = "rw-swap";
+			const first = await write(name, "A");
+			const second = await write(name, "B");
+			const list = await write(name, "一覧", "[A] と [B]");
+
+			// 仮の名前をはさんで、入れ替える。
+			await retitle(name, first, "仮");
+			await retitle(name, second, "A");
+			await retitle(name, first, "B");
+			await rewrite(name);
+
+			// 「A」だったページは、いま「B」。「B」だったページは、いま「A」。
+			expect(await textsOf(name, list)).toEqual(["一覧", "[B] と [A]"]);
+			expect(await queued(name)).toBe(0);
+			const links = await project(name).links(list);
+			expect(links.related.map((page) => page.id).sort()).toEqual([first, second].sort());
+		});
+
+		it("名前を入れ替えたページの書き換えが、保存のあとで失敗して、やり直されても、リンクは行き先を保つ", async () => {
+			const name = "rw-swap-retry";
+			const first = await write(name, "A");
+			const second = await write(name, "B");
+			const list = await write(name, "一覧", "[A] と [B]");
+			await retitle(name, first, "仮");
+			await retitle(name, second, "A");
+			await retitle(name, first, "B");
+			// 書き換えは保存されるが、そのあとの、台帳への知らせの予約に失敗する。
+			await runInDurableObject(pageOf(name, list), (_instance, state) => {
+				vi.spyOn(state.storage, "setAlarm").mockRejectedValueOnce(new Error("alarm failed"));
+			});
+
+			await rewrite(name);
+			expect(await queued(name)).toBe(2);
+			await rewrite(name);
+
+			// 2度書き換えると、元に戻ってしまう。1度だけ書き換わっている。
+			expect(await textsOf(name, list)).toEqual(["一覧", "[B] と [A]"]);
+			expect(await queued(name)).toBe(0);
+		});
+
+		it("書き換えの予定を入れたあとで、アラームの予約に失敗していたら、反映のやり直しのときに予約し直す", async () => {
+			const name = "rw-reschedule";
+			const milk = await write(name, "牛乳");
+			const list = await write(name, "買い物", "[牛乳]");
+			const renamed = saved("豆乳", 2);
+			await runInDurableObject(project(name), async (instance, state) => {
+				vi.spyOn(state.storage, "setAlarm").mockRejectedValueOnce(new Error("alarm failed"));
+				await expect(instance.index(milk, renamed)).rejects.toThrow();
+			});
+			expect(await queued(name)).toBe(1);
+
+			// PageDO は、同じ内容で、反映をやり直す。名前は、もう変わっている。
+			await project(name).index(milk, renamed);
+
+			expect(await rewrite(name)).toBe(true);
+			expect(await textsOf(name, list)).toEqual(["買い物", "[豆乳]"]);
+		});
+
+		it("一部の行だけを書き換えているあいだに、もう1度名前が変わったら、書き換えた行も、残った行も、いまの名前にする", async () => {
+			const name = "rw-partial-during";
+			const milk = await write(name, "牛乳");
+			// 2行目は、長い名前に書き換えると、長さの上限を超える。
+			const rest = "あ".repeat(MAX_LINE_LENGTH - 4);
+			const list = await write(name, "買い物", "[牛乳] を買う", `[牛乳]${rest}`);
+			await retitle(name, milk, "豆乳ヨーグルト");
+			await intercept(name, list, async (call) => {
+				// 書き換えの最中に、短い名前に変わる。
+				if (call === 1) await project(name).index(milk, saved("麦", 3));
+			});
+
+			await rewrite(name);
+			await rewrite(name);
+
+			expect(await textsOf(name, list)).toEqual(["買い物", "[麦] を買う", `[麦]${rest}`]);
+			expect(await queued(name)).toBe(0);
+		});
+
+		it("書き換えに失敗したら、あとでやり直す", async () => {
+			const name = "rw-retry";
+			const milk = await write(name, "牛乳");
+			const list = await write(name, "買い物", "[牛乳]");
+			await intercept(name, list, async (call) => {
+				if (call === 1) throw new Error("rewrite failed");
+			});
+			await retitle(name, milk, "豆乳");
+
+			await rewrite(name);
+			expect(await textsOf(name, list)).toEqual(["買い物", "[牛乳]"]);
+			expect(await queued(name)).toBe(1);
+
+			// やり直しが予約されている。
+			expect(await rewrite(name)).toBe(true);
+			expect(await textsOf(name, list)).toEqual(["買い物", "[豆乳]"]);
+			expect(await queued(name)).toBe(0);
+		});
+
+		it("何度やり直しても失敗する書き換えは、あきらめる。他のページの書き換えは止めない", async () => {
+			const name = "rw-give-up";
+			const milk = await write(name, "牛乳");
+			const broken = await write(name, "壊れた", "[牛乳]");
+			const fine = await write(name, "無事", "[牛乳]");
+			await intercept(name, broken, async () => {
+				throw new Error("rewrite failed");
+			});
+			await retitle(name, milk, "豆乳");
+
+			await rewrite(name);
+			expect(await textsOf(name, fine)).toEqual(["無事", "[豆乳]"]);
+			for (let attempt = 1; attempt < MAX_REWRITE_ATTEMPTS; attempt += 1) {
+				expect(await queued(name)).toBe(1);
+				await rewrite(name);
+			}
+
+			expect(await queued(name)).toBe(0);
+			expect(await rewrite(name)).toBe(false);
+		});
+
+		it("1度に書き換えるページの数には、上限がある。残りは、続けて書き換える", async () => {
+			const name = "rw-batch";
+			await runInDurableObject(project(name), async (_instance, state) => {
+				for (let number = 0; number < REWRITE_BATCH + 3; number += 1) {
+					state.storage.sql.exec(
+						"INSERT INTO rewrites (page_id, old_lc, new_lc, new_title) VALUES (?, '牛乳', '豆乳', '豆乳')",
+						`batch-${number}`,
+					);
+				}
+				await state.storage.setAlarm(Date.now());
+			});
+
+			await rewrite(name);
+			expect(await queued(name)).toBe(3);
+
+			expect(await rewrite(name)).toBe(true);
+			expect(await queued(name)).toBe(0);
+			expect(await rewrite(name)).toBe(false);
+		});
+
+		it("削除したページの書き換えは、取りやめる", async () => {
+			const name = "rw-removed";
+			const milk = await write(name, "牛乳");
+			const list = await write(name, "買い物", "[牛乳]");
+			await retitle(name, milk, "豆乳");
+
+			await project(name).remove(list);
+
+			expect(await queued(name)).toBe(0);
+		});
+	});
+
 	describe("保存の形の移行", () => {
 		it("移行の途中で失敗したら、その移行はなかったことになる(やり直せる)", async () => {
 			const stub = project("migrate-atomic");
@@ -789,7 +1248,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				const { sql } = state.storage;
 				// ADR-0024 の時点の形に戻す。
 				sql.exec(
-					"DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
+					"DROP TABLE renames; DROP TABLE rewrites; DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
 				);
 				sql.exec(`CREATE TABLE pages (
 					id TEXT PRIMARY KEY, title_lc TEXT NOT NULL UNIQUE, title TEXT NOT NULL, problem TEXT,

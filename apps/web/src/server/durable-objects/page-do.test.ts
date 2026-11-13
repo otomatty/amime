@@ -1,7 +1,14 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { applyChanges, type Change, type CommitId, type Line, type LineId } from "@amime/sync";
-import { describe, expect, it } from "vitest";
+import {
+	applyChanges,
+	type Change,
+	type CommitId,
+	type Line,
+	type LineId,
+	MAX_LINE_LENGTH,
+} from "@amime/sync";
+import { describe, expect, it, vi } from "vitest";
 
 const id = (value: string): LineId => value as LineId;
 const line = (lineId: string, text: string): Line => ({ id: id(lineId), text });
@@ -224,6 +231,251 @@ describe("PageDO", () => {
 
 			await stub.destroy();
 			await stub.destroy();
+
+			expect(await stub.getPage()).toBe("deleted");
+		});
+	});
+
+	describe("rewriteLinks(名前が変わったページへのリンクを書き換える。ADR-0028)", () => {
+		let rewriteSerial = 0;
+		/** 1つの名前の変更で、書き換える。呼ぶたびに、別の書き換えとして扱う。 */
+		const rewriteOne = async (stub: ReturnType<typeof page>, from: string, to: string) => {
+			rewriteSerial += 1;
+			return (await stub.rewriteLinks([{ id: rewriteSerial, from, to }]))[0];
+		};
+
+		it("いくつかの名前の変更を、まとめて書き換える。変更ごとに、結果を返す", async () => {
+			const stub = page("rewrite-many");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[A] [B] [卵]")]);
+
+			// 名前を入れ替えたときも、それぞれのリンクの行き先を保つ。
+			const results = await stub.rewriteLinks([
+				{ id: 1, from: "A", to: "B" },
+				{ id: 2, from: "B", to: "A" },
+				{ id: 3, from: "パン", to: "ごはん" },
+			]);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[B] [A] [卵]")]);
+			expect(results).toEqual([
+				// 書き換えたあとも、もう一方から書き換わったリンクが、その名前を指している。
+				{ changed: true, remaining: true },
+				{ changed: true, remaining: true },
+				{ changed: false, remaining: false },
+			]);
+		});
+
+		it("同じ書き換えをもう1度受け取っても(応答が届かずに、やり直された)、2度は書き換えない", async () => {
+			// 名前の入れ替えは、2度行うと元に戻ってしまう。
+			const stub = page("rewrite-twice");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[A] [B]")]);
+			const swap = [
+				{ id: 7, from: "A", to: "B" },
+				{ id: 8, from: "B", to: "A" },
+			];
+
+			const first = await stub.rewriteLinks(swap);
+			const second = await stub.rewriteLinks(swap);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[B] [A]")]);
+			expect(second).toEqual(first);
+			expect((await read(stub)).version).toBe(2);
+		});
+
+		it("やり直しのあいだに行き先が変わっていたら、前に書き換えた先から、いまの行き先へ書き換える", async () => {
+			const stub = page("rewrite-retargeted");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳] [卵]")]);
+			await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "豆乳" }]);
+
+			// 応答が届かないうちに、名前がもう1度変わった。同じ書き換えが、新しい行き先で届く。
+			const results = await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "オーツ" }]);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[オーツ] [卵]")]);
+			expect(results).toEqual([{ changed: true, remaining: false }]);
+			// もう1度届いても、同じ。
+			expect(await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "オーツ" }])).toEqual(results);
+			expect((await read(stub)).version).toBe(3);
+		});
+
+		it("前に書き換えられなかったリンク(書けない名前だった)は、行き先が変わってやり直されたら、元の名前から書き換える", async () => {
+			const stub = page("rewrite-retargeted-unwritten");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
+			expect(await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "a]b" }])).toEqual([
+				{ changed: false, remaining: true },
+			]);
+
+			// 応答が届かないうちに、書ける名前に変わった。
+			const results = await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "オーツ" }]);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[オーツ]")]);
+			expect(results).toEqual([{ changed: true, remaining: false }]);
+		});
+
+		it("一部だけ書き換えていたら、行き先が変わったやり直しでは、書き換えた分も、残った分も、いまの行き先にする", async () => {
+			const stub = page("rewrite-retargeted-partial");
+			// 2行目は、長い名前に書き換えると、長さの上限を超える。
+			const long = `[牛乳]${"あ".repeat(MAX_LINE_LENGTH - 6)}`;
+			await commitTo(stub, [
+				insertAfter(null, "a", "題"),
+				insertAfter("a", "b", long),
+				insertAfter("b", "c", "[牛乳]"),
+			]);
+			await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "豆乳ヨーグルト" }]);
+
+			await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "麦" }]);
+
+			expect((await read(stub)).lines).toEqual([
+				line("a", "題"),
+				line("b", `[麦]${"あ".repeat(MAX_LINE_LENGTH - 6)}`),
+				line("c", "[麦]"),
+			]);
+		});
+
+		it("行き先が変わったやり直しで書き換えられなくても、前に書き換えた先を覚えておく。次に行き先が変わったら、そこから書き換える", async () => {
+			const stub = page("rewrite-retargeted-twice");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
+			await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "豆乳" }]);
+			// 書けない名前に変わった。本文は [豆乳] のまま。
+			expect(await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "a]b" }])).toEqual([
+				{ changed: false, remaining: false },
+			]);
+
+			const results = await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "オーツ" }]);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[オーツ]")]);
+			expect(results).toEqual([{ changed: true, remaining: false }]);
+		});
+
+		it("名前を入れ替えたあとのやり直しで行き先が変わっても、もう一方から書き換わったリンクは、巻き込まない", async () => {
+			const stub = page("rewrite-retargeted-swap");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[A] [B]")]);
+			await stub.rewriteLinks([
+				{ id: 5, from: "A", to: "B" },
+				{ id: 6, from: "B", to: "A" },
+			]);
+
+			// 1つめの行き先だけが、C に変わった。
+			await stub.rewriteLinks([
+				{ id: 5, from: "A", to: "C" },
+				{ id: 6, from: "B", to: "A" },
+			]);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[C] [A]")]);
+		});
+
+		it("済んだ書き換えの記録は、それより新しい書き換えを受け取ったときに片づける", async () => {
+			const stub = page("rewrite-prune");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳] [卵]")]);
+			await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "豆乳" }]);
+
+			await stub.rewriteLinks([{ id: 9, from: "卵", to: "たまご" }]);
+
+			await runInDurableObject(stub, (_instance, state) => {
+				const seqs = state.storage.sql
+					.exec<{ seq: number }>("SELECT seq FROM rewrites")
+					.toArray()
+					.map((row) => row.seq);
+				expect(seqs).toEqual([9]);
+			});
+		});
+
+		it("書き換えたあとで、台帳への知らせの予約に失敗していたら、やり直しのときに予約し直す", async () => {
+			const stub = page("rewrite-reschedule");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
+			await runDurableObjectAlarm(stub);
+			await runInDurableObject(stub, async (instance, state) => {
+				vi.spyOn(state.storage, "setAlarm").mockRejectedValueOnce(new Error("alarm failed"));
+				await expect(
+					instance.rewriteLinks([{ id: 1, from: "牛乳", to: "豆乳" }]),
+				).rejects.toThrow();
+			});
+
+			// 本文は、もう書き換わっている。同じ書き換えのやり直しには、前の結果を返す。
+			expect(await stub.rewriteLinks([{ id: 1, from: "牛乳", to: "豆乳" }])).toEqual([
+				{ changed: true, remaining: false },
+			]);
+			expect((await read(stub)).version).toBe(2);
+
+			await runInDurableObject(stub, async (_instance, state) => {
+				expect(await state.storage.getAlarm()).not.toBeNull();
+			});
+		});
+
+		it("リンクを新しい名前に書き換え、バージョンを1つ進める。台帳への知らせも予約する", async () => {
+			const stub = page("rewrite");
+			await commitTo(stub, [
+				insertAfter(null, "a", "題"),
+				insertAfter("a", "b", "[牛乳] を買う"),
+				insertAfter("b", "c", "関係ない行"),
+				insertAfter("c", "d", "#牛乳"),
+			]);
+			await runDurableObjectAlarm(stub);
+
+			// 書き換えたかどうかと、前の名前へのリンクが残っているかどうかを返す。
+			expect(await rewriteOne(stub, "牛乳", "豆乳")).toEqual({ changed: true, remaining: false });
+
+			expect(await read(stub)).toEqual({
+				version: 2,
+				lines: [
+					line("a", "題"),
+					line("b", "[豆乳] を買う"),
+					line("c", "関係ない行"),
+					line("d", "#豆乳"),
+				],
+			});
+			await runInDurableObject(stub, async (_instance, state) => {
+				expect(await state.storage.getAlarm()).not.toBeNull();
+			});
+		});
+
+		it("書き換えるリンクがなければ、何も変えない(バージョンも進めない)", async () => {
+			const stub = page("rewrite-none");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[卵]")]);
+
+			const nothing = { changed: false, remaining: false };
+			expect(await rewriteOne(stub, "牛乳", "豆乳")).toEqual(nothing);
+			// もう1度呼んでも(やり直しでも)、同じ。
+			expect(await rewriteOne(stub, "牛乳", "豆乳")).toEqual(nothing);
+
+			expect((await read(stub)).version).toBe(1);
+		});
+
+		it("書き換えると長さの上限を超える行は、そのままにする。前の名前へのリンクが残ったことを返す", async () => {
+			const stub = page("rewrite-long");
+			const long = `[牛乳]${"あ".repeat(MAX_LINE_LENGTH - 4)}`;
+			await commitTo(stub, [
+				insertAfter(null, "a", "題"),
+				insertAfter("a", "b", long),
+				insertAfter("b", "c", "[牛乳]"),
+			]);
+
+			// 書き換えられた行と、書き換えられなかった行の、両方がある。
+			expect(await rewriteOne(stub, "牛乳", "豆乳ヨーグルト")).toEqual({
+				changed: true,
+				remaining: true,
+			});
+
+			expect((await read(stub)).lines).toEqual([
+				line("a", "題"),
+				line("b", long),
+				line("c", "[豆乳ヨーグルト]"),
+			]);
+		});
+
+		it("新しい名前がリンクとして書けないときは、書き換えない。前の名前へのリンクが残ったことを返す", async () => {
+			const stub = page("rewrite-unwritable");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
+
+			expect(await rewriteOne(stub, "牛乳", "a]b")).toEqual({ changed: false, remaining: true });
+
+			expect((await read(stub)).version).toBe(1);
+		});
+
+		it("削除されたページでは、何もしない", async () => {
+			const stub = page("rewrite-deleted");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
+			await stub.destroy();
+
+			expect(await rewriteOne(stub, "牛乳", "豆乳")).toEqual({ changed: false, remaining: false });
 
 			expect(await stub.getPage()).toBe("deleted");
 		});

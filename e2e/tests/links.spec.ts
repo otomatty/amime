@@ -84,4 +84,35 @@ test.describe("リンクでつながる", () => {
 			first,
 		]);
 	});
+
+	test("ページの名前を変えると、そのページへのリンクも、新しい名前に書き換わる(開いたままの画面でも)", async ({
+		page,
+		context,
+	}) => {
+		const target = newPageName();
+		const from = newPageName();
+		await createPage(page, target, "中身");
+		await createPage(page, from, `[${target}] を読む`, `#${target}`);
+		// リンク元を、別の画面で開いたままにしておく。
+		const other = await context.newPage();
+		await other.goto(`/${from}`);
+		await expect(other.getByTestId("connection")).toHaveText("オンライン");
+
+		// 1行目を書き換えて、名前を変える。
+		await page.goto(`/${target}`);
+		await clickLineEnd(page, 0);
+		await page.keyboard.type("-renamed");
+		await expect(page).toHaveURL(new RegExp(`/${target}-renamed$`));
+
+		const lines = other.getByTestId("line");
+		await expect(lines.nth(1)).toHaveAttribute("data-text", `[${target}-renamed] を読む`);
+		await expect(lines.nth(2)).toHaveAttribute("data-text", `#${target}-renamed`);
+		// 読み込み直しても、書き換わったまま(保存されている)。リンクをたどると、名前を変えたページが開く。
+		await other.reload();
+		await other
+			.getByRole("link", { name: `${target}-renamed`, exact: true })
+			.first()
+			.click();
+		await expect(other.getByTestId("line").nth(1)).toHaveAttribute("data-text", "中身");
+	});
 });

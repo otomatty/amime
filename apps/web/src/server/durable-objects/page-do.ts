@@ -1,5 +1,6 @@
 import { DurableObject, exports } from "cloudflare:workers";
-import { summarizePage } from "@amime/parser";
+import { type Rename, renameLinks, summarizePage } from "@amime/parser";
+import { toTitleLc } from "@amime/shared";
 import {
 	applyChanges,
 	type Change,
@@ -10,6 +11,7 @@ import {
 	type CursorPosition,
 	type Line,
 	type LineId,
+	MAX_LINE_LENGTH,
 	type PageId,
 	type PageInfo,
 	type PageSnapshot,
@@ -21,6 +23,32 @@ import {
 import { generateKeyBetween } from "fractional-indexing";
 
 type LineRow = { id: string; text: string };
+
+/** リンクの書き換え(ADR-0028)。id は、台帳での書き換えの番号。同じ書き換えのやり直しは、同じ番号で届く。 */
+type Rewrite = Rename & { readonly id: number };
+
+/** リンクの書き換えの結果。書き換えたか(changed)と、前の名前へのリンクが残っているか(remaining)。 */
+type RewriteResult = { readonly changed: boolean; readonly remaining: boolean };
+
+/**
+ * 済ませた書き換えの記録。target は、そのときの行き先。
+ * sources は、本文の中で、この書き換えの対象になっている名前(書き換えた先の名前と、書き換えられずに残った名前)。
+ * 行き先が変わってやり直されたら、ここから、新しい行き先へ書き換える。
+ */
+type RewriteOutcome = RewriteResult & {
+	readonly target: string;
+	readonly sources: readonly string[];
+};
+
+/** 変更を適用するときの指定。 */
+type ApplyOptions = {
+	/** 端末が送ってきたコミットのID。 */
+	readonly id?: CommitId | undefined;
+	/** 送った端末の識別子。 */
+	readonly client?: ClientId | undefined;
+	/** 変更の保存と一緒に確定する書き込み。 */
+	readonly also?: (() => void) | undefined;
+};
 
 /** meta の表に持つ数値。deleted は、削除されたページなら 1。 */
 type MetaKey = "version" | "updated" | "dirty" | "deleted";
@@ -75,6 +103,13 @@ export class PageDO extends DurableObject {
 			CREATE TABLE IF NOT EXISTS notes (
 				key TEXT PRIMARY KEY,
 				value TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS rewrites (
+				seq INTEGER PRIMARY KEY,
+				target TEXT NOT NULL,
+				sources TEXT NOT NULL,
+				changed INTEGER NOT NULL,
+				remaining INTEGER NOT NULL
 			);
 		`);
 		// 接続が生きているかをクライアントが確かめるための応答。休止中でも、起こされずに返る。
@@ -186,7 +221,9 @@ export class PageDO extends DurableObject {
 	 */
 	async destroy(): Promise<void> {
 		this.ctx.storage.transactionSync(() => {
-			this.ctx.storage.sql.exec("DELETE FROM page_lines; DELETE FROM commits; DELETE FROM notes;");
+			this.ctx.storage.sql.exec(
+				"DELETE FROM page_lines; DELETE FROM commits; DELETE FROM notes; DELETE FROM rewrites;",
+			);
 			this.#setMeta("deleted", 1);
 			this.#setMeta("dirty", 0);
 		});
@@ -215,14 +252,154 @@ export class PageDO extends DurableObject {
 			return { version: this.#version(), applied: [], duplicate: true };
 		}
 
-		const { applied } = applyChanges(this.#lines(), commit.changes);
+		return this.#apply(commit.changes, { id: commit.id, client });
+	}
+
+	/**
+	 * 名前が変わったページへのリンクを、書き換える(ADR-0028)。台帳が呼ぶ。
+	 * いくつかの名前の変更を、まとめて書き換える(書き換えた結果を、もう1度書き換えない)。
+	 * 書き換えは、ふつうのコミットと同じように保存し、開いている端末に配信する。
+	 *
+	 * 同じ書き換え(同じ番号)がもう1度届いたら(応答が届かずに、やり直された)、もう行わず、前の結果を返す。
+	 * 名前の入れ替えは、2度行うと元に戻ってしまう。行き先だけが変わって届いたら(やり直しのあいだに、
+	 * 名前がもう1度変わった)、前に書き換えた先から、いまの行き先へ書き換える。
+	 *
+	 * 書き換えごとに、書き換えたか(changed)と、前の名前へのリンクがこのページに残っているか(remaining)を返す
+	 * (新しい名前がリンクとして書けないときなどは、残る)。
+	 */
+	async rewriteLinks(rewrites: readonly Rewrite[]): Promise<RewriteResult[]> {
+		if (this.#deleted()) return rewrites.map(() => ({ changed: false, remaining: false }));
+		const done = this.#doneRewrites();
+		/**
+		 * その書き換えで、いま行うこと。前に済ませていて、行き先も同じなら、何もしない(null)。
+		 * sources は、本文の中で、この書き換えの対象になっている名前。最初は、前の名前。
+		 * 行き先が変わってやり直されたときは、前に書き換えた先の名前と、書き換えられずに残った名前。
+		 */
+		const plan = ({ id, from, to }: Rewrite) => {
+			const before = done.get(id);
+			if (before !== undefined && before.target === to) return null;
+			const sources = before?.sources ?? [from];
+			const pending = sources.filter((source) => toTitleLc(source) !== toTitleLc(to));
+			return { sources, renames: pending.map((source): Rename => ({ from: source, to })) };
+		};
+		const plans = rewrites.map((rewrite) => ({ rewrite, planned: plan(rewrite) }));
+
+		const lines = this.#lines();
+		const texts = lines.map((line) => line.text);
+		const changes: Change[] = [];
+		// 書き換えたリンクの、前の名前(正規化したもの)。
+		const changed = new Set<string>();
+		const renames = plans.flatMap(({ planned }) => planned?.renames ?? []);
+		for (const { index, text, renamed } of renameLinks(texts, renames)) {
+			const line = lines[index];
+			// 書き換えると長さの上限を超える行は、そのままにする(リンクは、前の名前を指したまま残る)。
+			if (line === undefined || text.length > MAX_LINE_LENGTH) continue;
+			texts[index] = text;
+			changes.push({ type: "update", id: line.id, text });
+			for (const title of renamed) changed.add(title);
+		}
+		const remaining = new Set(summarizePage(texts).links.map((title) => toTitleLc(title)));
+		const attempts = plans.map(({ rewrite, planned }) => ({
+			rewrite,
+			planned,
+			rewrote: planned?.renames.some(({ from }) => changed.has(toTitleLc(from))) ?? false,
+		}));
+		// いまの呼び出しで、書き換えて入ったリンクの名前。本文に残っていても、書き換え残しではない。
+		const introduced = new Set(
+			attempts.filter(({ rewrote }) => rewrote).map(({ rewrite }) => toTitleLc(rewrite.to)),
+		);
+		const outcomes = attempts.map(({ rewrite, planned, rewrote }): RewriteOutcome => {
+			const before = done.get(rewrite.id);
+			// 前に済ませた書き換えには、前の結果を返す。
+			if (planned === null && before !== undefined) return before;
+			const sources = planned?.sources ?? [];
+			const toLc = toTitleLc(rewrite.to);
+			// 書き換えられずに残った名前。次に行き先が変わったら、そこから書き換える。
+			const left = sources.filter((source) => {
+				const lc = toTitleLc(source);
+				return lc !== toLc && remaining.has(lc) && !introduced.has(lc);
+			});
+			const reached = rewrote || sources.some((source) => toTitleLc(source) === toLc);
+			return {
+				target: rewrite.to,
+				sources: reached ? [...left, rewrite.to] : left,
+				changed: rewrote,
+				remaining: remaining.has(toTitleLc(rewrite.from)),
+			};
+		});
+
+		// 本文の書き換えと、済ませたことの記録を、まとめて確定する。
+		const record = () => this.#recordRewrites(rewrites, outcomes);
+		if (changes.length > 0) {
+			await this.#apply(changes, { also: record });
+		} else {
+			this.ctx.storage.transactionSync(record);
+			// 前回、書き換えを保存したあとで台帳への知らせの予約に失敗していたら、ここで予約し直す。
+			await this.#scheduleIndexing();
+		}
+		return outcomes.map(({ changed, remaining }) => ({ changed, remaining }));
+	}
+
+	/** 済ませた書き換え。台帳での番号から、そのときの行き先と結果へ。 */
+	#doneRewrites(): Map<number, RewriteOutcome> {
+		const rows = this.ctx.storage.sql
+			.exec<{ seq: number; target: string; sources: string; changed: number; remaining: number }>(
+				"SELECT seq, target, sources, changed, remaining FROM rewrites",
+			)
+			.toArray();
+		return new Map(
+			rows.map((row) => [
+				row.seq,
+				{
+					target: row.target,
+					// 自分で保存した値(文字列の配列のJSON)。
+					sources: JSON.parse(row.sources) as string[],
+					changed: row.changed !== 0,
+					remaining: row.remaining !== 0,
+				},
+			]),
+		);
+	}
+
+	/**
+	 * 書き換えを済ませたことを、覚えておく。
+	 * 台帳は、ページの書き換えを、古いものから順に、まとめて送ってくる。いま届いたものより古い記録は、もう要らない。
+	 */
+	#recordRewrites(rewrites: readonly Rewrite[], outcomes: readonly RewriteOutcome[]): void {
+		const { sql } = this.ctx.storage;
+		rewrites.forEach((rewrite, index) => {
+			const outcome = outcomes[index];
+			if (outcome === undefined) return;
+			if (index === 0) sql.exec("DELETE FROM rewrites WHERE seq < ?", rewrite.id);
+			sql.exec(
+				`INSERT INTO rewrites (seq, target, sources, changed, remaining) VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT (seq) DO UPDATE SET target = excluded.target, sources = excluded.sources,
+					changed = excluded.changed, remaining = excluded.remaining`,
+				rewrite.id,
+				outcome.target,
+				JSON.stringify(outcome.sources),
+				outcome.changed ? 1 : 0,
+				outcome.remaining ? 1 : 0,
+			);
+		});
+	}
+
+	/**
+	 * 変更を適用して保存し、接続している端末に配信する。
+	 */
+	async #apply(
+		changes: readonly Change[],
+		{ id, client, also }: ApplyOptions = {},
+	): Promise<CommitResult> {
+		const { applied } = applyChanges(this.#lines(), changes);
 		const version = this.#version() + (applied.length > 0 ? 1 : 0);
 		this.ctx.storage.transactionSync(() => {
 			// 効いた変更は、位置が実際の前後の行に書き直してある。順に書けば、保存した内容も同じ結果になる。
 			for (const change of applied) this.#write(change);
 			this.#setMeta("version", version);
 			// 何も効かなかったコミットも覚えておく。送り直しで、あとから効いてしまわないようにする。
-			this.#remember(commit.id, version);
+			if (id !== undefined) this.#remember(id, version);
+			also?.();
 			if (applied.length > 0) {
 				const now = Date.now();
 				this.#setMeta("updated", now);
