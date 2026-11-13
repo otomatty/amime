@@ -123,15 +123,16 @@ describe("ProjectGate(プロジェクトを読めることを確かめてから�
 
 		// ログアウトした。プロジェクトの読み直しは、まだ終わらない。
 		user = null;
-		let finish: (response: Response) => void = () => {};
-		project = () => new Promise<Response>((done) => (finish = done));
+		const finish: ((response: Response) => void)[] = [];
+		project = () => new Promise<Response>((done) => finish.push(done));
 		fireEvent.click(screen.getByRole("button", { name: "読み直す" }));
 
 		// 読み直しが終わるのを待たずに、隠す。
 		await waitFor(() => expect(screen.queryByText(/中身/)).toBeNull());
 		expect(screen.getByRole("status").textContent).toBe("読み込んでいます…");
 		// 公開のプロジェクトなら、読むだけの中身を出す。
-		finish(Response.json({ ...team, visibility: "public", role: null }));
+		await waitFor(() => expect(finish).toHaveLength(1));
+		finish[0]?.(Response.json({ ...team, visibility: "public", role: null }));
 		expect(await screen.findByText("中身: 見るだけ")).toBeDefined();
 	});
 

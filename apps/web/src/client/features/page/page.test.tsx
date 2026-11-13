@@ -81,7 +81,7 @@ const pendingRecords = () =>
 const SAVED = { version: 1, lines: [{ id: "a", text: "買い物" }] };
 
 /** WebSocket の代わりを置いて、ページを開く。届けるメッセージと、送られたメッセージを扱える。 */
-async function openWithSocket(info: Parameters<typeof stubFetch>[1] = {}) {
+async function openWithSocket(info: Parameters<typeof stubFetch>[1] = {}, readOnly = false) {
 	const sockets: (EventTarget & { sent: string[] })[] = [];
 	class CapturedSocket extends EventTarget {
 		static readonly OPEN = 1;
@@ -98,7 +98,7 @@ async function openWithSocket(info: Parameters<typeof stubFetch>[1] = {}) {
 	}
 	vi.stubGlobal("WebSocket", CapturedSocket);
 	stubFetch(() => json(SAVED), info);
-	render(<Page name="買い物" />);
+	render(<Page name="買い物" readOnly={readOnly} />);
 	await waitFor(() => expect(lines()).toEqual(["買い物"]));
 	await waitFor(() => expect(sockets).toHaveLength(1));
 	const socket = sockets[0];
@@ -784,6 +784,15 @@ describe("Page", () => {
 		type("牛乳");
 
 		expect(leave()).toBe(false);
+	});
+
+	it("読むだけの表示でも、ページが削除されたら、そのことを伝える", async () => {
+		const { receive } = await openWithSocket({}, true);
+		expect(status()).toMatch(/読むだけの表示です/);
+
+		receive({ type: "deleted" });
+
+		expect(status()).toMatch(/このページは削除されました/);
 	});
 
 	it("読むだけの表示では、そのことを伝え、ページの操作(固定、削除)を出さない。本文は見える", async () => {

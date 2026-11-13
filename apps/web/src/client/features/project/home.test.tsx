@@ -95,12 +95,12 @@ describe("Home(トップ。参加しているプロジェクトの一覧)", () =
 		expect(items).toEqual(["team非公開", "open公開"]);
 	});
 
-	it("参加しているプロジェクトがなければ、招待リンクで参加できることを伝える", async () => {
+	it("参加しているプロジェクトがなければ、そのことを伝える", async () => {
 		stubServer();
 
 		renderHome();
 
-		expect(await screen.findByText(/招待リンクを受け取ると、参加できます/)).toBeDefined();
+		expect(await screen.findByText(/参加しているプロジェクトは、まだありません/)).toBeDefined();
 	});
 
 	it("一覧を読み込めなかったら、そのことを伝える", async () => {

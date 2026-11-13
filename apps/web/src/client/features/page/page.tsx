@@ -351,7 +351,8 @@ function PageEditor({
 			{!readOnly && !WITHOUT_TOOLS.has(status) && (
 				<PageTools id={info.id} pinned={pinned} onPinned={setPinned} />
 			)}
-			{readOnly ? (
+			{/* 削除されたことは、読むだけの表示でも伝える(本文は、最後の写しとして残っている)。 */}
+			{readOnly && status !== "deleted" ? (
 				<p className="page-status" role="status" data-status="read-only">
 					読むだけの表示です。書き込めるのは、このプロジェクトのメンバーだけです
 				</p>
