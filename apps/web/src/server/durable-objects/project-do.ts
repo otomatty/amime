@@ -397,7 +397,8 @@ export class ProjectDO extends DurableObject {
 		// このプロジェクト(この Durable Object の名前)の、そのページ。
 		const page = exports.PageDO.getByName(`${this.ctx.id.name}/${pageId}`);
 		const results = await page.rewriteLinks(
-			applied.map((row) => ({ from: row.old_lc, to: row.new_title })),
+			// 番号も渡す。応答が届かずにやり直しても、PageDO は、同じ書き換えを2度は行わない。
+			applied.map((row) => ({ id: row.seq, from: row.old_lc, to: row.new_title })),
 		);
 		for (const row of pending) {
 			// 行わなかった書き換えは、何も変えなかったものとして、予定から消す。

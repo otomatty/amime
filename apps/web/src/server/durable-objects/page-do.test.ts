@@ -237,9 +237,12 @@ describe("PageDO", () => {
 	});
 
 	describe("rewriteLinks(名前が変わったページへのリンクを書き換える。ADR-0028)", () => {
-		/** 1つの名前の変更で、書き換える。 */
-		const rewriteOne = async (stub: ReturnType<typeof page>, from: string, to: string) =>
-			(await stub.rewriteLinks([{ from, to }]))[0];
+		let rewriteSerial = 0;
+		/** 1つの名前の変更で、書き換える。呼ぶたびに、別の書き換えとして扱う。 */
+		const rewriteOne = async (stub: ReturnType<typeof page>, from: string, to: string) => {
+			rewriteSerial += 1;
+			return (await stub.rewriteLinks([{ id: rewriteSerial, from, to }]))[0];
+		};
 
 		it("いくつかの名前の変更を、まとめて書き換える。変更ごとに、結果を返す", async () => {
 			const stub = page("rewrite-many");
@@ -247,9 +250,9 @@ describe("PageDO", () => {
 
 			// 名前を入れ替えたときも、それぞれのリンクの行き先を保つ。
 			const results = await stub.rewriteLinks([
-				{ from: "A", to: "B" },
-				{ from: "B", to: "A" },
-				{ from: "パン", to: "ごはん" },
+				{ id: 1, from: "A", to: "B" },
+				{ id: 2, from: "B", to: "A" },
+				{ id: 3, from: "パン", to: "ごはん" },
 			]);
 
 			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[B] [A] [卵]")]);
@@ -261,17 +264,70 @@ describe("PageDO", () => {
 			]);
 		});
 
+		it("同じ書き換えをもう1度受け取っても(応答が届かずに、やり直された)、2度は書き換えない", async () => {
+			// 名前の入れ替えは、2度行うと元に戻ってしまう。
+			const stub = page("rewrite-twice");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[A] [B]")]);
+			const swap = [
+				{ id: 7, from: "A", to: "B" },
+				{ id: 8, from: "B", to: "A" },
+			];
+
+			const first = await stub.rewriteLinks(swap);
+			const second = await stub.rewriteLinks(swap);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[B] [A]")]);
+			expect(second).toEqual(first);
+			expect((await read(stub)).version).toBe(2);
+		});
+
+		it("やり直しのあいだに行き先が変わっていたら、前に書き換えた先から、いまの行き先へ書き換える", async () => {
+			const stub = page("rewrite-retargeted");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳] [卵]")]);
+			await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "豆乳" }]);
+
+			// 応答が届かないうちに、名前がもう1度変わった。同じ書き換えが、新しい行き先で届く。
+			const results = await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "オーツ" }]);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[オーツ] [卵]")]);
+			expect(results).toEqual([{ changed: true, remaining: false }]);
+			// もう1度届いても、同じ。
+			expect(await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "オーツ" }])).toEqual(results);
+			expect((await read(stub)).version).toBe(3);
+		});
+
+		it("済んだ書き換えの記録は、それより新しい書き換えを受け取ったときに片づける", async () => {
+			const stub = page("rewrite-prune");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳] [卵]")]);
+			await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "豆乳" }]);
+
+			await stub.rewriteLinks([{ id: 9, from: "卵", to: "たまご" }]);
+
+			await runInDurableObject(stub, (_instance, state) => {
+				const seqs = state.storage.sql
+					.exec<{ seq: number }>("SELECT seq FROM rewrites")
+					.toArray()
+					.map((row) => row.seq);
+				expect(seqs).toEqual([9]);
+			});
+		});
+
 		it("書き換えたあとで、台帳への知らせの予約に失敗していたら、やり直しのときに予約し直す", async () => {
 			const stub = page("rewrite-reschedule");
 			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
 			await runDurableObjectAlarm(stub);
 			await runInDurableObject(stub, async (instance, state) => {
 				vi.spyOn(state.storage, "setAlarm").mockRejectedValueOnce(new Error("alarm failed"));
-				await expect(instance.rewriteLinks([{ from: "牛乳", to: "豆乳" }])).rejects.toThrow();
+				await expect(
+					instance.rewriteLinks([{ id: 1, from: "牛乳", to: "豆乳" }]),
+				).rejects.toThrow();
 			});
 
-			// 本文は、もう書き換わっている。やり直しでは、書き換えるものがない。
-			expect(await rewriteOne(stub, "牛乳", "豆乳")).toEqual({ changed: false, remaining: false });
+			// 本文は、もう書き換わっている。同じ書き換えのやり直しには、前の結果を返す。
+			expect(await stub.rewriteLinks([{ id: 1, from: "牛乳", to: "豆乳" }])).toEqual([
+				{ changed: true, remaining: false },
+			]);
+			expect((await read(stub)).version).toBe(2);
 
 			await runInDurableObject(stub, async (_instance, state) => {
 				expect(await state.storage.getAlarm()).not.toBeNull();

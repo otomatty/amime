@@ -24,6 +24,22 @@ import { generateKeyBetween } from "fractional-indexing";
 
 type LineRow = { id: string; text: string };
 
+/** リンクの書き換え(ADR-0028)。id は、台帳での書き換えの番号。同じ書き換えのやり直しは、同じ番号で届く。 */
+type Rewrite = Rename & { readonly id: number };
+
+/** リンクの書き換えの結果。書き換えたか(changed)と、前の名前へのリンクが残っているか(remaining)。 */
+type RewriteResult = { readonly changed: boolean; readonly remaining: boolean };
+
+/** 変更を適用するときの指定。 */
+type ApplyOptions = {
+	/** 端末が送ってきたコミットのID。 */
+	readonly id?: CommitId | undefined;
+	/** 送った端末の識別子。 */
+	readonly client?: ClientId | undefined;
+	/** 変更の保存と一緒に確定する書き込み。 */
+	readonly also?: (() => void) | undefined;
+};
+
 /** meta の表に持つ数値。deleted は、削除されたページなら 1。 */
 type MetaKey = "version" | "updated" | "dirty" | "deleted";
 
@@ -77,6 +93,12 @@ export class PageDO extends DurableObject {
 			CREATE TABLE IF NOT EXISTS notes (
 				key TEXT PRIMARY KEY,
 				value TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS rewrites (
+				seq INTEGER PRIMARY KEY,
+				target TEXT NOT NULL,
+				changed INTEGER NOT NULL,
+				remaining INTEGER NOT NULL
 			);
 		`);
 		// 接続が生きているかをクライアントが確かめるための応答。休止中でも、起こされずに返る。
@@ -188,7 +210,9 @@ export class PageDO extends DurableObject {
 	 */
 	async destroy(): Promise<void> {
 		this.ctx.storage.transactionSync(() => {
-			this.ctx.storage.sql.exec("DELETE FROM page_lines; DELETE FROM commits; DELETE FROM notes;");
+			this.ctx.storage.sql.exec(
+				"DELETE FROM page_lines; DELETE FROM commits; DELETE FROM notes; DELETE FROM rewrites;",
+			);
 			this.#setMeta("deleted", 1);
 			this.#setMeta("dirty", 0);
 		});
@@ -217,26 +241,37 @@ export class PageDO extends DurableObject {
 			return { version: this.#version(), applied: [], duplicate: true };
 		}
 
-		return this.#apply(commit.changes, commit.id, client);
+		return this.#apply(commit.changes, { id: commit.id, client });
 	}
 
 	/**
 	 * 名前が変わったページへのリンクを、書き換える(ADR-0028)。台帳が呼ぶ。
 	 * いくつかの名前の変更を、まとめて書き換える(書き換えた結果を、もう1度書き換えない)。
 	 * 書き換えは、ふつうのコミットと同じように保存し、開いている端末に配信する。
-	 * 何度呼んでも、結果は同じ(書き換えるリンクが残っていなければ、何もしない)。
-	 * 変更ごとに、書き換えたか(changed)と、前の名前へのリンクがこのページに残っているか(remaining)を返す
+	 *
+	 * 同じ書き換え(同じ番号)がもう1度届いたら(応答が届かずに、やり直された)、もう行わず、前の結果を返す。
+	 * 名前の入れ替えは、2度行うと元に戻ってしまう。行き先だけが変わって届いたら(やり直しのあいだに、
+	 * 名前がもう1度変わった)、前に書き換えた先から、いまの行き先へ書き換える。
+	 *
+	 * 書き換えごとに、書き換えたか(changed)と、前の名前へのリンクがこのページに残っているか(remaining)を返す
 	 * (新しい名前がリンクとして書けないときなどは、残る)。
 	 */
-	async rewriteLinks(
-		renames: readonly Rename[],
-	): Promise<{ readonly changed: boolean; readonly remaining: boolean }[]> {
-		if (this.#deleted()) return renames.map(() => ({ changed: false, remaining: false }));
+	async rewriteLinks(rewrites: readonly Rewrite[]): Promise<RewriteResult[]> {
+		if (this.#deleted()) return rewrites.map(() => ({ changed: false, remaining: false }));
+		const done = this.#doneRewrites();
+		/** その書き換えで、いま行うこと。前に済ませていて、行き先も同じなら、何もしない(null)。 */
+		const todo = ({ id, from, to }: Rewrite): Rename | null => {
+			const before = done.get(id);
+			if (before === undefined) return { from, to };
+			return before.target === to ? null : { from: before.target, to };
+		};
+
 		const lines = this.#lines();
 		const texts = lines.map((line) => line.text);
 		const changes: Change[] = [];
 		// 書き換えたリンクの、前の名前(正規化したもの)。
 		const changed = new Set<string>();
+		const renames = rewrites.flatMap((rewrite) => todo(rewrite) ?? []);
 		for (const { index, text, renamed } of renameLinks(texts, renames)) {
 			const line = lines[index];
 			// 書き換えると長さの上限を超える行は、そのままにする(リンクは、前の名前を指したまま残る)。
@@ -245,24 +280,75 @@ export class PageDO extends DurableObject {
 			changes.push({ type: "update", id: line.id, text });
 			for (const title of renamed) changed.add(title);
 		}
-		if (changes.length > 0) await this.#apply(changes);
-		// 前回、書き換えを保存したあとで台帳への知らせの予約に失敗していたら、ここで予約し直す。
-		else await this.#scheduleIndexing();
 		const remaining = new Set(summarizePage(texts).links.map((title) => toTitleLc(title)));
-		return renames.map(({ from }) => ({
-			changed: changed.has(toTitleLc(from)),
-			remaining: remaining.has(toTitleLc(from)),
-		}));
+		const results = rewrites.map((rewrite): RewriteResult => {
+			const rename = todo(rewrite);
+			// 前に済ませた書き換えには、前の結果を返す。
+			const before = done.get(rewrite.id);
+			if (rename === null && before !== undefined) {
+				return { changed: before.changed, remaining: before.remaining };
+			}
+			return {
+				changed: rename !== null && changed.has(toTitleLc(rename.from)),
+				remaining: remaining.has(toTitleLc(rewrite.from)),
+			};
+		});
+
+		// 本文の書き換えと、済ませたことの記録を、まとめて確定する。
+		const record = () => this.#recordRewrites(rewrites, results);
+		if (changes.length > 0) {
+			await this.#apply(changes, { also: record });
+		} else {
+			this.ctx.storage.transactionSync(record);
+			// 前回、書き換えを保存したあとで台帳への知らせの予約に失敗していたら、ここで予約し直す。
+			await this.#scheduleIndexing();
+		}
+		return results;
+	}
+
+	/** 済ませた書き換え。台帳での番号から、そのときの行き先と結果へ。 */
+	#doneRewrites(): Map<number, RewriteResult & { readonly target: string }> {
+		const rows = this.ctx.storage.sql
+			.exec<{ seq: number; target: string; changed: number; remaining: number }>(
+				"SELECT seq, target, changed, remaining FROM rewrites",
+			)
+			.toArray();
+		return new Map(
+			rows.map((row) => [
+				row.seq,
+				{ target: row.target, changed: row.changed !== 0, remaining: row.remaining !== 0 },
+			]),
+		);
+	}
+
+	/**
+	 * 書き換えを済ませたことを、覚えておく。
+	 * 台帳は、ページの書き換えを、古いものから順に、まとめて送ってくる。いま届いたものより古い記録は、もう要らない。
+	 */
+	#recordRewrites(rewrites: readonly Rewrite[], results: readonly RewriteResult[]): void {
+		const { sql } = this.ctx.storage;
+		rewrites.forEach((rewrite, index) => {
+			const result = results[index];
+			if (result === undefined) return;
+			if (index === 0) sql.exec("DELETE FROM rewrites WHERE seq < ?", rewrite.id);
+			sql.exec(
+				`INSERT INTO rewrites (seq, target, changed, remaining) VALUES (?, ?, ?, ?)
+				ON CONFLICT (seq) DO UPDATE
+				SET target = excluded.target, changed = excluded.changed, remaining = excluded.remaining`,
+				rewrite.id,
+				rewrite.to,
+				result.changed ? 1 : 0,
+				result.remaining ? 1 : 0,
+			);
+		});
 	}
 
 	/**
 	 * 変更を適用して保存し、接続している端末に配信する。
-	 * id は、端末が送ってきたコミットのID。client は、送った端末の識別子。
 	 */
 	async #apply(
 		changes: readonly Change[],
-		id?: CommitId,
-		client?: ClientId,
+		{ id, client, also }: ApplyOptions = {},
 	): Promise<CommitResult> {
 		const { applied } = applyChanges(this.#lines(), changes);
 		const version = this.#version() + (applied.length > 0 ? 1 : 0);
@@ -272,6 +358,7 @@ export class PageDO extends DurableObject {
 			this.#setMeta("version", version);
 			// 何も効かなかったコミットも覚えておく。送り直しで、あとから効いてしまわないようにする。
 			if (id !== undefined) this.#remember(id, version);
+			also?.();
 			if (applied.length > 0) {
 				const now = Date.now();
 				this.#setMeta("updated", now);

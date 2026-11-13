@@ -1087,6 +1087,28 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			expect(links.related.map((page) => page.id).sort()).toEqual([first, second].sort());
 		});
 
+		it("名前を入れ替えたページの書き換えが、保存のあとで失敗して、やり直されても、リンクは行き先を保つ", async () => {
+			const name = "rw-swap-retry";
+			const first = await write(name, "A");
+			const second = await write(name, "B");
+			const list = await write(name, "一覧", "[A] と [B]");
+			await retitle(name, first, "仮");
+			await retitle(name, second, "A");
+			await retitle(name, first, "B");
+			// 書き換えは保存されるが、そのあとの、台帳への知らせの予約に失敗する。
+			await runInDurableObject(pageOf(name, list), (_instance, state) => {
+				vi.spyOn(state.storage, "setAlarm").mockRejectedValueOnce(new Error("alarm failed"));
+			});
+
+			await rewrite(name);
+			expect(await queued(name)).toBe(2);
+			await rewrite(name);
+
+			// 2度書き換えると、元に戻ってしまう。1度だけ書き換わっている。
+			expect(await textsOf(name, list)).toEqual(["一覧", "[B] と [A]"]);
+			expect(await queued(name)).toBe(0);
+		});
+
 		it("書き換えの予定を入れたあとで、アラームの予約に失敗していたら、反映のやり直しのときに予約し直す", async () => {
 			const name = "rw-reschedule";
 			const milk = await write(name, "牛乳");
