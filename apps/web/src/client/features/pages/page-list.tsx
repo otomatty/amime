@@ -94,11 +94,16 @@ export function PageList({
 	const [name, setName] = useState("");
 	// 一覧を取り出し直すたびに進める。前の一覧の続きがあとから届いても、いまの一覧に混ぜない。
 	const generation = useRef(0);
+	// 続きを取り出しているあいだは、次の続きを取り出さない。同じ位置を2度取り出すと、続きの位置が進みすぎる。
+	const paging = useRef(false);
+	const [busy, setBusy] = useState(false);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt は、読み込みをやり直すためのきっかけとして使う。
 	useEffect(() => {
 		let cancelled = false;
 		generation.current += 1;
+		paging.current = false;
+		setBusy(false);
 		setLoaded({ status: "loading" });
 		listPages({ sort, offset: 0 }).then(
 			({ pages, total }) => {
@@ -124,11 +129,16 @@ export function PageList({
 	};
 
 	const loadMore = useCallback(async () => {
-		if (loaded.status !== "ready") return;
+		if (loaded.status !== "ready" || paging.current) return;
 		const started = generation.current;
+		paging.current = true;
+		setBusy(true);
 		const next = await listPages({ sort, offset: loaded.fetched }).catch(() => null);
 		// 取り出しているあいだに、並び順を変えた(一覧を取り出し直した)。前の並び順の続きは捨てる。
-		if (next === null || generation.current !== started) return;
+		if (generation.current !== started) return;
+		paging.current = false;
+		setBusy(false);
+		if (next === null) return;
 		setLoaded((current) => {
 			if (current.status !== "ready") return current;
 			// 取り出しているあいだにページが増えると、続きが前の分と重なることがある。同じページは1度だけ並べる。
@@ -199,7 +209,7 @@ export function PageList({
 				</ul>
 			)}
 			{loaded.status === "ready" && loaded.more && (
-				<button className="page-list-more" type="button" onClick={loadMore}>
+				<button className="page-list-more" type="button" disabled={busy} onClick={loadMore}>
 					もっと見る
 				</button>
 			)}

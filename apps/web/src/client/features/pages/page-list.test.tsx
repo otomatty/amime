@@ -199,6 +199,52 @@ describe("PageList(ページの一覧)", () => {
 		await waitFor(() => expect(screen.queryByRole("button", { name: "もっと見る" })).toBeNull());
 	});
 
+	it("続きを取り出しているあいだに「もっと見る」をもう一度押しても、同じ続きを2度は取り出さない", async () => {
+		let releaseMore: (response: Response) => void = () => {};
+		const fetchMock = stubList((url) => {
+			const offset = url.searchParams.get("offset");
+			if (offset === "0") return json({ pages: [card("p1", "1つめ")], total: 3 });
+			if (offset === "2") return json({ pages: [card("p3", "3つめ")], total: 3 });
+			return new Promise<Response>((resolve) => {
+				releaseMore = resolve;
+			});
+		});
+		render(<PageList />);
+		await waitFor(() => expect(titles()).toEqual(["1つめ"]));
+		const more = screen.getByRole("button", { name: "もっと見る" });
+
+		fireEvent.click(more);
+		fireEvent.click(more);
+		releaseMore(json({ pages: [card("p2", "2つめ")], total: 3 }));
+
+		await waitFor(() => expect(titles()).toEqual(["1つめ", "2つめ"]));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		// 続きの位置は1件分だけ進む。3つめのページまで、取りこぼさずにたどり着ける。
+		fireEvent.click(screen.getByRole("button", { name: "もっと見る" }));
+		await waitFor(() => expect(titles()).toEqual(["1つめ", "2つめ", "3つめ"]));
+		expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/pages?sort=updated&offset=2");
+	});
+
+	it("続きを取り出せなかったら、もう一度「もっと見る」を押して取り出せる", async () => {
+		let failing = true;
+		stubList((url) => {
+			if (url.searchParams.get("offset") === "0")
+				return json({ pages: [card("p1", "1つめ")], total: 2 });
+			return failing ? json({ error: "x" }, 500) : json({ pages: [card("p2", "2つめ")], total: 2 });
+		});
+		render(<PageList />);
+		await waitFor(() => expect(titles()).toEqual(["1つめ"]));
+		fireEvent.click(screen.getByRole("button", { name: "もっと見る" }));
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "もっと見る" })).toHaveProperty("disabled", false),
+		);
+
+		failing = false;
+		fireEvent.click(screen.getByRole("button", { name: "もっと見る" }));
+
+		await waitFor(() => expect(titles()).toEqual(["1つめ", "2つめ"]));
+	});
+
 	it("続きを取り出しているあいだに並び順を変えたら、前の並び順の続きは捨てる", async () => {
 		let releaseMore: (response: Response) => void = () => {};
 		stubList((url) => {
