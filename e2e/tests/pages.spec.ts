@@ -24,6 +24,23 @@ async function createPage(page: Page, name: string, ...body: string[]) {
 	await expect(status(page)).toHaveText("保存済み");
 }
 
+/**
+ * 一覧の続きを、最後まで取り出す。
+ * 手元では、前の実行で作ったページが残っている。目当てのページが、最初のひとまとまりに入るとは限らない。
+ */
+async function showAllCards(page: Page) {
+	const more = page.getByRole("button", { name: "もっと見る" });
+	await cards(page).first().waitFor();
+	while (await more.isVisible()) {
+		const count = await cards(page).count();
+		await more.click();
+		// 続きが並ぶか、続きがなくなる(ボタンが消える)のを待つ。
+		await expect
+			.poll(async () => (await cards(page).count()) > count || !(await more.isVisible()))
+			.toBe(true);
+	}
+}
+
 test.describe("ページの一覧", () => {
 	test("作ったページが、トップにカードとして並ぶ。冒頭の本文が見え、押すと開く", async ({
 		page,
@@ -62,11 +79,13 @@ test.describe("ページの一覧", () => {
 		}).toPass();
 
 		await page.getByLabel("並び順").selectOption("title");
-		await expect(mine()).toHaveText([`${prefix}-a`, `${prefix}-b`]);
 		await expect(page).toHaveURL(/\?sort=title$/);
+		await showAllCards(page);
+		await expect(mine()).toHaveText([`${prefix}-a`, `${prefix}-b`]);
 
 		await page.reload();
 		await expect(page.getByLabel("並び順")).toHaveValue("title");
+		await showAllCards(page);
 		await expect(mine()).toHaveText([`${prefix}-a`, `${prefix}-b`]);
 	});
 
