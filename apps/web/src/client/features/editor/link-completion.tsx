@@ -1,4 +1,5 @@
 import { canCompleteLink, type LinkQuery, linkQueryAt } from "@amime/editor-core";
+import type { LineRole } from "@amime/parser";
 import { type Ref, useEffect, useMemo, useState } from "react";
 
 /** 入力が止まってから、候補を探し始めるまでの時間。打つたびに問い合わせない。 */
@@ -23,8 +24,8 @@ type CompletionOptions = {
 	readonly column: number;
 	/** カーソルのある行を区別する値(行ID)。 */
 	readonly line: string | null;
-	/** カーソルのある行の種類。テーブルの行では、カーソルのあるセルの中だけを読む。 */
-	readonly kind: "text" | "table-row";
+	/** ページの中での、カーソルのある行の役割(本文、テーブルの行、など)。記法の読み方が変わる。 */
+	readonly role: LineRole | undefined;
 	/** 名前の一部から、候補を探す。渡さなければ、補完しない。 */
 	readonly search: ((query: string) => Promise<readonly string[]>) | undefined;
 };
@@ -33,10 +34,10 @@ type CompletionOptions = {
  * リンクを書いている途中の、名前の候補(ADR-0030)。
  * 候補は、最初はどれも選んでいない(Enter を、改行のために使えるように)。上下に動かすと選ぶ。
  */
-export function useLinkCompletion({ text, column, line, kind, search }: CompletionOptions) {
+export function useLinkCompletion({ text, column, line, role, search }: CompletionOptions) {
 	const link = useMemo(
-		() => (text === null || search === undefined ? null : linkQueryAt(text, column, kind)),
-		[text, column, kind, search],
+		() => (text === null || search === undefined ? null : linkQueryAt(text, column, role)),
+		[text, column, role, search],
 	);
 	// どのリンクか(行と、名前の始まりの位置)。
 	const anchor = link === null ? null : `${line}:${link.start}`;
@@ -48,6 +49,10 @@ export function useLinkCompletion({ text, column, line, kind, search }: Completi
 		readonly titles: readonly string[];
 	} | null>(null);
 	const [active, setActive] = useState(-1);
+	// リンクから離れたり、入力が変わったりしたら、選んでいた候補を外す。
+	// 戻ってきたときに、前の選択が残っていると、Enter で意図しない補完をしてしまう。
+	// biome-ignore lint/correctness/useExhaustiveDependencies: anchor と query は、外すきっかけとして使う。
+	useEffect(() => setActive(-1), [anchor, query]);
 	// 候補を閉じたリンク。同じリンクを書いているあいだは、候補を出さない。
 	const [dismissed, setDismissed] = useState<string | null>(null);
 	// そのリンクから離れたら(消した、別のリンクへ移った)、閉じたことを忘れる。

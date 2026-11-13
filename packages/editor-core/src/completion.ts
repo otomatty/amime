@@ -1,4 +1,10 @@
-import { parseLine, writePageLink } from "@amime/parser";
+import {
+	type InlineNode,
+	inlineNodes,
+	type LineRole,
+	parseLine,
+	writePageLink,
+} from "@amime/parser";
 import { ceilToBoundary } from "./graphemes.ts";
 import { lineAtCursor } from "./state.ts";
 import type { EditorState } from "./types.ts";
@@ -17,85 +23,59 @@ export type LinkQuery = {
 	readonly query: string;
 };
 
-/** リンクの名前を区切る文字(空白、括弧、バッククォート)。 */
-const DELIMITER = /[\s[\]`]/;
-/** [記号 文字](装飾)と [$ 式](数式)の先頭。ページへのリンクではない。 */
-const NOTATION_HEAD = /^[!"#%&'()*+,\-./{|}<>_~$]+ /;
+type LinkNode = Extract<InlineNode, { readonly type: "page-link" | "hashtag" }>;
 
-/** position より前にある、閉じていないコード(`…)の中か。 */
-const insideCode = (text: string, position: number): boolean =>
-	text.slice(0, position).split("`").length % 2 === 0;
+const TEXT_LINE: LineRole = { kind: "text", blockIndent: 0 };
 
-/** position から前へ、条件に合う文字が続くかぎり戻る。戻った先の位置を返す。 */
-function scanBack(text: string, position: number, within: (character: string) => boolean): number {
-	let start = position;
-	while (start > 0 && within(text.charAt(start - 1))) start -= 1;
-	return start;
-}
-
-/** open の位置で開いた括弧の中を、ページへのリンクとして書いている途中か。 */
-function bracketQuery(text: string, open: number, column: number): LinkQuery | null {
-	const query = text.slice(open + 1, column);
-	const otherNotation =
-		// [[強調]] の内側の括弧。
-		text.charAt(open - 1) === "[" ||
-		// 装飾、数式、外部リンク、他のプロジェクトへのリンク。
-		NOTATION_HEAD.test(query) ||
-		query.includes("://") ||
-		query.startsWith("/");
-	if (query === "" || /^\s/.test(query) || otherNotation || insideCode(text, open)) return null;
-	// カーソルより後ろで、最初に出てくる括弧。閉じる括弧なら、そこまでがリンクの名前。
-	const next = text.slice(column).search(/[[\]]/);
-	const closed = next !== -1 && text.charAt(column + next) === "]";
-	return { kind: "bracket", start: open + 1, end: closed ? column + next : column, closed, query };
-}
-
-/** カーソルが、タグ(#名前)を書いている途中か。 */
-function hashtagQuery(text: string, column: number): LinkQuery | null {
-	const start = scanBack(text, column, (character) => !DELIMITER.test(character));
-	// 文中の # は、直前が空白のときだけタグの始まり(「C#」などを巻き込まない)。括弧やコードの直後も、タグにならない。
-	const begins = text.charAt(start) === "#" && (start === 0 || /\s/.test(text.charAt(start - 1)));
-	const query = text.slice(start + 1, column);
-	if (!begins || query === "" || insideCode(text, start)) return null;
-	const rest = text.slice(column).search(DELIMITER);
-	const end = rest === -1 ? text.length : column + rest;
-	return { kind: "hashtag", start: start + 1, end, closed: true, query };
-}
-
-/** 行が、リンクを書けない行(`$ コマンド`、`% コマンド`、`? ヘルプ`)か。 */
-function withoutLinks(text: string): boolean {
-	const parsed = parseLine(text, { kind: "text", blockIndent: 0 });
-	return (
-		parsed.kind === "text" &&
-		parsed.nodes.some((node) => node.type === "command-line" || node.type === "helpfeel")
-	);
-}
-
-/** text の中の、カーソルの位置で、リンクを書いている途中かを調べる。 */
-function queryIn(text: string, column: number): LinkQuery | null {
-	// カーソルより前の、いちばん近い括弧。開く括弧なら、その中にいる。
-	const bracket = scanBack(text, column, (character) => character !== "[" && character !== "]");
-	if (text.charAt(bracket - 1) === "[") return bracketQuery(text, bracket - 1, column);
-	return hashtagQuery(text, column);
+/**
+ * 行を記法として読んで、名前の途中か終わりにカーソルがある、ページへのリンクを探す。
+ * どこがリンクかは、表示と同じ解析に任せる(コード、数式、コマンドの行、テーブルのセルの区切りなどを、同じように扱う)。
+ */
+function linkAt(text: string, column: number, role: LineRole): LinkNode | null {
+	const inside = (node: InlineNode): node is LinkNode =>
+		(node.type === "page-link" && node.content.start < column && column <= node.content.end) ||
+		(node.type === "hashtag" && node.start + 1 < column && column <= node.end);
+	return inlineNodes(parseLine(text, role)).find(inside) ?? null;
 }
 
 /**
  * 行の中のカーソルの位置で、ページへのリンクを書いている途中なら、その範囲と、入力した名前の一部を返す。
  * 括弧のリンク([名前)と、タグ(#名前)を対象にする。装飾や外部リンクなど、他の記法は対象にしない。
- * kind は、行の種類。テーブルの行では、カーソルのあるセルの中だけを読む(記法は、セルをまたがない)。
- * コードブロックの中など、リンクを書けない種類の行かどうかは、呼ぶ側で確かめる。
+ * role は、ページの中でのその行の役割。コードブロックの中などの、リンクを書けない行では null。
  */
 export function linkQueryAt(
 	text: string,
 	column: number,
-	kind: "text" | "table-row" = "text",
+	role: LineRole = TEXT_LINE,
 ): LinkQuery | null {
-	if (kind === "text") return withoutLinks(text) ? null : queryIn(text, column);
-	// セルは、タブで区切る。
-	const start = text.lastIndexOf("\t", column - 1) + 1;
-	const next = text.indexOf("\t", column);
-	const link = queryIn(text.slice(start, next === -1 ? text.length : next), column - start);
-	return link && { ...link, start: link.start + start, end: link.end + start };
+	// もう書けているリンク(閉じた括弧か、タグ)の中にいるか。
+	const written = linkAt(text, column, role);
+	// 閉じていない括弧は、カーソルの位置で閉じたものとして読む。そこで閉じて、ページへのリンクになるなら、書いている途中。
+	const closing = `${text.slice(0, column)}]${text.slice(column)}`;
+	const unclosed = written?.type === "page-link" ? null : linkAt(closing, column, role);
+	const bracket = unclosed?.type === "page-link" && unclosed.content.end === column;
+	const node = bracket ? unclosed : written;
+	if (node === null) return null;
+	if (node.type === "hashtag") {
+		const start = node.start + 1;
+		return {
+			kind: "hashtag",
+			start,
+			end: node.end,
+			closed: true,
+			query: text.slice(start, column),
+		};
+	}
+	const query = text.slice(node.content.start, column);
+	// 空白から始まる名前と、[[強調]] の内側の括弧は、対象にしない。
+	if (/^\s/.test(query) || text.charAt(node.start - 1) === "[") return null;
+	return {
+		kind: "bracket",
+		start: node.content.start,
+		end: bracket ? column : node.content.end,
+		closed: !bracket,
+		query,
+	};
 }
 
 /** title へのリンクの書き方。そのページへのリンクとして書けない名前なら null。 */

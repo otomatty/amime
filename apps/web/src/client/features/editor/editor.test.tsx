@@ -913,6 +913,23 @@ describe("Editor", () => {
 			expect(press("Tab")).toBe(false);
 		});
 
+		it("候補が出る前に Esc を押していても、補完したあとの Tab は、字下げになる(編集欄から抜けない)", async () => {
+			render(<Editor initialLines={["題", ""]} completeTitles={search} />);
+			focusEditor();
+			press("ArrowDown");
+			type("[買い");
+			// まだ候補が出ていない。この Esc は、編集欄から抜ける準備になる。
+			press("Escape");
+			await waitFor(() => expect(options()).toHaveLength(2));
+
+			press("ArrowDown");
+			press("Enter");
+
+			expect(lines()).toEqual(["題", "[買い物]"]);
+			// 既定の動作(フォーカスの移動)を止めている。
+			expect(press("Tab")).toBe(false);
+		});
+
 		it("入力を続けると、候補が絞り込まれる。括弧を閉じると、候補は消える", async () => {
 			await typeOnBody("[買い");
 			await waitFor(() => expect(options()).toHaveLength(2));

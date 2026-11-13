@@ -1,3 +1,4 @@
+import type { LineRole } from "@amime/parser";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CompletionList, useLinkCompletion } from "./link-completion.tsx";
@@ -11,14 +12,14 @@ function Harness(props: {
 	text: string | null;
 	column: number;
 	line?: string;
-	kind?: "text" | "table-row";
+	role?: LineRole;
 	search?: Search | undefined;
 }) {
 	const { completion, move, dismiss } = useLinkCompletion({
 		text: props.text,
 		column: props.column,
 		line: props.line ?? "a",
-		kind: props.kind ?? "text",
+		role: props.role,
 		search: props.search,
 	});
 	return (
@@ -119,6 +120,33 @@ describe("useLinkCompletion(リンクを書いている途中の、名前の候�
 		await waitFor(() => expect(state()).toBe(opened("買い物", ["買い物"], -1)));
 	});
 
+	it("リンクから離れて戻ったら、選んでいた候補は外れている(Enter で、意図しない補完をしない)", async () => {
+		const search: Search = async () => ["一", "二"];
+		const { rerender } = render(<Harness text="[買]" column={2} search={search} />);
+		await waitFor(() => expect(state()).not.toBe("closed"));
+		press("down");
+		expect(state()).toBe(opened("買", ["一", "二"], 0));
+
+		// カーソルを括弧の外へ動かして、戻す。
+		rerender(<Harness text="[買]" column={3} search={search} />);
+		expect(state()).toBe("closed");
+		rerender(<Harness text="[買]" column={2} search={search} />);
+
+		expect(state()).toBe(opened("買", ["一", "二"], -1));
+	});
+
+	it("入力を変えて、すぐに戻しても、選んでいた候補は外れている", async () => {
+		const search: Search = async () => ["一", "二"];
+		const { rerender } = render(<Harness text="[買" column={2} search={search} />);
+		await waitFor(() => expect(state()).not.toBe("closed"));
+		press("down");
+
+		rerender(<Harness text="[買い" column={3} search={search} />);
+		rerender(<Harness text="[買" column={2} search={search} />);
+
+		expect(state()).toBe(opened("買", ["一", "二"], -1));
+	});
+
 	it("あとから届いた、前の入力への応答は使わない", async () => {
 		let releaseOld: (titles: readonly string[]) => void = () => {};
 		const search: Search = (query) =>
@@ -155,7 +183,9 @@ describe("useLinkCompletion(リンクを書いている途中の、名前の候�
 	it("テーブルの行では、カーソルのあるセルの中だけを、リンクとして読む", async () => {
 		const search = vi.fn<Search>(async () => ["買い物"]);
 
-		render(<Harness text={" [買\t別のセル]"} column={3} kind="table-row" search={search} />);
+		const role: LineRole = { kind: "table-row", blockIndent: 0 };
+
+		render(<Harness text={" [買\t別のセル]"} column={3} role={role} search={search} />);
 
 		await waitFor(() => expect(state()).not.toBe("closed"));
 		expect(search).toHaveBeenCalledExactlyOnceWith("買");

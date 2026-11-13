@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { canCompleteLink, completeLink, linkQueryAt } from "./completion.ts";
 
+const ROLES = {
+	text: { kind: "text", blockIndent: 0 },
+	"table-row": { kind: "table-row", blockIndent: 0 },
+} as const;
+
 /** 「|」をカーソルの位置として、書いている途中のリンクを求める。 */
 function queryAt(marked: string, kind: "text" | "table-row" = "text") {
 	const column = marked.indexOf("|");
-	return linkQueryAt(marked.replace("|", ""), column, kind);
+	return linkQueryAt(marked.replace("|", ""), column, ROLES[kind]);
 }
 
 /** 「|」をカーソルの位置として、title で補完したあとの行を「|」つきで返す。 */
 function complete(marked: string, title: string, kind: "text" | "table-row" = "text"): string {
 	const column = marked.indexOf("|");
 	const text = marked.replace("|", "");
-	const link = linkQueryAt(text, column, kind);
+	const link = linkQueryAt(text, column, ROLES[kind]);
 	if (link === null) throw new Error("no link at the cursor");
 	const state = completeLink({ lines: ["題", text], cursor: { line: 1, column } }, link, title);
 	const [, line = ""] = state.lines;
@@ -64,7 +69,10 @@ describe("linkQueryAt(書いている途中のリンク)", () => {
 			["URL", "[https://example.com|"],
 			["他のプロジェクトへのリンク", "[/project/pa|"],
 			["強調の記法", "[[強調|"],
+			["閉じた強調の記法", "[[強調|]]"],
 			["コードの中", "`[買い|`"],
+			["数式の中の括弧", "[$ A[buy|]]"],
+			["アイコン", "[買い物.icon|]"],
 		])("%sでは、リンクを書いている途中として扱わない", (_name, marked) => {
 			expect(queryAt(marked)).toBeNull();
 		});
@@ -104,6 +112,12 @@ describe("linkQueryAt(書いている途中のリンク)", () => {
 			["タグの外", "#買い物 の|"],
 		])("%sでは、タグを書いている途中として扱わない", (_name, marked) => {
 			expect(queryAt(marked)).toBeNull();
+		});
+
+		it("前にあるコードやリンクの中の記号に、惑わされない", () => {
+			expect(queryAt("`a[b` #買|")).toMatchObject({ kind: "hashtag", query: "買" });
+			expect(queryAt("[a`b] #買|")).toMatchObject({ kind: "hashtag", query: "買" });
+			expect(queryAt("[a`b] [買|")).toMatchObject({ kind: "bracket", query: "買" });
 		});
 
 		it("括弧の中の # は、括弧のリンクの名前の一部として扱う", () => {

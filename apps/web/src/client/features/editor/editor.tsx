@@ -164,14 +164,14 @@ export function Editor({
 	// 選択とカーソルは、編集欄にフォーカスがあるときだけ表示する。
 	const selection = focused ? selectionRange(state) : null;
 	// リンクを書いている途中の、名前の候補(ADR-0030)。変換中や、範囲を選択しているあいだは出さない。
-	const cursorKind = roles[state.cursor.line]?.kind;
+	const cursorRole = roles[state.cursor.line];
 	const completable =
-		focused && composing === null && selection === null && LINKABLE_KINDS.has(cursorKind);
+		focused && composing === null && selection === null && LINKABLE_KINDS.has(cursorRole?.kind);
 	const { completion, move, dismiss } = useLinkCompletion({
 		text: completable ? (state.lines[state.cursor.line] ?? null) : null,
 		column: cursorColumn,
 		line: cursorLine,
-		kind: cursorKind === "table-row" ? "table-row" : "text",
+		role: cursorRole,
 		search: completeTitles,
 	});
 	const completionId = useId();
@@ -311,7 +311,11 @@ export function Editor({
 		const composingNow =
 			isComposing.current || event.nativeEvent.isComposing || event.keyCode === KEY_CODE_COMPOSING;
 		// 候補のためのキーは、編集の操作より先に扱う(Esc は、編集欄から抜ける準備にしない)。
-		if (!composingNow && handleCompletionKey(event)) return;
+		if (!composingNow && handleCompletionKey(event)) {
+			// 候補が出る前に押した Esc が、編集欄から抜ける準備になっていたら、取り消す(次の Tab は、字下げ)。
+			tabMovesFocus.current = false;
+			return;
+		}
 		if (leavesEditor(event) || composingNow || prepareClipboard(event)) return;
 		const binding = bindingForKey(keyInput(event), {
 			tableRowIndent: tableRowIndentAt(state.cursor.line),
