@@ -330,6 +330,21 @@ describe("PageDO", () => {
 			]);
 		});
 
+		it("行き先が変わったやり直しで書き換えられなくても、前に書き換えた先を覚えておく。次に行き先が変わったら、そこから書き換える", async () => {
+			const stub = page("rewrite-retargeted-twice");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
+			await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "豆乳" }]);
+			// 書けない名前に変わった。本文は [豆乳] のまま。
+			expect(await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "a]b" }])).toEqual([
+				{ changed: false, remaining: false },
+			]);
+
+			const results = await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "オーツ" }]);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[オーツ]")]);
+			expect(results).toEqual([{ changed: true, remaining: false }]);
+		});
+
 		it("名前を入れ替えたあとのやり直しで行き先が変わっても、もう一方から書き換わったリンクは、巻き込まない", async () => {
 			const stub = page("rewrite-retargeted-swap");
 			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[A] [B]")]);

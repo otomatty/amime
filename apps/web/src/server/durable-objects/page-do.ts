@@ -32,10 +32,13 @@ type RewriteResult = { readonly changed: boolean; readonly remaining: boolean };
 
 /**
  * 済ませた書き換えの記録。target は、そのときの行き先。
- * leftover は、前の名前へのリンクのうち、書き換えられずに残ったものがあるか
- * (remaining は、同じまとまりの他の書き換えで入ったリンクも数える)。
+ * sources は、本文の中で、この書き換えの対象になっている名前(書き換えた先の名前と、書き換えられずに残った名前)。
+ * 行き先が変わってやり直されたら、ここから、新しい行き先へ書き換える。
  */
-type RewriteOutcome = RewriteResult & { readonly target: string; readonly leftover: boolean };
+type RewriteOutcome = RewriteResult & {
+	readonly target: string;
+	readonly sources: readonly string[];
+};
 
 /** 変更を適用するときの指定。 */
 type ApplyOptions = {
@@ -104,9 +107,9 @@ export class PageDO extends DurableObject {
 			CREATE TABLE IF NOT EXISTS rewrites (
 				seq INTEGER PRIMARY KEY,
 				target TEXT NOT NULL,
+				sources TEXT NOT NULL,
 				changed INTEGER NOT NULL,
-				remaining INTEGER NOT NULL,
-				leftover INTEGER NOT NULL
+				remaining INTEGER NOT NULL
 			);
 		`);
 		// 接続が生きているかをクライアントが確かめるための応答。休止中でも、起こされずに返る。
@@ -268,26 +271,26 @@ export class PageDO extends DurableObject {
 		if (this.#deleted()) return rewrites.map(() => ({ changed: false, remaining: false }));
 		const done = this.#doneRewrites();
 		/**
-		 * その書き換えで、いま行う名前の変更。前に済ませていて、行き先も同じなら、何もしない。
-		 * 行き先が変わっていたら、前に書き換えた分は、前の行き先から書き換える。
-		 * 前に書き換えられずに残った分は、元の名前から書き換える。
+		 * その書き換えで、いま行うこと。前に済ませていて、行き先も同じなら、何もしない(null)。
+		 * sources は、本文の中で、この書き換えの対象になっている名前。最初は、前の名前。
+		 * 行き先が変わってやり直されたときは、前に書き換えた先の名前と、書き換えられずに残った名前。
 		 */
-		const todo = ({ id, from, to }: Rewrite): Rename[] => {
+		const plan = ({ id, from, to }: Rewrite) => {
 			const before = done.get(id);
-			if (before === undefined) return [{ from, to }];
-			if (before.target === to) return [];
-			return [
-				...(before.changed ? [{ from: before.target, to }] : []),
-				...(before.leftover ? [{ from, to }] : []),
-			];
+			if (before !== undefined && before.target === to) return null;
+			const sources = before?.sources ?? [from];
+			const pending = sources.filter((source) => toTitleLc(source) !== toTitleLc(to));
+			return { sources, renames: pending.map((source): Rename => ({ from: source, to })) };
 		};
+		const plans = rewrites.map((rewrite) => ({ rewrite, planned: plan(rewrite) }));
 
 		const lines = this.#lines();
 		const texts = lines.map((line) => line.text);
 		const changes: Change[] = [];
 		// 書き換えたリンクの、前の名前(正規化したもの)。
 		const changed = new Set<string>();
-		for (const { index, text, renamed } of renameLinks(texts, rewrites.flatMap(todo))) {
+		const renames = plans.flatMap(({ planned }) => planned?.renames ?? []);
+		for (const { index, text, renamed } of renameLinks(texts, renames)) {
 			const line = lines[index];
 			// 書き換えると長さの上限を超える行は、そのままにする(リンクは、前の名前を指したまま残る)。
 			if (line === undefined || text.length > MAX_LINE_LENGTH) continue;
@@ -296,33 +299,37 @@ export class PageDO extends DurableObject {
 			for (const title of renamed) changed.add(title);
 		}
 		const remaining = new Set(summarizePage(texts).links.map((title) => toTitleLc(title)));
-		const outcomes = rewrites.map((rewrite): RewriteOutcome => {
-			const renames = todo(rewrite);
+		const attempts = plans.map(({ rewrite, planned }) => ({
+			rewrite,
+			planned,
+			rewrote: planned?.renames.some(({ from }) => changed.has(toTitleLc(from))) ?? false,
+		}));
+		// いまの呼び出しで、書き換えて入ったリンクの名前。本文に残っていても、書き換え残しではない。
+		const introduced = new Set(
+			attempts.filter(({ rewrote }) => rewrote).map(({ rewrite }) => toTitleLc(rewrite.to)),
+		);
+		const outcomes = attempts.map(({ rewrite, planned, rewrote }): RewriteOutcome => {
 			const before = done.get(rewrite.id);
 			// 前に済ませた書き換えには、前の結果を返す。
-			if (renames.length === 0 && before !== undefined) return before;
+			if (planned === null && before !== undefined) return before;
+			const sources = planned?.sources ?? [];
+			const toLc = toTitleLc(rewrite.to);
+			// 書き換えられずに残った名前。次に行き先が変わったら、そこから書き換える。
+			const left = sources.filter((source) => {
+				const lc = toTitleLc(source);
+				return lc !== toLc && remaining.has(lc) && !introduced.has(lc);
+			});
+			const reached = rewrote || sources.some((source) => toTitleLc(source) === toLc);
 			return {
 				target: rewrite.to,
-				changed: renames.some(({ from }) => changed.has(toTitleLc(from))),
+				sources: reached ? [...left, rewrite.to] : left,
+				changed: rewrote,
 				remaining: remaining.has(toTitleLc(rewrite.from)),
-				leftover: false,
 			};
-		});
-		// 同じまとまりの、他の書き換えで入ったリンクの行き先。前の名前と同じでも、書き換え残しではない。
-		const introduced = new Set(
-			outcomes.filter(({ changed }) => changed).map(({ target }) => toTitleLc(target)),
-		);
-		const settled = rewrites.map((rewrite, index): RewriteOutcome => {
-			const outcome = outcomes[index] as RewriteOutcome;
-			const fresh = todo(rewrite).length > 0;
-			const fromLc = toTitleLc(rewrite.from);
-			return fresh
-				? { ...outcome, leftover: outcome.remaining && !introduced.has(fromLc) }
-				: outcome;
 		});
 
 		// 本文の書き換えと、済ませたことの記録を、まとめて確定する。
-		const record = () => this.#recordRewrites(rewrites, settled);
+		const record = () => this.#recordRewrites(rewrites, outcomes);
 		if (changes.length > 0) {
 			await this.#apply(changes, { also: record });
 		} else {
@@ -330,14 +337,14 @@ export class PageDO extends DurableObject {
 			// 前回、書き換えを保存したあとで台帳への知らせの予約に失敗していたら、ここで予約し直す。
 			await this.#scheduleIndexing();
 		}
-		return settled.map(({ changed, remaining }) => ({ changed, remaining }));
+		return outcomes.map(({ changed, remaining }) => ({ changed, remaining }));
 	}
 
 	/** 済ませた書き換え。台帳での番号から、そのときの行き先と結果へ。 */
 	#doneRewrites(): Map<number, RewriteOutcome> {
 		const rows = this.ctx.storage.sql
-			.exec<{ seq: number; target: string; changed: number; remaining: number; leftover: number }>(
-				"SELECT seq, target, changed, remaining, leftover FROM rewrites",
+			.exec<{ seq: number; target: string; sources: string; changed: number; remaining: number }>(
+				"SELECT seq, target, sources, changed, remaining FROM rewrites",
 			)
 			.toArray();
 		return new Map(
@@ -345,9 +352,10 @@ export class PageDO extends DurableObject {
 				row.seq,
 				{
 					target: row.target,
+					// 自分で保存した値(文字列の配列のJSON)。
+					sources: JSON.parse(row.sources) as string[],
 					changed: row.changed !== 0,
 					remaining: row.remaining !== 0,
-					leftover: row.leftover !== 0,
 				},
 			]),
 		);
@@ -364,14 +372,14 @@ export class PageDO extends DurableObject {
 			if (outcome === undefined) return;
 			if (index === 0) sql.exec("DELETE FROM rewrites WHERE seq < ?", rewrite.id);
 			sql.exec(
-				`INSERT INTO rewrites (seq, target, changed, remaining, leftover) VALUES (?, ?, ?, ?, ?)
-				ON CONFLICT (seq) DO UPDATE SET target = excluded.target, changed = excluded.changed,
-					remaining = excluded.remaining, leftover = excluded.leftover`,
+				`INSERT INTO rewrites (seq, target, sources, changed, remaining) VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT (seq) DO UPDATE SET target = excluded.target, sources = excluded.sources,
+					changed = excluded.changed, remaining = excluded.remaining`,
 				rewrite.id,
 				outcome.target,
+				JSON.stringify(outcome.sources),
 				outcome.changed ? 1 : 0,
 				outcome.remaining ? 1 : 0,
-				outcome.leftover ? 1 : 0,
 			);
 		});
 	}
