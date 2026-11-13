@@ -317,6 +317,27 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			expect(server.requests.filter((request) => request.method === "POST")).toHaveLength(1);
 		});
 
+		it("作った応答が届く前に、一覧から無効にしたリンクは、応答が届いても表示しない", async () => {
+			// 作る要求はサーバーに届いていて、一覧には、もう出ている。応答だけが、遅れている。
+			const server = stubServer({ members: [admin], invites: [invite] });
+			let finish: (response: Response) => void = () => {};
+			server.replies["POST /api/projects/team/invites"] = () =>
+				new Promise<Response>((resolve) => {
+					finish = resolve;
+				});
+			renderSettings();
+			fireEvent.click(await screen.findByRole("button", { name: "招待リンクを作る" }));
+
+			fireEvent.click(screen.getByRole("button", { name: "無効にする" }));
+			await waitFor(() => expect(server.requests).toHaveLength(2));
+			finish(Response.json({ ...invite, token: "revoked" }, { status: 201 }));
+
+			const create = screen.getByRole("button", { name: "招待リンクを作る" }) as HTMLButtonElement;
+			await waitFor(() => expect(create.disabled).toBe(false));
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(screen.queryByDisplayValue("https://amime.example/invite/revoked")).toBeNull();
+		});
+
 		it("作ったばかりのリンクを無効にしたら、一覧の読み直しを待たずに、表示を消す", async () => {
 			const server = stubServer({ members: [admin], invites: [invite] });
 			server.replies["POST /api/projects/team/invites"] = () =>

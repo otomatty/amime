@@ -127,13 +127,15 @@ function Invites({
 	const [created, setCreated] = useState<NewInvite | null>(null);
 	// 作っている途中か。途中は、もう1つ作り始めさせない(応答の順番が入れ替わると、あとから届いた前のリンクが、表示を上書きする)。
 	const [creating, setCreating] = useState(false);
+	// この画面で無効にしたリンク。作った応答が、無効にしたあとで届いても、表示しない。
+	const revoked = useRef(new Set<string>());
 	const create = async () => {
 		setCreating(true);
 		await run(async () => {
 			const invite = await createInvite(project).finally(() => setCreating(false));
 			// 作れたら、すぐに表示する(一覧の読み直しを待つと、あとから作ったリンクを、前のリンクで上書きすることがある)。
 			// 作れなかったときは、前に作ったリンクを出したままにする(まだ使えるリンクを、見失わせない)。
-			if (invite !== null) setCreated(invite);
+			if (invite !== null && !revoked.current.has(invite.id)) setCreated(invite);
 			return invite === null ? "failed" : null;
 		});
 	};
@@ -142,7 +144,10 @@ function Invites({
 			const reason = await revokeInvite(project, id);
 			// 無効にできたときにだけ、表示を消す(できなかったリンクは、まだ使える)。一覧の読み直しは、待たない。
 			// 待っているあいだに、別のリンクを作っていたら、そのリンクは消さない。
-			if (reason === null) setCreated((current) => (current?.id === id ? null : current));
+			if (reason === null) {
+				revoked.current.add(id);
+				setCreated((current) => (current?.id === id ? null : current));
+			}
 			return reason;
 		});
 	};
