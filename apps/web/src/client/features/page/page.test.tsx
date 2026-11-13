@@ -7,9 +7,22 @@ const json = (body: unknown, status = 200) =>
 
 type Handler = (url: string, init?: RequestInit) => Response | Promise<Response>;
 
-function stubFetch(handler: Handler) {
-	const fetchMock = vi.fn(async (url: string, init?: RequestInit) => handler(url, init));
-	vi.stubGlobal("fetch", fetchMock);
+/** テストで開くページのID。 */
+const PAGE_ID = "p1";
+const BY_TITLE = "/api/pages/by-title/";
+
+/**
+ * fetch を差し替える。名前からページを引く要求には、決まったIDと、URLの名前から作った名前を返す。
+ * それ以外の要求(ページの読み込みと、コミット)を handler に渡す。返すのは、handler の呼び出しの記録。
+ */
+function stubFetch(handler: Handler, info: { title?: string; problem?: string | null } = {}) {
+	const fetchMock = vi.fn(handler);
+	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+		if (!url.startsWith(BY_TITLE)) return fetchMock(url, init);
+		const name = decodeURIComponent(url.slice(BY_TITLE.length));
+		const title = info.title ?? name.replaceAll("_", " ");
+		return json({ id: PAGE_ID, title, problem: info.problem ?? null });
+	});
 	return fetchMock;
 }
 
@@ -22,12 +35,13 @@ afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
 	window.localStorage.clear();
+	window.history.replaceState(null, "", "/");
 });
 
 /** 以前のタブが端末内に残した、未送信の変更。 */
-function leavePending(page: string, changes: unknown[]) {
+function leavePending(changes: unknown[]) {
 	window.localStorage.setItem(
-		`amime:pending:${encodeURIComponent(page)}:closed-tab`,
+		`amime:pending:${PAGE_ID}:closed-tab`,
 		JSON.stringify({ savedAt: Date.now(), entries: [{ inflight: null, changes }] }),
 	);
 }
@@ -42,8 +56,41 @@ const pendingRecords = () =>
 		),
 	);
 
+const SAVED = { version: 1, lines: [{ id: "a", text: "買い物" }] };
+
+/** WebSocket の代わりを置いて、ページを開く。届けるメッセージと、送られたメッセージを扱える。 */
+async function openWithSocket() {
+	const sockets: (EventTarget & { sent: string[] })[] = [];
+	class CapturedSocket extends EventTarget {
+		static readonly OPEN = 1;
+		readonly readyState = 1;
+		readonly sent: string[] = [];
+		constructor() {
+			super();
+			sockets.push(this);
+		}
+		send(data: string) {
+			this.sent.push(data);
+		}
+		close() {}
+	}
+	vi.stubGlobal("WebSocket", CapturedSocket);
+	stubFetch(() => json(SAVED));
+	render(<Page name="買い物" />);
+	await waitFor(() => expect(lines()).toEqual(["買い物"]));
+	await waitFor(() => expect(sockets).toHaveLength(1));
+	const socket = sockets[0];
+	if (!socket) throw new Error("no socket");
+	const receive = (message: unknown) =>
+		act(() => {
+			const data = typeof message === "string" ? message : JSON.stringify(message);
+			socket.dispatchEvent(new MessageEvent("message", { data }));
+		});
+	return { socket, receive };
+}
+
 describe("Page", () => {
-	const saved = { version: 1, lines: [{ id: "a", text: "買い物" }] };
+	const saved = SAVED;
 
 	it("読み込んでいるあいだは、そのことを表示する", () => {
 		stubFetch(() => new Promise(() => {}));
@@ -176,7 +223,7 @@ describe("Page", () => {
 		});
 
 		it("前回送れなかった変更が残っていたら、復元して表示し、そのまま保存する", async () => {
-			leavePending("買い物", [{ type: "update", id: "a", text: "買い物 前回の入力" }]);
+			leavePending([{ type: "update", id: "a", text: "買い物 前回の入力" }]);
 			const fetchMock = stubFetch(echo);
 
 			render(<Page name="買い物" />);
@@ -200,7 +247,7 @@ describe("Page", () => {
 				after: null,
 				before: null,
 			};
-			leavePending("新しいページ", [title]);
+			leavePending([title]);
 			const fetchMock = stubFetch((_url, init) =>
 				init?.method === "POST"
 					? json({ version: 1, applied: [title] })
@@ -295,37 +342,101 @@ describe("Page", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	describe("他の人のカーソルと接続の状態(ADR-0023)", () => {
-		/** WebSocket の代わりを置いて、ページを開く。届けるメッセージと、送られたメッセージを扱える。 */
-		async function openWithSocket() {
-			const sockets: (EventTarget & { sent: string[] })[] = [];
-			class CapturedSocket extends EventTarget {
-				static readonly OPEN = 1;
-				readonly readyState = 1;
-				readonly sent: string[] = [];
-				constructor() {
-					super();
-					sockets.push(this);
-				}
-				send(data: string) {
-					this.sent.push(data);
-				}
-				close() {}
-			}
-			vi.stubGlobal("WebSocket", CapturedSocket);
-			stubFetch(() => json(saved));
+	describe("ページの名前(ADR-0024)", () => {
+		const path = () => decodeURIComponent(window.location.pathname);
+
+		it("名前からページを引けなければ、読み込みの失敗を表示する。やり直せる", async () => {
+			let failing = true;
+			vi.stubGlobal("fetch", async (url: string) => {
+				if (failing) return json({ error: "x" }, 500);
+				return url.startsWith(BY_TITLE)
+					? json({ id: PAGE_ID, title: "買い物", problem: null })
+					: json(saved);
+			});
 			render(<Page name="買い物" />);
+			await waitFor(() => expect(screen.getByText(/ページを読み込めませんでした/)).toBeDefined());
+
+			failing = false;
+			fireEvent.click(screen.getByRole("button", { name: "もう一度読み込む" }));
+
 			await waitFor(() => expect(lines()).toEqual(["買い物"]));
-			await waitFor(() => expect(sockets).toHaveLength(1));
-			const socket = sockets[0];
-			if (!socket) throw new Error("no socket");
-			const receive = (message: unknown) =>
-				act(() => {
-					const data = typeof message === "string" ? message : JSON.stringify(message);
-					socket.dispatchEvent(new MessageEvent("message", { data }));
-				});
-			return { socket, receive };
-		}
+		});
+
+		it("ページのAPIが無効な環境では、名前を引く時点で、そのことを表示する", async () => {
+			vi.stubGlobal("fetch", async () => json({ error: "page-api-disabled" }, 403));
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(screen.getByText(/まだ使えません/)).toBeDefined());
+		});
+
+		it("引いたIDのページを読み込む。未送信の変更も、IDごとに残す", async () => {
+			const fetchMock = stubFetch(() => json(saved));
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${PAGE_ID}`, undefined);
+		});
+
+		it("URLの名前が、ページの名前と表記だけ違うときは、URLをページの名前に合わせる", async () => {
+			window.history.replaceState(null, "", "/notes/kaimono_MEMO");
+			stubFetch(() => json(saved), { title: "Kaimono Memo" });
+
+			render(<Page name="kaimono_MEMO" />);
+
+			// URLは、編集欄を表示したあとで合わせる。
+			await waitFor(() => expect(path()).toBe("/notes/Kaimono_Memo"));
+			expect(lines()).toEqual(["買い物"]);
+		});
+
+		it("ページの名前が変わったと知らされたら、URLを新しい名前に合わせる(再読み込みしても同じページが開く)", async () => {
+			window.history.replaceState(null, "", `/${encodeURIComponent("買い物")}`);
+			const { receive } = await openWithSocket();
+
+			receive({ type: "page", title: "買い物 メモ", problem: null });
+
+			expect(path()).toBe("/買い物_メモ");
+			expect(screen.queryByRole("note")).toBeNull();
+		});
+
+		it.each([
+			["taken", "1行目と同じ名前のページが、すでにあります。"],
+			["empty", "1行目が空です。"],
+			["too-long", "1行目が長すぎて、ページの名前にできません(200文字まで)。"],
+			["reserved", "「.」と「..」は、ページの名前にできません。"],
+		])(
+			"名前を1行目に合わせられないとき(%s)は、理由と、いまの名前を案内する",
+			async (problem, reason) => {
+				const { receive } = await openWithSocket();
+
+				receive({ type: "page", title: "買い物", problem });
+
+				expect(screen.getByTestId("title-problem").textContent).toBe(
+					`${reason}このページの名前は「買い物」のままです。1行目を変えると、ページの名前も変わります。`,
+				);
+			},
+		);
+
+		it("名前を合わせられるようになったら、案内を消す", async () => {
+			const { receive } = await openWithSocket();
+			receive({ type: "page", title: "買い物", problem: "taken" });
+
+			receive({ type: "page", title: "買い物2", problem: null });
+
+			expect(screen.queryByTestId("title-problem")).toBeNull();
+		});
+
+		it("開いたときに、名前を1行目に合わせられていなければ、はじめから案内を出す", async () => {
+			stubFetch(() => json(saved), { problem: "taken" });
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(screen.getByTestId("title-problem")).toBeDefined());
+		});
+	});
+
+	describe("他の人のカーソルと接続の状態(ADR-0023)", () => {
 		const connection = () => screen.getByTestId("connection").textContent;
 		const hello = { type: "hello", version: 1 };
 

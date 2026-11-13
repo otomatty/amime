@@ -1,6 +1,6 @@
 # ADR-0003: Cloudflare 上の構成と使用するサービス
 
-- 状態: 採用
+- 状態: 採用(`ProjectDO` は [ADR-0024](0024-page-identity-and-project-index.md) で実装)
 - 日付: 2026-11-11
 
 ## 状況

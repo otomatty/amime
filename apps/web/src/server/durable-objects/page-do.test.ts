@@ -1,4 +1,4 @@
-import { evictDurableObject, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { applyChanges, type Change, type CommitId, type Line, type LineId } from "@amime/sync";
 import { describe, expect, it } from "vitest";
@@ -180,6 +180,99 @@ describe("PageDO", () => {
 				expect(count).toEqual({ count: 10000 });
 				expect(oldest).toEqual({ id: "old-2" });
 			});
+		});
+	});
+
+	describe("台帳への知らせ(ADR-0024)", () => {
+		const directory = exports.ProjectDO.getByName("test-project");
+
+		it("効いたコミットのあとで、台帳にページの1行目とバージョンを知らせる", async () => {
+			const info = await directory.open("知らせる前の名前");
+			const stub = page(info.id);
+
+			await commitTo(stub, [insertAfter(null, "a", "知らせたあとの名前")]);
+			expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+			expect(await directory.open("知らせたあとの名前")).toEqual({
+				id: info.id,
+				title: "知らせたあとの名前",
+				problem: null,
+			});
+		});
+
+		it("何も効かなかったコミットでは、知らせない", async () => {
+			const stub = page("index-no-op");
+
+			await commitTo(stub, [{ type: "delete", id: id("missing") }]);
+
+			expect(await runDurableObjectAlarm(stub)).toBe(false);
+		});
+
+		it("続けてコミットしても、知らせは最後の内容で1度だけ", async () => {
+			const info = await directory.open("続けて書く");
+			const stub = page(info.id);
+
+			await commitTo(stub, [insertAfter(null, "a", "途")]);
+			await commitTo(stub, [{ type: "update", id: id("a"), text: "途中" }]);
+			await commitTo(stub, [{ type: "update", id: id("a"), text: "書き終えた名前" }]);
+
+			expect(await runDurableObjectAlarm(stub)).toBe(true);
+			expect(await runDurableObjectAlarm(stub)).toBe(false);
+			expect((await directory.open("書き終えた名前")).id).toBe(info.id);
+			// 途中の名前は、台帳に載っていない(開くと、別の新しいページになる)。
+			expect((await directory.open("途中")).id).not.toBe(info.id);
+		});
+
+		it("知らせの予約が消えていても、同じコミットの送り直しで予約し直す", async () => {
+			// 保存したあとで予約に失敗すると、コミットは失敗として返り、端末は同じコミットを送り直す。
+			const info = await directory.open("予約し直す");
+			const stub = page(info.id);
+			const commit = { id: nextCommitId(), changes: [insertAfter(null, "a", "予約し直した名前")] };
+			await stub.commit(commit);
+			await runInDurableObject(stub, (_instance, state) => state.storage.deleteAlarm());
+
+			expect(await stub.commit(commit)).toMatchObject({ duplicate: true });
+
+			expect(await runDurableObjectAlarm(stub)).toBe(true);
+			expect((await directory.open("予約し直した名前")).id).toBe(info.id);
+		});
+
+		it("知らせ終えたあとは、送り直しが来ても予約しない", async () => {
+			const stub = page("index-settled");
+			const commit = { id: nextCommitId(), changes: [insertAfter(null, "a", "知らせ終えた")] };
+			await stub.commit(commit);
+			await runDurableObjectAlarm(stub);
+
+			await stub.commit(commit);
+
+			expect(await runDurableObjectAlarm(stub)).toBe(false);
+		});
+
+		it("知らせていない変更があることは、メモリから追い出されても覚えている", async () => {
+			const info = await directory.open("追い出される");
+			const stub = page(info.id);
+			const commit = {
+				id: nextCommitId(),
+				changes: [insertAfter(null, "a", "追い出されたあとの名前")],
+			};
+			await stub.commit(commit);
+			await runInDurableObject(stub, (_instance, state) => state.storage.deleteAlarm());
+			await evictDurableObject(stub);
+
+			await stub.commit(commit);
+
+			expect(await runDurableObjectAlarm(stub)).toBe(true);
+		});
+
+		it("行がなくなったページは、空の1行目として知らせる(名前は変わらない)", async () => {
+			const info = await directory.open("空にする");
+			const stub = page(info.id);
+			await commitTo(stub, [insertAfter(null, "a", "空にする")]);
+			await commitTo(stub, [{ type: "delete", id: id("a") }]);
+
+			await runDurableObjectAlarm(stub);
+
+			expect(await directory.open("空にする")).toEqual({ ...info, problem: "empty" });
 		});
 	});
 

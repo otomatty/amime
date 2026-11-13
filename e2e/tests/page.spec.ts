@@ -112,6 +112,70 @@ test.describe("ページの保存", () => {
 	});
 });
 
+test.describe("ページの名前", () => {
+	/** 保存された2行のページを作る。 */
+	async function createPage(page: Page, name: string) {
+		await page.goto(`/${name}`);
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Enter");
+		await page.keyboard.type("本文");
+		await expect(status(page)).toHaveText("保存済み");
+	}
+	/** 1行目を、別の本文に書き換える。 */
+	async function retitle(page: Page, title: string) {
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Shift+Home");
+		await page.keyboard.type(title);
+	}
+
+	test("1行目を書き換えると、ページの名前が変わる。URLも変わり、新しい名前で同じページが開く", async ({
+		page,
+		context,
+	}) => {
+		const name = newPageName();
+		await createPage(page, name);
+
+		await retitle(page, `${name} 改`);
+
+		// 書き換えが落ち着いてから、名前が変わる。URLは、開いたままのページでも変わる。
+		await expect(page).toHaveURL(new RegExp(`/${name}_${encodeURIComponent("改")}$`));
+		await page.reload();
+		await expectLines(page, [`${name} 改`, "本文"]);
+
+		// 前の名前は空く。開くと、まだないページになる。
+		const other = await context.newPage();
+		await other.goto(`/${name}`);
+		await expectLines(other, [name]);
+		await expect(status(other)).toHaveText("新しいページです。書き始めると保存されます");
+	});
+
+	test("同じ名前のページがすでにあるときは、名前を変えずに、そのことを案内する", async ({
+		page,
+		context,
+	}) => {
+		const taken = newPageName();
+		const name = newPageName();
+		await createPage(page, taken);
+		// 台帳に載る(保存されたページになる)のは、書き換えが落ち着いてから。先のページの名前が確かに載るのを待つ。
+		await retitle(page, `${taken}-1`);
+		await expect(page).toHaveURL(new RegExp(`/${taken}-1$`));
+		const other = await context.newPage();
+		await createPage(other, name);
+
+		await retitle(other, `${taken}-1`);
+
+		const notice = other.getByTestId("title-problem");
+		await expect(notice).toContainText("1行目と同じ名前のページが、すでにあります。");
+		await expect(notice).toContainText(`このページの名前は「${name}」のままです。`);
+		await expect(other).toHaveURL(new RegExp(`/${name}$`));
+
+		// 空いている名前にすると、名前が変わり、案内が消える。
+		await retitle(other, `${name}-2`);
+		await expect(other).toHaveURL(new RegExp(`/${name}-2$`));
+		await expect(notice).toHaveCount(0);
+	});
+});
+
 test.describe("同時編集", () => {
 	/** 1行の本文があるページを作り、もう1つのタブでも開く。 */
 	async function openInTwoTabs(page: Page, context: BrowserContext) {

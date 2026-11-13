@@ -56,8 +56,11 @@ type PageSyncOptions = {
 	 */
 	readonly placeholder: boolean;
 	readonly api: PageApi;
-	/** 他の人のカーソルと、接続の状態の知らせの届け先(ADR-0023)。保存には関わらないので、そのまま渡す。 */
-	readonly presence?: Pick<PageSocketHandlers, "onCursor" | "onLeave" | "onConnection">;
+	/**
+	 * 保存には関わらない知らせの届け先。そのまま渡す。
+	 * 他の人のカーソルと接続の状態(ADR-0023)、ページの名前(ADR-0024)。
+	 */
+	readonly listeners?: Omit<PageSocketHandlers, "onHello" | "onCommit">;
 	/** 保存の状態を知らせる。 */
 	readonly onStatus: (status: SyncStatus) => void;
 	/**
@@ -86,7 +89,7 @@ export function createPageSync({
 	initial,
 	placeholder,
 	api,
-	presence,
+	listeners,
 	onStatus,
 	onRemote,
 	onPending,
@@ -263,7 +266,7 @@ export function createPageSync({
 	}
 
 	const connection = api.subscribe({
-		...presence,
+		...listeners,
 		onHello(version) {
 			// つないだ時点でサーバーのほうが進んでいたら、切れているあいだのコミットを受け取りそこねている。
 			knownVersion = Math.max(knownVersion, version);

@@ -54,6 +54,30 @@ export type PageSnapshot = {
 	readonly lines: readonly Line[];
 };
 
+/**
+ * ページを識別するID(ADR-0024)。ページを最初に開いたときに、プロジェクトの台帳が決める。
+ * ページの名前(タイトル)を変えても変わらない。
+ */
+export type PageId = string & { readonly __brand: "PageId" };
+
+/**
+ * ページの名前を、1行目に合わせられない理由。
+ * - taken: 同じ名前のページが、すでにある
+ * - empty: 1行目が空
+ * - too-long: 1行目が、名前にするには長すぎる
+ * - reserved: 1行目が「.」か「..」(URLの中で、別の場所を指す書き方になる)
+ */
+export type TitleProblem = "taken" | "empty" | "too-long" | "reserved";
+
+/** 台帳にある、ページの情報。 */
+export type PageInfo = {
+	readonly id: PageId;
+	/** ページの名前(タイトル)。URLとリンクは、この名前でページを指す。 */
+	readonly title: string;
+	/** 名前を1行目に合わせられていなければ、その理由。合っていれば null。 */
+	readonly problem: TitleProblem | null;
+};
+
 /** コミットを識別するID。送る側が作る。同じコミットを送り直しても、サーバーは1度しか適用しない(ADR-0021)。 */
 export type CommitId = string & { readonly __brand: "CommitId" };
 
@@ -113,7 +137,9 @@ export type ServerMessage =
 	/** 他の端末のカーソルが動いたときと、接続した直後(いまいる端末のカーソル)に送る。 */
 	| { readonly type: "cursor"; readonly client: ClientId; readonly cursor: CursorPosition | null }
 	/** 他の端末が接続を閉じたときに送る。 */
-	| { readonly type: "leave"; readonly client: ClientId };
+	| { readonly type: "leave"; readonly client: ClientId }
+	/** ページの名前を、1行目に合わせて確かめたあとに送る(ADR-0024)。変わっていないこともある。 */
+	| { readonly type: "page"; readonly title: string; readonly problem: TitleProblem | null };
 
 /** まだサーバーに入っていない(かもしれない)自分の変更。 */
 export type PendingEntry = {

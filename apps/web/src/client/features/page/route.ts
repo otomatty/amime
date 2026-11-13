@@ -14,8 +14,3 @@ export function pageNameFromPath(pathname: string): string | null {
 		return raw;
 	}
 }
-
-/** ページ名から、新しいページの最初のタイトルを作る。リンクのURLは空白をアンダースコアにしているので、空白に戻す。 */
-export function titleFromName(name: string): string {
-	return name.replaceAll("_", " ");
-}

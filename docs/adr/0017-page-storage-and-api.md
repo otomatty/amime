@@ -1,6 +1,6 @@
 # ADR-0017: ページの保存方法、API、保存の進め方
 
-- 状態: 採用(リアルタイム配信は [ADR-0018](0018-realtime-delivery.md)、端末内への未送信分の保存は [ADR-0020](0020-pending-changes-on-device.md) で追加。送信に失敗したときの扱いは [ADR-0021](0021-commit-ids.md) で置き換え)
+- 状態: 採用(リアルタイム配信は [ADR-0018](0018-realtime-delivery.md)、端末内への未送信分の保存は [ADR-0020](0020-pending-changes-on-device.md) で追加。送信に失敗したときの扱いは [ADR-0021](0021-commit-ids.md) で置き換え。ページの識別のしかたとAPIのパスは [ADR-0024](0024-page-identity-and-project-index.md) で置き換え)
 - 日付: 2026-11-12
 - 関連: [ADR-0006](0006-sync-model.md)、[ADR-0009](0009-auth-and-access.md)、[ADR-0016](0016-changes-and-line-ids.md)、[ADR-0014](0014-selection-clipboard-undo.md)
 

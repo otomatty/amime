@@ -1,6 +1,6 @@
 # ADR-0020: 未送信の変更を端末内に残す
 
-- 状態: 採用(記録の形と復元の手順は [ADR-0021](0021-commit-ids.md) で置き換え)
+- 状態: 採用(記録の形と復元の手順は [ADR-0021](0021-commit-ids.md) で置き換え。記録のキーは [ADR-0024](0024-page-identity-and-project-index.md) で置き換え)
 - 日付: 2026-11-13
 - 関連: [ADR-0006](0006-sync-model.md)、[ADR-0016](0016-changes-and-line-ids.md)、[ADR-0017](0017-page-storage-and-api.md)(「タブを閉じると、まだ送っていない変更は失われる」という制約を、このADRで解消する)
 

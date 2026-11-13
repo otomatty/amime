@@ -1,21 +1,22 @@
 import { exports } from "cloudflare:workers";
-import { toTitleLc } from "@amime/shared";
-import { parseClientId, parseCommitRequest } from "@amime/sync";
+import { MAX_TITLE_LENGTH } from "@amime/shared";
+import { type PageId, parseClientId, parseCommitRequest, parsePageId } from "@amime/sync";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 
 type AppEnv = { Bindings: Cloudflare.Env };
 
-/** ページ名(タイトル)の長さの上限。 */
-const MAX_PAGE_NAME_LENGTH = 200;
 /** コミットの本文の大きさの上限(バイト)。 */
 const MAX_COMMIT_BYTES = 2 * 1024 * 1024;
 
-/**
- * ページの保存先を返す。認証とプロジェクト(P4)が入るまで、プロジェクトは1つだけ。
- * ページは、正規化したタイトルで識別する(空白と大文字小文字の違いは同じページ)。
- */
-const pageStub = (name: string) => exports.PageDO.getByName(`default/${toTitleLc(name)}`);
+/** 認証とプロジェクト(P4)が入るまで、プロジェクトは1つだけ。 */
+const PROJECT = "default";
+
+/** プロジェクトのページの台帳。名前(タイトル)から、ページのIDを引く(ADR-0024)。 */
+const directory = () => exports.ProjectDO.getByName(PROJECT);
+
+/** ページの保存先。ページは、名前を変えても変わらないIDで識別する。 */
+const pageStub = (id: PageId) => exports.PageDO.getByName(`${PROJECT}/${id}`);
 
 /** Origin ヘッダーの指すサイトが、要求を受けたこのサイトと同じか(スキーム・ホスト・ポートがすべて同じ)。 */
 function sameSite(origin: string, url: string): boolean {
@@ -48,33 +49,42 @@ const pages = new Hono<AppEnv>()
 		c.header("cache-control", "no-store");
 		return next();
 	})
-	.use("/:page/*", async (c, next) => {
-		const name = c.req.param("page");
-		if (name.length > MAX_PAGE_NAME_LENGTH) return c.json({ error: "invalid-page-name" }, 400);
-		return next();
+	// 名前からページを引く。まだないページには、IDを決める(本文は、書き込まれるまで作られない)。
+	.get("/by-title/:title", async (c) => {
+		const title = c.req.param("title");
+		if (title.length > MAX_TITLE_LENGTH) return c.json({ error: "invalid-page-name" }, 400);
+		return c.json(await directory().open(title));
 	})
-	.get("/:page", async (c) => c.json(await pageStub(c.req.param("page")).getPage()))
+	.get("/:id", async (c) => {
+		const id = parsePageId(c.req.param("id"));
+		if (!id.ok) return c.json({ error: "invalid-page" }, 400);
+		return c.json(await pageStub(id.value).getPage());
+	})
 	.post(
-		"/:page/commits",
+		"/:id/commits",
 		bodyLimit({
 			maxSize: MAX_COMMIT_BYTES,
 			onError: (c) => c.json({ error: "commit-too-large" }, 413),
 		}),
 		async (c) => {
+			const page = parsePageId(c.req.param("id"));
+			if (!page.ok) return c.json({ error: "invalid-page" }, 400);
 			const commit = parseCommitRequest(await readJson(c.req.raw));
 			if (!commit.ok) return c.json({ error: "invalid-commit" }, 400);
 			const { id, changes, client } = commit.value;
-			return c.json(await pageStub(c.req.param("page")).commit({ id, changes }, client));
+			return c.json(await pageStub(page.value).commit({ id, changes }, client));
 		},
 	)
 	// 他の端末のコミットを受け取るための WebSocket(ADR-0018)。
-	.get("/:page/socket", async (c) => {
+	.get("/:id/socket", async (c) => {
 		// 検査は Worker の側で済ませ、正しい要求だけを Durable Object に渡す。
 		if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
 			return c.json({ error: "upgrade-required" }, 426);
 		}
+		const page = parsePageId(c.req.param("id"));
+		if (!page.ok) return c.json({ error: "invalid-page" }, 400);
 		if (!parseClientId(c.req.query("client")).ok) return c.json({ error: "invalid-client" }, 400);
-		return pageStub(c.req.param("page")).fetch(c.req.raw);
+		return pageStub(page.value).fetch(c.req.raw);
 	});
 
 /** HTTP API。パスはすべて /api 配下に置き、それ以外は静的アセット(SPA)が応答する。 */

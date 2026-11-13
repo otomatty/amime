@@ -23,6 +23,7 @@ export default defineConfig(({ mode }) => ({
 		},
 		exports: {
 			PageDO: exports.durableObject({ storage: "sqlite" }),
+			ProjectDO: exports.durableObject({ storage: "sqlite" }),
 		},
 		observability: { enabled: true },
 	},
