@@ -2,7 +2,7 @@ import { toTitleLc } from "@amime/shared";
 import { classifyLines } from "./blocks.ts";
 import { parseLine } from "./line.ts";
 import { inlineNodes } from "./summary.ts";
-import type { InlineNode } from "./types.ts";
+import type { InlineNode, LineRole } from "./types.ts";
 
 /** 書き換えた行。 */
 type RenamedLine = {
@@ -32,29 +32,49 @@ function writeLink(to: string, type: "page-link" | "hashtag"): string | null {
 	return linkedTitle(bracket, "page-link") === to ? bracket : null;
 }
 
+type LinkNode = Extract<InlineNode, { type: "page-link" | "hashtag" }>;
+
+const isLink = (node: InlineNode): node is LinkNode =>
+	node.type === "page-link" || node.type === "hashtag";
+
+/** 行の中の、ページへのリンク。出てくる順。 */
+const linksIn = (raw: string, role: LineRole): LinkNode[] =>
+	inlineNodes(parseLine(raw, role)).filter(isLink);
+
+/**
+ * 1行の中の、from へのリンクを、to へのリンクに書き換える。書き換えなければ null。
+ * 書き換えた行を読み直して、リンクが、そのとおりに読まれることを確かめる。読まれ方が変わるなら、書き換えない。
+ */
+function renameInLine(raw: string, role: LineRole, fromLc: string, to: string): string | null {
+	let text = raw;
+	// 書き換えたあとの行にあるはずの、リンクの行き先。
+	const expected: string[] = [];
+	// 後ろから書き換える。前のリンクの位置が、ずれない。
+	for (const node of linksIn(raw, role).reverse()) {
+		const linked = toTitleLc(node.title);
+		const written = linked === fromLc ? writeLink(to, node.type) : null;
+		expected.unshift(written === null ? linked : toTitleLc(to));
+		if (written !== null) text = text.slice(0, node.start) + written + text.slice(node.end);
+	}
+	const actual = linksIn(text, role).map((node) => toTitleLc(node.title));
+	return text !== raw && actual.join("\n") === expected.join("\n") ? text : null;
+}
+
 /**
  * ページの名前が from から to に変わったとき、そのページへのリンクを書き換える(ADR-0028)。
  * 書き換えた行だけを返す。1行目(タイトル)と、コードの中は書き換えない。
  * to がリンクとして書けない名前なら、書き換えない(リンクは、前の名前を指したまま残る)。
+ * 書き換えると、行の中のリンクの読まれ方が変わってしまうとき(名前の中の記号が、他の記法と組になるなど)は、
+ * その行を書き換えない。
  */
 export function renameLinks(lines: readonly string[], from: string, to: string): RenamedLine[] {
 	const fromLc = toTitleLc(from);
-	const isTarget = (
-		node: InlineNode,
-	): node is Extract<InlineNode, { type: "page-link" | "hashtag" }> =>
-		(node.type === "page-link" || node.type === "hashtag") && toTitleLc(node.title) === fromLc;
 	const roles = classifyLines(lines);
 
 	return lines.flatMap((raw, index) => {
 		const role = roles[index];
 		if (index === 0 || role === undefined) return [];
-		// 後ろから書き換える。前のリンクの位置が、ずれない。
-		const targets = inlineNodes(parseLine(raw, role)).filter(isTarget).reverse();
-		let text = raw;
-		for (const node of targets) {
-			const written = writeLink(to, node.type);
-			if (written !== null) text = text.slice(0, node.start) + written + text.slice(node.end);
-		}
-		return text === raw ? [] : [{ index, text }];
+		const text = renameInLine(raw, role, fromLc, to);
+		return text === null ? [] : [{ index, text }];
 	});
 }

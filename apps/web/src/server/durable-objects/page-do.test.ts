@@ -247,8 +247,8 @@ describe("PageDO", () => {
 			]);
 			await runDurableObjectAlarm(stub);
 
-			// このページに、前の名前へのリンクが残っていなければ true。
-			expect(await stub.rewriteLinks("牛乳", "豆乳")).toBe(true);
+			// 書き換えたかどうかと、前の名前へのリンクが残っているかどうかを返す。
+			expect(await stub.rewriteLinks("牛乳", "豆乳")).toEqual({ changed: true, remaining: false });
 
 			expect(await read(stub)).toEqual({
 				version: 2,
@@ -268,9 +268,10 @@ describe("PageDO", () => {
 			const stub = page("rewrite-none");
 			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[卵]")]);
 
-			expect(await stub.rewriteLinks("牛乳", "豆乳")).toBe(true);
+			const nothing = { changed: false, remaining: false };
+			expect(await stub.rewriteLinks("牛乳", "豆乳")).toEqual(nothing);
 			// もう1度呼んでも(やり直しでも)、同じ。
-			expect(await stub.rewriteLinks("牛乳", "豆乳")).toBe(true);
+			expect(await stub.rewriteLinks("牛乳", "豆乳")).toEqual(nothing);
 
 			expect((await read(stub)).version).toBe(1);
 		});
@@ -284,7 +285,11 @@ describe("PageDO", () => {
 				insertAfter("b", "c", "[牛乳]"),
 			]);
 
-			expect(await stub.rewriteLinks("牛乳", "豆乳ヨーグルト")).toBe(false);
+			// 書き換えられた行と、書き換えられなかった行の、両方がある。
+			expect(await stub.rewriteLinks("牛乳", "豆乳ヨーグルト")).toEqual({
+				changed: true,
+				remaining: true,
+			});
 
 			expect((await read(stub)).lines).toEqual([
 				line("a", "題"),
@@ -297,7 +302,7 @@ describe("PageDO", () => {
 			const stub = page("rewrite-unwritable");
 			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
 
-			expect(await stub.rewriteLinks("牛乳", "a]b")).toBe(false);
+			expect(await stub.rewriteLinks("牛乳", "a]b")).toEqual({ changed: false, remaining: true });
 
 			expect((await read(stub)).version).toBe(1);
 		});
@@ -307,7 +312,7 @@ describe("PageDO", () => {
 			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
 			await stub.destroy();
 
-			expect(await stub.rewriteLinks("牛乳", "豆乳")).toBe(true);
+			expect(await stub.rewriteLinks("牛乳", "豆乳")).toEqual({ changed: false, remaining: false });
 
 			expect(await stub.getPage()).toBe("deleted");
 		});

@@ -72,6 +72,11 @@ export const REWRITE_BATCH = 20;
 export const MAX_REWRITE_ATTEMPTS = 5;
 /** リンクの書き換えに失敗したあと、やり直すまでの時間。 */
 const REWRITE_RETRY_MS = 30_000;
+/**
+ * 名前の変更を覚えておく時間。このあいだに台帳に載った、前の名前へのリンクも、書き換える
+ * (リンクを書いたページの反映が、名前の変更より遅れたときのため)。
+ */
+export const RENAME_MEMORY_MS = 60 * 60 * 1000;
 
 /** まだ済んでいない、リンクの書き換え。page_id のページの中の、old_lc へのリンクを、new_title へのリンクにする。 */
 type RewriteRow = {
@@ -135,6 +140,12 @@ export const MIGRATIONS: readonly string[] = [
 		new_lc TEXT NOT NULL,
 		new_title TEXT NOT NULL,
 		attempts INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE TABLE renames (
+		old_lc TEXT PRIMARY KEY,
+		new_lc TEXT NOT NULL,
+		new_title TEXT NOT NULL,
+		at INTEGER NOT NULL
 	);`,
 ];
 
@@ -285,6 +296,47 @@ export class ProjectDO extends DurableObject {
 			title,
 			oldLc,
 		);
+		this.#rememberRename(oldLc, title);
+	}
+
+	/**
+	 * 名前の変更を、しばらく覚えておく。リンクを書いたページの反映が、名前の変更より遅れると、
+	 * そのリンクは、上の予定に入らない。あとから台帳に載ったときに、書き換える(#rewriteIfRenamed)。
+	 */
+	#rememberRename(oldLc: string, title: string): void {
+		const { sql } = this.ctx.storage;
+		const newLc = toTitleLc(title);
+		const now = Date.now();
+		sql.exec("DELETE FROM renames WHERE at < ?", now - RENAME_MEMORY_MS);
+		// 前の名前を目指していた記録は、新しい名前を目指させる(名前を続けて変えた)。
+		sql.exec("UPDATE renames SET new_lc = ?, new_title = ? WHERE new_lc = ?", newLc, title, oldLc);
+		sql.exec(
+			`INSERT INTO renames (old_lc, new_lc, new_title, at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (old_lc) DO UPDATE
+			SET new_lc = excluded.new_lc, new_title = excluded.new_title, at = excluded.at`,
+			oldLc,
+			newLc,
+			title,
+			now,
+		);
+		// 元の名前に戻した。その名前へのリンクは、書き換えない。
+		sql.exec("DELETE FROM renames WHERE old_lc = new_lc");
+	}
+
+	/**
+	 * いま台帳に載ったリンク(id のページから、targetLc へ)が、少し前に名前を変えたページの、前の名前へのリンクなら、
+	 * 書き換えの予定に入れる。前の名前で新しいページができていたら、そのページへのリンクとして読む(書き換えない)。
+	 */
+	#rewriteIfRenamed(id: PageId, targetLc: string): void {
+		this.ctx.storage.sql.exec(
+			`INSERT INTO rewrites (page_id, old_lc, new_lc, new_title)
+			SELECT ?, old_lc, new_lc, new_title FROM renames
+			WHERE old_lc = ? AND at >= ?
+				AND NOT EXISTS (SELECT 1 FROM pages WHERE title_lc = renames.old_lc AND version > 0)`,
+			id,
+			targetLc,
+			Date.now() - RENAME_MEMORY_MS,
+		);
 	}
 
 	/**
@@ -320,11 +372,14 @@ export class ProjectDO extends DurableObject {
 	}
 
 	/**
-	 * ページの書き換えが済んだ。done は、前の名前へのリンクが、そのページに残っていないか。
-	 * 残っていなければ、台帳のリンク先も、新しい名前にする(書き換えたページの反映を待たない。
+	 * ページの書き換えが済んだ。changed は、書き換えたか。remaining は、前の名前へのリンクが、そのページに残っているか。
+	 * 台帳のリンク先も、そのとおりに直す(書き換えたページの反映を待たない。
 	 * 待っているあいだにもう1度名前が変わっても、そのページを見つけられる)。
 	 */
-	#rewritten(row: RewriteRow, done: boolean): void {
+	#rewritten(
+		row: RewriteRow,
+		{ changed, remaining }: { readonly changed: boolean; readonly remaining: boolean },
+	): void {
 		const { sql } = this.ctx.storage;
 		this.ctx.storage.transactionSync(() => {
 			const current = sql
@@ -332,18 +387,21 @@ export class ProjectDO extends DurableObject {
 				.toArray()[0];
 			// 書き換えているあいだに、ページが削除された。
 			if (current === undefined) return;
-			if (done) {
+			if (!remaining) {
+				sql.exec("DELETE FROM links WHERE from_id = ? AND to_lc = ?", row.page_id, row.old_lc);
+			}
+			if (changed) {
 				sql.exec(
-					"UPDATE OR REPLACE links SET to_lc = ?, title = ? WHERE from_id = ? AND to_lc = ?",
+					`INSERT INTO links (from_id, to_lc, title) VALUES (?, ?, ?)
+					ON CONFLICT (from_id, to_lc) DO UPDATE SET title = excluded.title`,
+					row.page_id,
 					row.new_lc,
 					row.new_title,
-					row.page_id,
-					row.old_lc,
 				);
 			}
 			if (current.new_lc === row.new_lc) {
 				sql.exec("DELETE FROM rewrites WHERE seq = ?", row.seq);
-			} else if (done) {
+			} else if (changed) {
 				// 書き換えているあいだに、名前がもう1度変わった。書き換えた先の名前から、いまの名前へ、続けて書き換える。
 				sql.exec("UPDATE rewrites SET old_lc = ?, attempts = 0 WHERE seq = ?", row.new_lc, row.seq);
 			}
@@ -493,6 +551,7 @@ export class ProjectDO extends DurableObject {
 		}
 		for (const [target, title] of wanted) {
 			if (current.get(target) === title) continue;
+			if (!current.has(target)) this.#rewriteIfRenamed(id, target);
 			sql.exec(
 				`INSERT INTO links (from_id, to_lc, title) VALUES (?, ?, ?)
 				ON CONFLICT (from_id, to_lc) DO UPDATE SET title = excluded.title`,

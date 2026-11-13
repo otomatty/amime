@@ -1,7 +1,7 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import type { PageSummary } from "@amime/parser";
-import type { CommitId, LineId, PageId } from "@amime/sync";
+import { type CommitId, type LineId, MAX_LINE_LENGTH, type PageId } from "@amime/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	MAX_GROUP_PAGES,
@@ -10,6 +10,7 @@ import {
 	MIGRATIONS,
 	migrate,
 	PLACEHOLDER_MAX_AGE_MS,
+	RENAME_MEMORY_MS,
 	REWRITE_BATCH,
 } from "./project-do.ts";
 
@@ -768,8 +769,8 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			return `rewrite-${serial}` as CommitId;
 		};
 		const pageOf = (name: string, id: PageId) => exports.PageDO.getByName(`test-${name}/${id}`);
-		/** 本文のあるページを作り、台帳に反映する。 */
-		async function write(name: string, title: string, ...body: string[]) {
+		/** 本文のあるページを保存する。台帳には、まだ反映しない。 */
+		async function save(name: string, title: string, ...body: string[]) {
 			const { id } = await project(name).open(title);
 			const lines = [title, ...body].map((text, index) => ({ id: `l${index}` as LineId, text }));
 			await pageOf(name, id).commit({
@@ -781,6 +782,11 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 					before: null,
 				})),
 			});
+			return id;
+		}
+		/** 本文のあるページを作り、台帳に反映する。 */
+		async function write(name: string, title: string, ...body: string[]) {
+			const id = await save(name, title, ...body);
 			await runDurableObjectAlarm(pageOf(name, id));
 			return id;
 		}
@@ -935,6 +941,134 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			expect(await queued(name)).toBe(0);
 		});
 
+		it("一部の行だけを書き換えられたページも、そのあとの名前の変更で、見つけて書き換える", async () => {
+			const name = "rw-partial";
+			const milk = await write(name, "牛乳");
+			// 2行目は、書き換えると長さの上限を超える。
+			const long = `[牛乳]${"あ".repeat(MAX_LINE_LENGTH - 4)}`;
+			const list = await write(name, "買い物", "[牛乳] を買う", long);
+			await retitle(name, milk, "豆乳ヨーグルト");
+			await rewrite(name);
+			expect(await textsOf(name, list)).toEqual(["買い物", "[豆乳ヨーグルト] を買う", long]);
+
+			// 書き換えたページの反映より先に、もう1度名前が変わる。
+			await retitle(name, milk, "オーツ");
+			await rewrite(name);
+
+			expect((await textsOf(name, list))[1]).toBe("[オーツ] を買う");
+		});
+
+		it("書き換えるリンクがもうなかったページを、新しい名前へリンクしていることにしない", async () => {
+			const name = "rw-stale";
+			const milk = await write(name, "牛乳");
+			const list = await write(name, "買い物", "[牛乳]");
+			// リンクを消した。台帳には、まだ反映していない(台帳は、リンクがあると思っている)。
+			await pageOf(name, list).commit({
+				id: nextCommit(),
+				changes: [{ type: "update", id: "l1" as LineId, text: "リンクは消した" }],
+			});
+
+			await retitle(name, milk, "豆乳");
+			await rewrite(name);
+
+			expect((await project(name).links(list)).related).toEqual([]);
+		});
+
+		describe("リンクを書いたページの反映より先に、リンク先の名前が変わったとき", () => {
+			it("あとから反映されたリンクも、新しい名前に書き換える", async () => {
+				const name = "rw-late";
+				const milk = await write(name, "牛乳");
+				const list = await save(name, "買い物", "[牛乳] を買う");
+
+				await retitle(name, milk, "豆乳");
+				// 台帳は、まだ「買い物」のリンクを知らない。
+				expect(await rewrite(name)).toBe(false);
+				await runDurableObjectAlarm(pageOf(name, list));
+
+				expect(await rewrite(name)).toBe(true);
+				expect(await textsOf(name, list)).toEqual(["買い物", "[豆乳] を買う"]);
+			});
+
+			it("続けて名前が変わっていたら、いまの名前に書き換える", async () => {
+				const name = "rw-late-chain";
+				const milk = await write(name, "牛乳");
+				const list = await save(name, "買い物", "[牛乳]");
+				await retitle(name, milk, "豆乳");
+				await retitle(name, milk, "オーツ");
+
+				await runDurableObjectAlarm(pageOf(name, list));
+				await rewrite(name);
+
+				expect(await textsOf(name, list)).toEqual(["買い物", "[オーツ]"]);
+			});
+
+			it("名前を元に戻していたら、元の名前へのリンクは、そのままにする", async () => {
+				const name = "rw-late-back";
+				const milk = await write(name, "牛乳");
+				const list = await save(name, "買い物", "[牛乳] と [豆乳]");
+				await retitle(name, milk, "豆乳");
+				await retitle(name, milk, "牛乳");
+
+				await runDurableObjectAlarm(pageOf(name, list));
+				await rewrite(name);
+
+				// 途中の名前へのリンクは、いまの名前に書き換える。
+				expect(await textsOf(name, list)).toEqual(["買い物", "[牛乳] と [牛乳]"]);
+			});
+
+			it("前の名前で、新しいページができていたら、書き換えない(そのページへのリンクとして読む)", async () => {
+				const name = "rw-late-taken";
+				const milk = await write(name, "牛乳");
+				await retitle(name, milk, "豆乳");
+				await write(name, "牛乳", "新しく作った");
+
+				const list = await write(name, "買い物", "[牛乳]");
+
+				expect(await rewrite(name)).toBe(false);
+				expect(await textsOf(name, list)).toEqual(["買い物", "[牛乳]"]);
+			});
+
+			it("名前を変えてから時間がたったあとに書いたリンクは、書き換えない(まだないページへのリンクとして残す)", async () => {
+				const name = "rw-late-old";
+				const milk = await write(name, "牛乳");
+				await retitle(name, milk, "豆乳");
+				await runInDurableObject(project(name), (_instance, state) => {
+					state.storage.sql.exec("UPDATE renames SET at = ?", Date.now() - RENAME_MEMORY_MS - 1);
+				});
+
+				const list = await write(name, "買い物", "[牛乳]");
+
+				expect(await rewrite(name)).toBe(false);
+				expect(await textsOf(name, list)).toEqual(["買い物", "[牛乳]"]);
+			});
+
+			it("もう台帳が知っているリンクは、反映のたびに書き換えの予定に入れ直さない", async () => {
+				// 書けない名前に変わったので、リンクは前の名前のまま残る。
+				const name = "rw-late-known";
+				const milk = await write(name, "牛乳");
+				const list = await write(name, "買い物", "[牛乳]");
+				await retitle(name, milk, "a]b");
+				await rewrite(name);
+				expect(await queued(name)).toBe(0);
+
+				// 他の行を書き換えて、もう1度反映する。
+				await pageOf(name, list).commit({
+					id: nextCommit(),
+					changes: [
+						{
+							type: "insert",
+							line: { id: "l9" as LineId, text: "追記" },
+							after: "l1" as LineId,
+							before: null,
+						},
+					],
+				});
+				await runDurableObjectAlarm(pageOf(name, list));
+
+				expect(await queued(name)).toBe(0);
+			});
+		});
+
 		it("書き換えに失敗したら、あとでやり直す", async () => {
 			const name = "rw-retry";
 			const milk = await write(name, "牛乳");
@@ -1037,7 +1171,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				const { sql } = state.storage;
 				// ADR-0024 の時点の形に戻す。
 				sql.exec(
-					"DROP TABLE rewrites; DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
+					"DROP TABLE renames; DROP TABLE rewrites; DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
 				);
 				sql.exec(`CREATE TABLE pages (
 					id TEXT PRIMARY KEY, title_lc TEXT NOT NULL UNIQUE, title TEXT NOT NULL, problem TEXT,

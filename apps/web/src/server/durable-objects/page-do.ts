@@ -224,11 +224,14 @@ export class PageDO extends DurableObject {
 	 * 名前が from から to に変わったページへのリンクを、書き換える(ADR-0028)。台帳が呼ぶ。
 	 * 書き換えは、ふつうのコミットと同じように保存し、開いている端末に配信する。
 	 * 何度呼んでも、結果は同じ(書き換えるリンクが残っていなければ、何もしない)。
-	 * 前の名前へのリンクが、このページに残っていなければ true を返す
+	 * 書き換えたか(changed)と、前の名前へのリンクがこのページに残っているか(remaining)を返す
 	 * (新しい名前がリンクとして書けないときなどは、残る)。
 	 */
-	async rewriteLinks(from: string, to: string): Promise<boolean> {
-		if (this.#deleted()) return true;
+	async rewriteLinks(
+		from: string,
+		to: string,
+	): Promise<{ readonly changed: boolean; readonly remaining: boolean }> {
+		if (this.#deleted()) return { changed: false, remaining: false };
 		const lines = this.#lines();
 		const texts = lines.map((line) => line.text);
 		const changes: Change[] = [];
@@ -241,7 +244,8 @@ export class PageDO extends DurableObject {
 		}
 		if (changes.length > 0) await this.#apply(changes);
 		const fromLc = toTitleLc(from);
-		return !summarizePage(texts).links.some((title) => toTitleLc(title) === fromLc);
+		const remaining = summarizePage(texts).links.some((title) => toTitleLc(title) === fromLc);
+		return { changed: changes.length > 0, remaining };
 	}
 
 	/**
