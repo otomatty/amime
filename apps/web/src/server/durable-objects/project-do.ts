@@ -441,9 +441,10 @@ export class ProjectDO extends DurableObject {
 			}
 			if (current.new_lc === row.new_lc) {
 				sql.exec("DELETE FROM rewrites WHERE seq = ?", row.seq);
-			} else if (changed) {
-				// 書き換えているあいだに、名前がもう1度変わった。書き換えた先の名前から、いまの名前へ、続けて書き換える。
-				sql.exec("UPDATE rewrites SET old_lc = ?, attempts = 0 WHERE seq = ?", row.new_lc, row.seq);
+			} else {
+				// 書き換えているあいだに、名前がもう1度変わった。予定は、同じ番号のまま残す。
+				// PageDO は、この番号で何を済ませたかを覚えている。次は、書き換えた分も、残った分も、いまの名前にする。
+				sql.exec("UPDATE rewrites SET attempts = 0 WHERE seq = ?", row.seq);
 			}
 		});
 	}

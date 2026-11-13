@@ -1127,6 +1127,25 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			expect(await textsOf(name, list)).toEqual(["買い物", "[豆乳]"]);
 		});
 
+		it("一部の行だけを書き換えているあいだに、もう1度名前が変わったら、書き換えた行も、残った行も、いまの名前にする", async () => {
+			const name = "rw-partial-during";
+			const milk = await write(name, "牛乳");
+			// 2行目は、長い名前に書き換えると、長さの上限を超える。
+			const rest = "あ".repeat(MAX_LINE_LENGTH - 4);
+			const list = await write(name, "買い物", "[牛乳] を買う", `[牛乳]${rest}`);
+			await retitle(name, milk, "豆乳ヨーグルト");
+			await intercept(name, list, async (call) => {
+				// 書き換えの最中に、短い名前に変わる。
+				if (call === 1) await project(name).index(milk, saved("麦", 3));
+			});
+
+			await rewrite(name);
+			await rewrite(name);
+
+			expect(await textsOf(name, list)).toEqual(["買い物", "[麦] を買う", `[麦]${rest}`]);
+			expect(await queued(name)).toBe(0);
+		});
+
 		it("書き換えに失敗したら、あとでやり直す", async () => {
 			const name = "rw-retry";
 			const milk = await write(name, "牛乳");
