@@ -84,11 +84,13 @@ export function useLinkCompletion({ text, column, line, role, search }: Completi
 
 	const current =
 		link !== null && found?.anchor === anchor && found.query === query && dismissed !== anchor;
-	// 書いても、そのページへのリンクにならない名前(括弧を含む、など)は、候補に出さない。
+	// その行に書いても、そのページへのリンクにならない名前(括弧を含む、など)は、候補に出さない。
 	const titles = useMemo(
 		() =>
-			current && link !== null ? found.titles.filter((title) => canCompleteLink(link, title)) : [],
-		[current, found, link],
+			current && link !== null && text !== null
+				? found.titles.filter((title) => canCompleteLink(text, link, title, role))
+				: [],
+		[current, found, link, text, role],
 	);
 	const completion: Completion | null =
 		link === null || titles.length === 0 ? null : { link, titles, active };

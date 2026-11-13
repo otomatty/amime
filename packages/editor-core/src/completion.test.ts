@@ -18,7 +18,12 @@ function complete(marked: string, title: string, kind: "text" | "table-row" = "t
 	const text = marked.replace("|", "");
 	const link = linkQueryAt(text, column, ROLES[kind]);
 	if (link === null) throw new Error("no link at the cursor");
-	const state = completeLink({ lines: ["題", text], cursor: { line: 1, column } }, link, title);
+	const state = completeLink(
+		{ lines: ["題", text], cursor: { line: 1, column } },
+		link,
+		title,
+		ROLES[kind],
+	);
 	const [, line = ""] = state.lines;
 	expect(state.cursor.line).toBe(1);
 	expect(state.anchor).toBeUndefined();
@@ -162,11 +167,27 @@ describe("テーブルの行", () => {
 describe("canCompleteLink(その名前へのリンクとして、補完できるか)", () => {
 	const link = linkQueryAt("[買", 2);
 	const tag = linkQueryAt("#買", 2);
+	/** 「|」をカーソルの位置として、その行で、title へのリンクとして補完できるか。 */
+	const canComplete = (marked: string, title: string) => {
+		const column = marked.indexOf("|");
+		const text = marked.replace("|", "");
+		const query = linkQueryAt(text, column);
+		if (query === null) throw new Error("no link at the cursor");
+		return canCompleteLink(text, query, title);
+	};
+
+	it("補完したあとの行で、そのページへのリンクとして読まれなくなる名前は、補完できない", () => {
+		// 名前の中のバッククォートが、行の後ろのバッククォートと組になって、コードになる。
+		expect(canComplete("[bu|] after `", "buy` stuff")).toBe(false);
+		expect(complete("[bu|] after `", "buy` stuff")).toBe("[bu|] after `");
+		// 行に他のバッククォートがなければ、リンクとして読まれる。
+		expect(canComplete("[bu|] after", "buy` stuff")).toBe(true);
+	});
 
 	it("[名前] と書いて、そのページへのリンクになる名前なら、補完できる", () => {
 		if (link === null || tag === null) throw new Error("no link");
-		expect(canCompleteLink(link, "買い物 メモ")).toBe(true);
-		expect(canCompleteLink(tag, "買い物 メモ")).toBe(true);
+		expect(canCompleteLink("[買", link, "買い物 メモ")).toBe(true);
+		expect(canCompleteLink("#買", tag, "買い物 メモ")).toBe(true);
 	});
 
 	it.each([
@@ -175,13 +196,13 @@ describe("canCompleteLink(その名前へのリンクとして、補完できる
 		["URLとして読まれる", "https://example.com/買い物"],
 	])("%s名前は、[名前] と書いても別のものとして読まれるので、補完できない", (_name, title) => {
 		if (link === null) throw new Error("no link");
-		expect(canCompleteLink(link, title)).toBe(false);
+		expect(canCompleteLink("[買", link, title)).toBe(false);
 	});
 
 	it("タグは、タグとして書ければ補完できる。タグとしても [名前] としても書けない名前は、補完できない", () => {
 		if (tag === null) throw new Error("no link");
-		expect(canCompleteLink(tag, "買い物.icon")).toBe(true);
-		expect(canCompleteLink(tag, "買い物[仮]")).toBe(false);
+		expect(canCompleteLink("#買", tag, "買い物.icon")).toBe(true);
+		expect(canCompleteLink("#買", tag, "買い物[仮]")).toBe(false);
 	});
 });
 

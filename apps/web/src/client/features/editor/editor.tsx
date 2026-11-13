@@ -283,7 +283,9 @@ export function Editor({
 
 	/** 書いている途中のリンクを、選んだ名前で補完する。 */
 	const pickTitle = (title: string) => {
-		if (completion !== null) run((current) => completeLink(current, completion.link, title));
+		if (completion !== null) {
+			run((current) => completeLink(current, completion.link, title, cursorRole));
+		}
 	};
 
 	/**

@@ -173,6 +173,15 @@ describe("useLinkCompletion(リンクを書いている途中の、名前の候�
 		await waitFor(() => expect(state()).toBe(opened("買い", ["買い物"], -1)));
 	});
 
+	it("その行に書くと、リンクとして読まれなくなる名前は、候補に出さない", async () => {
+		// 名前の中のバッククォートが、行の後ろのバッククォートと組になって、コードになる。
+		const search: Search = async () => ["buy` stuff", "buy"];
+
+		render(<Harness text="[bu] after `" column={3} search={search} />);
+
+		await waitFor(() => expect(state()).toBe(opened("bu", ["buy"], -1)));
+	});
+
 	it("書ける候補が1つもなければ、閉じたままにする", async () => {
 		render(<Harness text="[買い" column={3} search={async () => ["買い物[仮]"]} />);
 		await new Promise((resolve) => setTimeout(resolve, 150));

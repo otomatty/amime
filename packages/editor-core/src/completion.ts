@@ -5,6 +5,7 @@ import {
 	parseLine,
 	writePageLink,
 } from "@amime/parser";
+import { toTitleLc } from "@amime/shared";
 import { ceilToBoundary } from "./graphemes.ts";
 import { lineAtCursor } from "./state.ts";
 import type { EditorState } from "./types.ts";
@@ -78,16 +79,46 @@ export function linkQueryAt(
 	};
 }
 
-/** title へのリンクの書き方。そのページへのリンクとして書けない名前なら null。 */
-const written = (link: LinkQuery, title: string): string | null =>
-	writePageLink(title, link.kind === "bracket" ? "page-link" : "hashtag");
+/**
+ * 書いている途中のリンク(行 text の link)を、title へのリンクにした行と、リンクの後ろの位置。
+ * title へのリンクとして書けない名前(括弧を含む、URLやアイコンとして読まれる、など)なら null。
+ * 補完した行を記法として読み直して、その位置が title へのリンクとして読まれることも確かめる
+ * (名前の中の記号が、行の中の他の記号と組になって、別の記法になることがある)。
+ */
+function completed(
+	text: string,
+	link: LinkQuery,
+	title: string,
+	role: LineRole,
+): { readonly text: string; readonly column: number } | null {
+	const written = writePageLink(title, link.kind === "bracket" ? "page-link" : "hashtag");
+	if (written === null) return null;
+	// 記号([ か #)から、名前の終わりまでを置き換える。閉じる括弧がもうあれば、それも含める。
+	const from = link.start - 1;
+	const to = link.kind === "bracket" && link.closed ? link.end + 1 : link.end;
+	const line = text.slice(0, from) + written + text.slice(to);
+	const end = from + written.length;
+	const linked = inlineNodes(parseLine(line, role)).some(
+		(node) =>
+			(node.type === "page-link" || node.type === "hashtag") &&
+			node.start === from &&
+			node.end === end &&
+			toTitleLc(node.title) === toTitleLc(title),
+	);
+	return linked ? { text: line, column: end } : null;
+}
 
 /**
- * 書いている途中のリンクを、title へのリンクとして補完できるか。
- * 書いても別のものとして読まれる名前(括弧を含む、URL、アイコン、など)は、補完できない。
+ * 行 text の、書いている途中のリンクを、title へのリンクとして補完できるか。
+ * 書いても別のものとして読まれる名前は、補完できない。
  */
-export function canCompleteLink(link: LinkQuery, title: string): boolean {
-	return written(link, title) !== null;
+export function canCompleteLink(
+	text: string,
+	link: LinkQuery,
+	title: string,
+	role: LineRole = TEXT_LINE,
+): boolean {
+	return completed(text, link, title, role) !== null;
 }
 
 /**
@@ -95,18 +126,18 @@ export function canCompleteLink(link: LinkQuery, title: string): boolean {
  * 括弧のリンクは、閉じる括弧がなければ足す。タグは、タグとして書けない名前なら [名前] にする。
  * カーソルは、リンクの後ろに置く。title へのリンクとして書けない名前なら、何も変えない。
  */
-export function completeLink(state: EditorState, link: LinkQuery, title: string): EditorState {
-	const text = lineAtCursor(state);
-	const replacement = written(link, title);
-	if (replacement === null) return state;
-	// 記号([ か #)から、名前の終わりまでを置き換える。閉じる括弧がもうあれば、それも含める。
-	const from = link.start - 1;
-	const to = link.kind === "bracket" && link.closed ? link.end + 1 : link.end;
-	const completed = text.slice(0, from) + replacement + text.slice(to);
+export function completeLink(
+	state: EditorState,
+	link: LinkQuery,
+	title: string,
+	role: LineRole = TEXT_LINE,
+): EditorState {
+	const result = completed(lineAtCursor(state), link, title, role);
+	if (result === null) return state;
 	const { line } = state.cursor;
 	return {
-		lines: state.lines.toSpliced(line, 1, completed),
+		lines: state.lines.toSpliced(line, 1, result.text),
 		// 補完した文字が後ろの文字と結合することがある。その場合は、結合した文字の後ろに置く。
-		cursor: { line, column: ceilToBoundary(completed, from + replacement.length) },
+		cursor: { line, column: ceilToBoundary(result.text, result.column) },
 	};
 }
