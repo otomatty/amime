@@ -126,6 +126,30 @@ describe("AccountMenu(ログインの状態と、ログイン・ログアウト�
 		});
 	});
 
+	it.each([
+		["サーバーが名前を受け付けなかった", () => new Response(null, { status: 400 })],
+		["通信できなかった", () => Promise.reject(new Error("network"))],
+	])(
+		"開発用のログインで、%sときは、使える名前の形を伝える。入力を直すと、案内を消す",
+		async (_name, reply) => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (url: string) =>
+					url === "/api/me" ? Response.json({ user: null, login: ["dev"] }) : reply(),
+				),
+			);
+			renderMenu();
+			const input = await screen.findByRole("textbox", { name: "開発用ログインの名前" });
+			fireEvent.change(input, { target: { value: "花子" } });
+
+			fireEvent.click(screen.getByRole("button", { name: "開発用ログイン" }));
+
+			expect((await screen.findByRole("alert")).textContent).toMatch(/半角の英数字/);
+			fireEvent.change(input, { target: { value: "hanako" } });
+			expect(screen.queryByRole("alert")).toBeNull();
+		},
+	);
+
 	it("開発用のログインは、名前が空なら送らない", async () => {
 		const server = stubServer({ user: null, login: ["dev"] });
 		renderMenu();
@@ -146,6 +170,19 @@ describe("AccountMenu(ログインの状態と、ログイン・ログアウト�
 
 		expect((await screen.findByRole("alert")).textContent).toMatch(message);
 	});
+
+	it.each(["__proto__", "constructor", "toString", "other"])(
+		"知らない値(?login=%s)では、失敗の案内を出さない(画面も壊れない)",
+		async (reason) => {
+			stubServer({ user: null, login: ["google"] });
+			window.history.replaceState(null, "", `/?login=${reason}`);
+
+			renderMenu();
+
+			await screen.findByRole("link", { name: "Google でログイン" });
+			expect(screen.queryByRole("alert")).toBeNull();
+		},
+	);
 
 	it("ふつうに開いたときは、失敗の案内を出さない", async () => {
 		stubServer({ user: null, login: ["google"] });

@@ -21,6 +21,7 @@
 
 .account-dev {
 	display: inline-flex;
+	flex-wrap: wrap;
 	gap: 0.25rem;
 }
 
@@ -30,6 +31,7 @@
 
 .account-notice {
 	flex-basis: 100%;
+	width: 100%;
 	margin: 0;
 	color: var(--color-warning);
 }

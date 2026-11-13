@@ -248,7 +248,7 @@ describe("ログインの期限", () => {
 
 describe("Google でログインする", () => {
 	it("ログインを始めると、Google のログイン画面へ送り出す", async () => {
-		const { response, location } = await startGoogleLogin("/買い物");
+		const { response, location } = await startGoogleLogin(`/${encodeURIComponent("買い物")}`);
 
 		expect(response.status).toBe(302);
 		expect(`${location.origin}${location.pathname}`).toBe(
@@ -273,7 +273,8 @@ describe("Google でログインする", () => {
 	});
 
 	it("Google から戻ると、利用者を作ってログインし、もとの場所へ戻す", async () => {
-		const { location, cookie } = await startGoogleLogin("/買い物?a=1");
+		// 戻る場所は、画面が、URLのパス(符号化されたもの)をそのまま渡してくる。
+		const { location, cookie } = await startGoogleLogin(`/${encodeURIComponent("買い物")}?a=1`);
 		const state = location.searchParams.get("state") ?? "";
 		const nonce = location.searchParams.get("nonce") ?? "";
 		const claims = claimsFor(nonce);
@@ -282,7 +283,6 @@ describe("Google でログインする", () => {
 		const response = await call(`/api/auth/callback/google?code=code-1&state=${state}`, { cookie });
 
 		expect(response.status).toBe(302);
-		// ヘッダーには、URLとして書ける形(パーセント符号化)で入る。
 		expect(response.headers.get("location")).toBe(`/${encodeURIComponent("買い物")}?a=1`);
 		expect(requests).toHaveLength(1);
 		expect(requests[0]?.url).toBe("https://oauth2.googleapis.com/token");
@@ -343,7 +343,7 @@ describe("Google でログインする", () => {
 		["Google が失敗を返した", (state: string) => `error=access_denied&state=${state}`, true],
 		["始めたときの Cookie がない", (state: string) => `code=c&state=${state}`, false],
 	])("%sときは、ログインさせずにトップへ戻す", async (_name, query, withCookie) => {
-		const { location, cookie } = await startGoogleLogin("/買い物");
+		const { location, cookie } = await startGoogleLogin("/team/memo");
 		const nonce = location.searchParams.get("nonce") ?? "";
 		const requests = stubGoogle(() => tokenReply(claimsFor(nonce)), nonce);
 
@@ -418,6 +418,15 @@ describe("Google でログインする", () => {
 		);
 
 		expect(cookiesFrom(response, cookie)).not.toContain("amime_login");
+	});
+
+	it("戻る場所がとても長くても、照合に使う Cookie は、ブラウザが受け取れる大きさに収まる", async () => {
+		const { response } = await startGoogleLogin(`/${"a".repeat(999)}`);
+		const oversized = await startGoogleLogin(`/${"あ".repeat(999)}`);
+
+		const [cookie = ""] = response.headers.getSetCookie();
+		expect(cookie.length).toBeLessThan(4096);
+		expect(oversized.response.headers.getSetCookie()[0]?.length).toBeLessThan(4096);
 	});
 
 	it("戻る場所に他のサイトを指定されても、トップへ戻す", async () => {

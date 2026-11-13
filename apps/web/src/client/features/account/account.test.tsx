@@ -48,6 +48,30 @@ describe("AccountProvider / useAccount", () => {
 		await waitFor(() => expect(screen.getByRole("button").textContent).toBe("ログインしていない"));
 	});
 
+	it("読み直しが重なったら、あとから頼んだほうの結果を使う(先に頼んだほうが、遅れて届いても)", async () => {
+		const pending: ((response: Response) => void)[] = [];
+		vi.stubGlobal("fetch", () => new Promise<Response>((done) => pending.push(done)));
+		render(
+			<AccountProvider>
+				<Probe />
+			</AccountProvider>,
+		);
+		// 最初の読み込みに続けて、2回、読み直す。
+		fireEvent.click(screen.getByRole("button"));
+		fireEvent.click(screen.getByRole("button"));
+		expect(pending).toHaveLength(3);
+
+		// いちばんあとに頼んだものが、先に届く(ログアウトしたあとの状態)。
+		pending[2]?.(Response.json({ user: null, login: [] }));
+		await waitFor(() => expect(screen.getByRole("button").textContent).toBe("ログインしていない"));
+		// 前に頼んだものが、遅れて届く(ログインしていたときの状態)。
+		pending[1]?.(Response.json({ user: hanako, login: [] }));
+		pending[0]?.(Response.json({ user: hanako, login: [] }));
+		await new Promise((done) => setTimeout(done, 0));
+
+		expect(screen.getByRole("button").textContent).toBe("ログインしていない");
+	});
+
 	it("外したあとに届いた状態は、使わない", async () => {
 		let resolve: (response: Response) => void = () => {};
 		vi.stubGlobal("fetch", () => new Promise<Response>((done) => (resolve = done)));

@@ -6,6 +6,7 @@ import {
 	useContext,
 	useEffect,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 import { loadAccount } from "./api.ts";
@@ -25,16 +26,22 @@ const AccountContext = createContext<AccountContextValue>({
 /** ログインの状態を読み込み、下の部品に配る。 */
 export function AccountProvider({ children }: { readonly children: ReactNode }) {
 	const [state, setState] = useState<AccountState | null>(null);
-	const refresh = useCallback(async () => setState(await loadAccount()), []);
-	useEffect(() => {
-		let cancelled = false;
-		void loadAccount().then((loaded) => {
-			if (!cancelled) setState(loaded);
-		});
-		return () => {
-			cancelled = true;
-		};
+	// 何回目の読み込みか。読み込みが重なったら、あとから頼んだものの結果だけを使う
+	// (ログアウトしたあとに、前のログインしていた状態が遅れて届いても、戻さない)。
+	const latest = useRef(0);
+	const refresh = useCallback(async () => {
+		latest.current += 1;
+		const request = latest.current;
+		const loaded = await loadAccount();
+		if (request === latest.current) setState(loaded);
 	}, []);
+	useEffect(() => {
+		void refresh();
+		return () => {
+			// 外したあとに届いた状態は、使わない。
+			latest.current += 1;
+		};
+	}, [refresh]);
 	const value = useMemo(() => ({ state, refresh }), [state, refresh]);
 	return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>;
 }
