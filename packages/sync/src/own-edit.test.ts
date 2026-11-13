@@ -65,6 +65,20 @@ describe("revertEdit(自分の編集を打ち消す)", () => {
 			expect(revertEdit(current, typed)).toEqual([line("a", "たぶん今日は晴れ")]);
 		});
 
+		it("自分が書き換えた文字を他の人がすべて書き換えていたら、書き換える前の文字を戻さない", () => {
+			const replaced = recordEdit([line("a", "b")], [line("a", "B2")]);
+			const current = afterRemote([line("a", "B2")], update("a", "他の人の本文"));
+
+			expect(revertEdit(current, replaced)).toBe(current);
+		});
+
+		it("元にした本文を持たない変更は、そのまま置き換える", () => {
+			const current = [line("a", "他の人の本文")];
+			const edit = { forward: [update("a", "A2")], backward: [update("a", "A")] };
+
+			expect(revertEdit(current, edit)).toEqual([line("a", "A")]);
+		});
+
 		it("自分が書いた文字を他の人がすべて書き換えていたら、その行は変わらない", () => {
 			const current = afterRemote(after, update("b", "他の人の本文"));
 
@@ -120,6 +134,13 @@ describe("reapplyEdit(打ち消した編集を、もう一度行う)", () => {
 		);
 
 		expect(reapplyEdit(reverted, typed)).toEqual([line("a", "たぶん今日は晴れです")]);
+	});
+
+	it("打ち消して戻した文字を他の人がすべて書き換えていたら、もう一度書き換えない", () => {
+		const replaced = recordEdit([line("a", "b")], [line("a", "B2")]);
+		const reverted = afterRemote(revertEdit([line("a", "B2")], replaced), update("a", "別の本文"));
+
+		expect(reapplyEdit(reverted, replaced)).toBe(reverted);
 	});
 
 	it("打ち消して戻した行を他の人が書き換えていたら、その行はもう一度消さない", () => {

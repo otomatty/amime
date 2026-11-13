@@ -31,9 +31,25 @@ describe("mergeText", () => {
 		expect(mergeText("", "先", "後")).toBe("先後");
 	});
 
+	it("片方が置き換えた語の直後に、もう片方が足した文字は、置き換えた語のあとに来る", () => {
+		expect(mergeText("dog", "dogs", "cat")).toBe("cats");
+		expect(mergeText("dog", "cat", "dogs")).toBe("cats");
+		expect(mergeText("dog", "Xdog", "cat")).toBe("Xcat");
+		expect(mergeText("dog", "cat", "Xdog")).toBe("Xcat");
+	});
+
+	it("両方が同じ語を別の語に置き換えたら、先に入っていたほうを前にして、どちらも残す", () => {
+		expect(mergeText("猫", "犬", "鳥")).toBe("犬鳥");
+	});
+
 	it("同じ場所に同じ文字を足していれば、1度だけ足す", () => {
 		expect(mergeText("ab", "aXb", "aXb")).toBe("aXb");
 		expect(mergeText("abc", "aXbc", "aXbYc")).toBe("aXbYc");
+	});
+
+	it("同じ場所に足した文字が、途中まで同じでも、それぞれが足したものとして残す", () => {
+		// 2人が別々に打った文字は、どちらも入力である。同じ文字で始まっていても、片方を捨てない。
+		expect(mergeText("ab", "aXb", "aXYb")).toBe("aXXYb");
 	});
 
 	it("両方が同じ文字を消していれば、1度だけ消える", () => {
@@ -97,6 +113,70 @@ describe("mergeText", () => {
 
 	it("統合した結果を、同じ変更でもう一度統合しても、足した文字が別々の場所なら変わらない", () => {
 		expect(mergeText("abc", mergeText("abc", "aXbc", "abYc"), "abYc")).toBe("aXbYc");
+	});
+});
+
+describe("mergeText(譲る統合: 取り消しとやり直しのための規則)", () => {
+	const yielding = (base: string, current: string, incoming: string) =>
+		mergeText(base, current, incoming, { mode: "yield" });
+
+	it("置き換えようとした文字を、相手がすべて消していたら、置き換えない", () => {
+		// 自分が「b」を「B2」に書き換えたあと、他の人が行をまるごと書き換えた。取り消しても「b」は戻さない。
+		expect(yielding("B2", "他の人の本文", "b")).toBe("他の人の本文");
+		expect(yielding("B", "C", "A")).toBe("C");
+	});
+
+	it("置き換えようとした文字が一部でも残っていたら、置き換える", () => {
+		expect(yielding("dog", "dogs", "cat")).toBe("cats");
+		expect(yielding("今日は雨です", "今日は雨", "今日は晴れです")).toBe("今日は晴れ");
+	});
+
+	it("足すだけ、消すだけの変更は、ふつうの統合と同じ", () => {
+		expect(yielding("今日は晴れです", "たぶん今日は晴れです", "今日は晴れ")).toBe(
+			"たぶん今日は晴れ",
+		);
+		// 自分が消した文字を戻す。相手が同じ場所に足していても、戻す。
+		expect(yielding("ac", "aXc", "abc")).toBe("aXbc");
+		// 相手がまわりを消していても、戻す(消したのは自分ではなく、戻すのは自分の文字だけ)。
+		expect(yielding("ac", "", "abc")).toBe("b");
+	});
+
+	it("片方しか変えていなければ、変えたほうになる", () => {
+		expect(yielding("abc", "abc", "xyz")).toBe("xyz");
+		expect(yielding("abc", "xyz", "abc")).toBe("xyz");
+	});
+});
+
+describe("mergeText(手間の上限)", () => {
+	it("本文を見比べる手間が上限を超えたら、統合せずに、あとから届いた本文にする", () => {
+		const budget = { remaining: 10 };
+
+		expect(mergeText("今日は晴れ", "今日は晴れです", "たぶん今日は晴れ", { budget })).toBe(
+			"たぶん今日は晴れ",
+		);
+	});
+
+	it("統合するたびに、使った手間を上限から引く", () => {
+		const budget = { remaining: 1000 };
+
+		mergeText("abc", "aXbc", "abYc", { budget });
+
+		// 3つの本文の長さ(3 + 4 + 4)。変わった範囲に、見比べる文字はない。
+		expect(budget.remaining).toBe(1000 - 11);
+	});
+
+	it("変わった範囲を細かく見比べる手間が残っていなければ、範囲をまるごと置き換えたものとして統合する", () => {
+		const budget = { remaining: 20 };
+
+		// 「cd」と「XYZ」を見比べる手間(2 × 3)は、残り(20 - 17)を超える。
+		expect(mergeText("abcde", "abXYZe", "abcdeQ", { budget })).toBe("abXYZeQ");
+		expect(budget.remaining).toBe(3);
+	});
+
+	it("片方しか変えていなければ、手間を使わない", () => {
+		const budget = { remaining: 0 };
+
+		expect(mergeText("abc", "abc", "abXc", { budget })).toBe("abXc");
 	});
 });
 

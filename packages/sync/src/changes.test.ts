@@ -141,6 +141,20 @@ describe("applyChanges", () => {
 				expect(result.lines).toEqual([line("a", incoming)]);
 			});
 
+			it("1度に統合できる量には上限がある。超えた分は、あとから届いた本文にする", () => {
+				const long = "あ".repeat(MAX_LINE_LENGTH - 2);
+				const names = Array.from({ length: 80 }, (_, index) => `l${index}`);
+				const current = names.map((name) => line(name, `${long}先`));
+				const changes = names.map(
+					(name): Change => ({ type: "update", id: id(name), text: `後${long}`, base: long }),
+				);
+
+				const texts = applyChanges(current, changes).lines.map((merged) => merged.text);
+
+				expect(texts[0]).toBe(`後${long}先`);
+				expect(texts.at(-1)).toBe(`後${long}`);
+			});
+
 			it("元にした本文がない変更は、あとから届いた本文に置き換える", () => {
 				const current = [line("a", "今日は晴れです")];
 

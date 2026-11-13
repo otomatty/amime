@@ -49,6 +49,7 @@ async function resend(api: Pick<PageApi, "commit">, commit: Commit): Promise<Out
  * そこで、今回の送り直しで入ったコミットは、それより古い記録にまだ送っていなかった変更があれば、そのあとにもう一度載せる。
  * 以前に入っていたコミットは載せない(そのあとに他の人がした変更を、上書きしてしまう)。
  * 本文の書き換えは、もう一度載せない。順序によらず文字単位で統合されるので(ADR-0022)、載せると足した文字が2重になる。
+ * 元にした本文を持たない書き換え(以前の形の記録)は、統合されずに置き換わるので、もう一度載せる。
  *
  * サーバーに断られたコミットは、まだ送っていなかった変更として載せる(捨てると、書いたものが黙って消える)。
  */
@@ -65,7 +66,9 @@ function changesToApply(
 			records.push(inflight.changes);
 			unsent = true;
 		} else if (inflight !== null && kind === "now" && unsent) {
-			records.push(inflight.changes.filter((change) => change.type !== "update"));
+			records.push(
+				inflight.changes.filter((change) => change.type !== "update" || change.base === undefined),
+			);
 		}
 		records.push(changes);
 		unsent = unsent || changes.length > 0;

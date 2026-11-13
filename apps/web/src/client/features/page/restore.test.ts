@@ -142,6 +142,20 @@ describe("restorePage", () => {
 			]);
 		});
 
+		it("元にした本文を持たない書き換え(以前の形の記録)は、新しい記録のものが勝つ", async () => {
+			// 統合されずに置き換わるので、もう一度載せないと、古い記録の本文が残ってしまう。
+			const { api, pending } = setup([
+				{ inflight: null, changes: [update("a", "古い"), update("b", "B2")] },
+				{ inflight: commit("c2", update("a", "新しい")), changes: [] },
+			]);
+			api.load.mockResolvedValueOnce({ version: 4, lines: [line("a", "新しい"), line("b", "B")] });
+
+			expect((await restorePage(api, pending)).restored).toEqual([
+				line("a", "新しい"),
+				line("b", "B2"),
+			]);
+		});
+
 		it("同じ行の本文の書き換えは、どちらも残る。新しい記録の変更を2重に載せない(ADR-0022)", async () => {
 			const typed = (text: string): Change => ({
 				type: "update",

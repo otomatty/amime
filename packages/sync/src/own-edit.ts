@@ -1,4 +1,5 @@
 import { applyChanges, diffLines } from "./changes.ts";
+import { mergeText } from "./merge-text.ts";
 import type { Change, Line, LineId } from "./types.ts";
 
 /**
@@ -29,12 +30,13 @@ function writtenTexts(changes: readonly Change[]): Map<LineId, string> {
 }
 
 /**
- * 変更を適用する。ただし、行を消す変更は、
- * その行の本文が expected(自分が最後に書き込んだ本文)のままのときにだけ適用する。
- * 他の人がその行を書き換えていたら、その人の書いたものごと消してしまうので、行を残す。
+ * 自分の編集を打ち消す(または、もう一度行う)変更を、他の人の変更を残して適用する。
+ * expected は、それぞれの行に自分が最後に書き込んだ本文。
  *
- * 行の本文を置き換える変更は、いつも適用する。他の人がその行を書き換えていたら、
- * 変更が元にした本文(自分が最後に書き込んだ本文)との違いから、自分の変更だけを文字単位で適用する(ADR-0022)。
+ * - 行を消す変更は、行の本文が expected のままのときにだけ適用する。
+ *   他の人がその行を書き換えていたら、その人の書いたものごと消してしまうので、行を残す。
+ * - 行の本文を置き換える変更は、他の人がその行を書き換えていたら、自分の変更だけを文字単位で適用する(ADR-0022)。
+ *   ただし、自分が置き換えた文字を他の人がすべて書き換えていたら、置き換える前の文字は戻さない。
  */
 function applyKeepingOthers(
 	document: readonly Line[],
@@ -42,9 +44,17 @@ function applyKeepingOthers(
 	expected: ReadonlyMap<LineId, string>,
 ): readonly Line[] {
 	const current = new Map(document.map((line) => [line.id, line.text]));
-	const applicable = changes.filter(
-		(change) => change.type !== "delete" || current.get(change.id) === expected.get(change.id),
-	);
+	const applicable = changes.flatMap((change): Change[] => {
+		if (change.type === "delete") {
+			return current.get(change.id) === expected.get(change.id) ? [change] : [];
+		}
+		if (change.type !== "update") return [change];
+		const text = current.get(change.id);
+		// 行がなくなっていたら、適用しても何も起きない。元にした本文がなければ、そのまま置き換える。
+		if (text === undefined || change.base === undefined) return [change];
+		const merged = mergeText(change.base, text, change.text, { mode: "yield" });
+		return [{ type: "update", id: change.id, text: merged }];
+	});
 	return applyChanges(document, applicable).lines;
 }
 

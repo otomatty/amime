@@ -1,5 +1,5 @@
 import { itemAt } from "@amime/shared";
-import { mergeText } from "./merge-text.ts";
+import { type MergeBudget, mergeText } from "./merge-text.ts";
 import { MAX_LINE_LENGTH } from "./schema.ts";
 import type { Applied, Change, Line, LineId, Placement } from "./types.ts";
 
@@ -22,18 +22,28 @@ const neighbours = (lines: readonly Line[], index: number): Placement => ({
 });
 
 /**
+ * 1回の applyChanges で、統合に使える手間(見比べる本文の文字数と、細かく見比べる範囲の大きさの合計)。
+ * ふつうのコミットは、この中に十分に収まる。1つのコミットにたくさんの統合を詰め込んで、処理を長引かせることを防ぐ。
+ */
+const MERGE_BUDGET = 2_000_000;
+
+/**
  * 本文を置き換える変更を適用したあとの、行の本文(ADR-0022)。
  * 変更が元にした本文から、他の人が先に書き換えていたら、文字単位で統合する。
  * 統合した本文が1行の長さの上限を超えるなら、あとから届いた本文にする(行を、送れない長さにしないため)。
  */
-function updatedText(current: string, { text, base }: { text: string; base?: string | undefined }) {
+function updatedText(
+	current: string,
+	{ text, base }: { text: string; base?: string | undefined },
+	budget: MergeBudget,
+): string {
 	if (base === undefined || base === current) return text;
-	const merged = mergeText(base, current, text);
+	const merged = mergeText(base, current, text, { budget });
 	return merged.length > MAX_LINE_LENGTH ? text : merged;
 }
 
 /** 変更を1つ適用する(lines を書き換える)。実際に効いた変更を返す。何も起きなければ null。 */
-function applyChange(lines: Line[], change: Change): Change | null {
+function applyChange(lines: Line[], change: Change, budget: MergeBudget): Change | null {
 	switch (change.type) {
 		case "insert": {
 			if (indexOfLine(lines, change.line.id) !== -1) return null;
@@ -44,7 +54,7 @@ function applyChange(lines: Line[], change: Change): Change | null {
 		case "update": {
 			const index = indexOfLine(lines, change.id);
 			if (index === -1) return null;
-			const text = updatedText(itemAt(lines, index).text, change);
+			const text = updatedText(itemAt(lines, index).text, change, budget);
 			if (text === itemAt(lines, index).text) return null;
 			lines[index] = { id: change.id, text };
 			return { type: "update", id: change.id, text };
@@ -73,14 +83,16 @@ function applyChange(lines: Line[], change: Change): Change | null {
  * 失敗しない。対象の行がなくなっている変更は、その変更だけを捨てる
  * (他の人の変更が先に入ったあとでも、残りの変更を生かすため)。
  * - update / delete / move: 対象の行がなければ何もしない
- * - update: 元にした本文から他の人が書き換えていたら、文字単位で統合する
+ * - update: 元にした本文から他の人が書き換えていたら、文字単位で統合する。
+ *   1回に統合できる量には上限があり、超えた分は、あとから届いた本文に置き換える
  * - insert: 同じIDの行が既にあれば何もしない
  * - insert / move の位置: 前後の行がなくなっていたら、Placement の規則で近い位置に置く
  */
 export function applyChanges(lines: readonly Line[], changes: readonly Change[]): Applied {
 	const next = [...lines];
+	const budget = { remaining: MERGE_BUDGET };
 	const applied = changes
-		.map((change) => applyChange(next, change))
+		.map((change) => applyChange(next, change, budget))
 		.filter((change) => change !== null);
 	return { lines: applied.length === 0 ? lines : next, applied };
 }
