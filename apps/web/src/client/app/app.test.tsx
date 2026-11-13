@@ -15,6 +15,22 @@ describe("App", () => {
 		expect(screen.getByRole("heading", { level: 1, name: "Amime" })).toBeDefined();
 	});
 
+	it("ヘッダーに、ログインの状態を表示する", async () => {
+		const state = {
+			user: { id: "u1", name: "花子", email: "hanako@example.com", picture: null },
+			login: ["google"],
+		};
+		vi.stubGlobal("fetch", async (url: string) =>
+			url === "/api/me" ? Response.json(state) : new Response(null, { status: 403 }),
+		);
+
+		const { container } = render(<App />);
+
+		const header = container.querySelector(".app-header");
+		await waitFor(() => expect(header?.textContent).toContain("花子"));
+		expect(screen.getByRole("button", { name: "ログアウト" })).toBeDefined();
+	});
+
 	it("見出しから、トップ(ページの一覧)へ移れる", () => {
 		render(<App />);
 
@@ -109,7 +125,8 @@ describe("App", () => {
 		expect(screen.getByText(/この画面は試し書き用です/)).toBeDefined();
 		// 名前で探す欄のための問い合わせだけを行う。
 		await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-		expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/pages/titles?q="]);
+		// ログインの状態と、探す欄が使えるかの確認だけ。一覧は読み込まない。
+		expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/me", "/api/pages/titles?q="]);
 	});
 
 	it("トップ以外のパスでは、その名前のページを読み込む", async () => {

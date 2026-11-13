@@ -102,6 +102,8 @@ test.describe("エディタ", () => {
 
 	test("折り返した行は、インデントの位置で揃う", async ({ page }) => {
 		await page.setViewportSize({ width: 420, height: 800 });
+		// 幅が狭いと、ヘッダーは、ログインの操作が出たところで2段になる。行の位置が決まるのを待つ。
+		await expect(page.getByRole("button", { name: "開発用ログイン" })).toBeVisible();
 		await clickLineEnd(page, 2); // 「 1段目」
 		await page.keyboard.type("あ".repeat(60));
 
@@ -122,6 +124,8 @@ test.describe("エディタ(画面の操作)", () => {
 
 	test("折り返した行の1段目の右の余白を押すと、1段目の末尾にカーソルが入る", async ({ page }) => {
 		await page.setViewportSize({ width: 420, height: 800 });
+		// 幅が狭いと、ヘッダーは、ログインの操作が出たところで2段になる。行の位置が決まるのを待つ。
+		await expect(page.getByRole("button", { name: "開発用ログイン" })).toBeVisible();
 		await clickLineEnd(page, 2); // 「 1段目」
 		await page.keyboard.type("あ".repeat(60));
 		await page.keyboard.press("Escape");
@@ -161,8 +165,8 @@ test.describe("エディタ(画面の操作)", () => {
 		await page.keyboard.press("Escape");
 		await page.keyboard.press("Shift+Tab");
 
-		// 編集欄の前にある、フォーカスできる要素は、名前でページを探す欄。
-		await expect(page.getByRole("combobox", { name: "ページを探す" })).toBeFocused();
+		// 編集欄の前にある、フォーカスできる要素は、ヘッダーの最後の操作(E2Eの環境では、開発用ログインのボタン)。
+		await expect(page.getByRole("button", { name: "開発用ログイン" })).toBeFocused();
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
 	});
 

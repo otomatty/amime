@@ -9,8 +9,9 @@ import {
 } from "@amime/sync";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-
-type AppEnv = { Bindings: Cloudflare.Env };
+import { session } from "./auth/session.ts";
+import { type AppEnv, readJson, sameSite } from "./context.ts";
+import { accountState, auth } from "./routes/auth.ts";
 
 /** コミットの本文の大きさの上限(バイト)。 */
 const MAX_COMMIT_BYTES = 2 * 1024 * 1024;
@@ -27,15 +28,6 @@ const directory = () => exports.ProjectDO.getByName(PROJECT);
 /** ページの保存先。ページは、名前を変えても変わらないIDで識別する。 */
 const pageStub = (id: PageId) => exports.PageDO.getByName(`${PROJECT}/${id}`);
 
-/** Origin ヘッダーの指すサイトが、要求を受けたこのサイトと同じか(スキーム・ホスト・ポートがすべて同じ)。 */
-function sameSite(origin: string, url: string): boolean {
-	try {
-		return new URL(origin).origin === new URL(url).origin;
-	} catch {
-		return false;
-	}
-}
-
 /** 0以上の整数の問い合わせ。 */
 const COUNT = /^\d{1,9}$/;
 
@@ -49,14 +41,6 @@ function countQuery(
 ): Partial<Record<"limit" | "offset", number>> | null {
 	if (value === undefined) return {};
 	return COUNT.test(value) ? { [key]: Number(value) } : null;
-}
-
-async function readJson(request: Request): Promise<unknown> {
-	try {
-		return await request.json();
-	} catch {
-		return null;
-	}
 }
 
 /** ページの読み書き。 */
@@ -174,4 +158,8 @@ export const app = new Hono<AppEnv>()
 	.basePath("/api")
 	.get("/health", (c) => c.json({ status: "ok" }))
 	.route("/pages", pages)
+	// ここから下は、ログインの状態を読む(ADR-0032)。
+	.use(session)
+	.get("/me", (c) => c.json(accountState(c.env, c.var.user)))
+	.route("/auth", auth)
 	.notFound((c) => c.json({ error: "not-found" }, 404));

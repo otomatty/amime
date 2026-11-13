@@ -1,3 +1,10 @@
+export {
+	type Account,
+	type AccountState,
+	type LoginMethod,
+	parseAccountState,
+	type UserId,
+} from "./account.ts";
 export { applyChanges, diffLines } from "./changes.ts";
 export { type LineTracker, startTracking, trackLines } from "./line-ids.ts";
 export { mapColumn } from "./merge-text.ts";

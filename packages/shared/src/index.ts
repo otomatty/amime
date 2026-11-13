@@ -1,6 +1,8 @@
+export { type Identity, readIdentity } from "./identity.ts";
 export { InvariantError, invariant } from "./invariant.ts";
 export { itemAt } from "./item-at.ts";
 export { err, ok, type Result } from "./result.ts";
+export { safeReturnPath } from "./return-path.ts";
 export { foldText, highlight, matchingLines, textTerms } from "./text-search.ts";
 export {
 	MAX_TITLE_LENGTH,
