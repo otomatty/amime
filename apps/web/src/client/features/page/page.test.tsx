@@ -166,7 +166,9 @@ describe("Page", () => {
 			fireEvent.mouseDown(screen.getByTestId("line"));
 			type("牛乳");
 
-			expect(pendingRecords()).toEqual([[{ type: "update", id: "a", text: "買い物牛乳" }]]);
+			expect(pendingRecords()).toEqual([
+				[{ type: "update", id: "a", text: "買い物牛乳", base: "買い物" }],
+			]);
 			await waitFor(() => expect(status()).toBe("保存しています…"));
 			respond();
 			await waitFor(() => expect(status()).toBe("保存済み"));

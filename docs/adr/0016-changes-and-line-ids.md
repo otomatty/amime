@@ -1,6 +1,6 @@
 # ADR-0016: 変更の種類と適用の規則、行IDの割り当て
 
-- 状態: 採用(同じ行の同時編集の扱いは、実際の使い心地を見て見直す。取り消しで戻した行のIDの制約は [ADR-0019](0019-undo-own-edits.md) で解消)
+- 状態: 採用(同じ行の同時編集の扱いは [ADR-0022](0022-merge-within-a-line.md) で置き換え。取り消しで戻した行のIDの制約は [ADR-0019](0019-undo-own-edits.md) で解消)
 - 日付: 2026-11-12
 - 関連: [ADR-0006](0006-sync-model.md)(このADRが、変更の種類と適用の規則を置き換える)、[ADR-0005](0005-editor-architecture.md)、[ADR-0015](0015-outline-editing.md)
 

@@ -22,7 +22,17 @@ export type Placement = {
 /** ページへの変更の最小単位。すべて行IDで対象を指す。 */
 export type Change =
 	| ({ readonly type: "insert"; readonly line: Line } & Placement)
-	| { readonly type: "update"; readonly id: LineId; readonly text: string }
+	| {
+			readonly type: "update";
+			readonly id: LineId;
+			readonly text: string;
+			/**
+			 * この変更を作ったときの、行の本文(ADR-0022)。
+			 * 適用するときに行の本文がこれと違っていたら、他の人が先に書き換えているので、文字単位で統合する。
+			 * なければ、text にそのまま置き換える。
+			 */
+			readonly base?: string | undefined;
+	  }
 	| { readonly type: "delete"; readonly id: LineId }
 	| ({ readonly type: "move"; readonly id: LineId } & Placement);
 
@@ -87,6 +97,11 @@ export type ServerMessage =
 
 /** まだサーバーに入っていない(かもしれない)自分の変更。 */
 export type PendingEntry = {
+	/**
+	 * この変更を残した端末(タブ)。端末内に残すときに添える。
+	 * 復元のときに、内容が同じ別の変更と区別するために使う(ADR-0022)。
+	 */
+	readonly origin?: ClientId | undefined;
 	/** 送信して、応答を受け取っていないコミット。同じIDで送り直せば、二重に適用されない。 */
 	readonly inflight: Commit | null;
 	/** まだ送っていない変更。送信中のコミットが入ったあとの文書に対する変更。 */

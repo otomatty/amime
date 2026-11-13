@@ -53,9 +53,11 @@ export function hasUnsaved(session: Session): boolean {
 	return session.inflight !== null || !sameLines(session.confirmed, session.local);
 }
 
+/** 変更を送るときの、本文の長さ。本文を置き換える変更は、元にした本文も一緒に送る。 */
 function textLength(change: Change): number {
 	if (change.type === "insert") return change.line.text.length;
-	return change.type === "update" ? change.text.length : 0;
+	// join は、ない要素(元にした本文を持たない変更)を空文字として扱う。
+	return change.type === "update" ? [change.text, change.base].join("").length : 0;
 }
 
 /**
@@ -69,6 +71,20 @@ function firstCommit(changes: readonly Change[]): readonly Change[] {
 		return index > 0 && (index >= MAX_CHANGES || length > MAX_COMMIT_TEXT_LENGTH);
 	});
 	return end === -1 ? changes : changes.slice(0, end);
+}
+
+/**
+ * 変更の列を、1つのコミットに収まる大きさに、順序を保って分ける。
+ * 端末内に残してあった変更を、画面を通さずにサーバーへ入れるときに使う(ADR-0022)。
+ */
+export function splitChanges(changes: readonly Change[]): (readonly Change[])[] {
+	const parts: (readonly Change[])[] = [];
+	for (let rest = changes; rest.length > 0; ) {
+		const part = firstCommit(rest);
+		parts.push(part);
+		rest = rest.slice(part.length);
+	}
+	return parts;
 }
 
 /**

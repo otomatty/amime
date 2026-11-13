@@ -1,5 +1,6 @@
 export { applyChanges, diffLines } from "./changes.ts";
 export { type LineTracker, startTracking, trackLines } from "./line-ids.ts";
+export { mapColumn } from "./merge-text.ts";
 export { type OwnEdit, reapplyEdit, recordEdit, revertEdit } from "./own-edit.ts";
 export {
 	parseClientId,
@@ -21,6 +22,7 @@ export {
 	type Session,
 	sameLines,
 	send,
+	splitChanges,
 	withPending,
 } from "./session.ts";
 export type {

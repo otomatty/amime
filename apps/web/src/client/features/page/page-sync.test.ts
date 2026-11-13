@@ -126,7 +126,7 @@ describe("createPageSync", () => {
 
 		await vi.advanceTimersByTimeAsync(1);
 
-		expect(server.commits).toEqual([[{ type: "update", id: "a", text: "A3" }]]);
+		expect(server.commits).toEqual([[{ type: "update", id: "a", text: "A3", base: "A" }]]);
 	});
 
 	it("保存中に書き足した分は、保存が終わりしだい続けて保存する", async () => {
@@ -326,7 +326,7 @@ describe("createPageSync", () => {
 			sync.edit([line("a", "A2")]);
 			expect(pendings.at(-1)).toEqual({
 				inflight: null,
-				changes: [{ type: "update", id: "a", text: "A2" }],
+				changes: [{ type: "update", id: "a", text: "A2", base: "A" }],
 			});
 			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
 
@@ -343,7 +343,10 @@ describe("createPageSync", () => {
 
 			// 送ったコミットは、IDと一緒に残す。次に開いたタブが、同じIDで送り直せる。
 			expect(pendings.at(-1)).toEqual({
-				inflight: { id: "commit-1", changes: [{ type: "update", id: "a", text: "A2" }] },
+				inflight: {
+					id: "commit-1",
+					changes: [{ type: "update", id: "a", text: "A2", base: "A" }],
+				},
 				changes: [],
 			});
 		});
@@ -356,7 +359,7 @@ describe("createPageSync", () => {
 			expect(latest()?.status).toBe("unsaved");
 			expect(pendings.at(-1)).toEqual({
 				inflight: null,
-				changes: [{ type: "update", id: "a", text: "前回の入力" }],
+				changes: [{ type: "update", id: "a", text: "前回の入力", base: "A" }],
 			});
 			await vi.advanceTimersByTimeAsync(0);
 

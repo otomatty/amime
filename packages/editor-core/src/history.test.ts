@@ -290,14 +290,73 @@ describe("履歴", () => {
 			expect(undo(undone)).toBe(undone);
 		});
 
-		it("やり直せない編集(他の人が先に書き換えた行)は飛ばす", () => {
+		it("自分が書き換えた行を他の人も書き換えていたら、自分の変更だけを取り消す(ADR-0022)", () => {
+			const edited = applyEdit(start, type("!"), ungrouped());
+			expect(edited.present.lines).toEqual(["題", "本!文", "末尾"]);
+
+			const undone = undo(receive(edited, { type: "update", id: id("t-1"), text: "本!文です" }));
+
+			expect(undone.present.lines).toEqual(["題", "本文です", "末尾"]);
+			expect(redo(undone).present.lines).toEqual(["題", "本!文です", "末尾"]);
+		});
+
+		it("やり直すとき、他の人が先に書き換えた行には、その人の変更を残して行う(ADR-0022)", () => {
 			const undone = undo(applyEdit(start, type("!"), ungrouped()));
-			const overwritten = receive(undone, { type: "update", id: id("t-1"), text: "他の人の本文" });
+			const rewritten = receive(undone, { type: "update", id: id("t-1"), text: "他の人の本文" });
 
-			const redone = redo(overwritten);
+			const redone = redo(rewritten);
 
-			expect(redone.present.lines).toEqual(["題", "他の人の本文", "末尾"]);
+			expect(redone.present.lines).toEqual(["題", "他の人の本!文", "末尾"]);
+		});
+
+		it("やり直せない編集(他の人が消した行)は飛ばす", () => {
+			const undone = undo(applyEdit(start, type("!"), ungrouped()));
+			const deleted = receive(undone, { type: "delete", id: id("t-1") });
+
+			const redone = redo(deleted);
+
+			expect(redone.present.lines).toEqual(["題", "末尾"]);
 			expect(redo(redone)).toBe(redone);
+		});
+
+		describe("カーソルのある行を、他の人が書き換えたとき(ADR-0022)", () => {
+			const update = (text: string): Change => ({ type: "update", id: id("t-1"), text });
+
+			it("カーソルより前に文字が足されたら、カーソルは同じ文字のそばにとどまる", () => {
+				expect(receive(start, update("たぶん本文")).present).toEqual(
+					state(["題", "たぶん本文", "末尾"], 1, 4),
+				);
+			});
+
+			it("カーソルより後ろに文字が足されても、カーソルは動かない", () => {
+				expect(receive(start, update("本文です")).present).toEqual(
+					state(["題", "本文です", "末尾"], 1, 1),
+				);
+			});
+
+			it("カーソルより前の文字が消されたら、その分だけ前に寄る", () => {
+				const inside = createHistory(state(["題", "本文です", "末尾"], 1, 3));
+
+				expect(receive(inside, update("文です")).present).toEqual(
+					state(["題", "文です", "末尾"], 1, 2),
+				);
+			});
+
+			it("選択の始点も、同じ文字のそばにとどまる", () => {
+				const selecting: History = {
+					...start,
+					present: {
+						...start.present,
+						anchor: { line: 1, column: 1 },
+						cursor: { line: 1, column: 2 },
+					},
+				};
+
+				expect(receive(selecting, update("たぶん本文")).present).toMatchObject({
+					anchor: { line: 1, column: 4 },
+					cursor: { line: 1, column: 5 },
+				});
+			});
 		});
 
 		it("取り消しで文書が空になるときは、空の1行を置く", () => {

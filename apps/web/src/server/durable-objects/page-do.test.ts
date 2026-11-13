@@ -47,6 +47,30 @@ describe("PageDO", () => {
 		});
 	});
 
+	it("同じ行を同時に書き換えたコミットは、文字単位で統合する(ADR-0022)", async () => {
+		const stub = page("merge");
+		const typed = (text: string): Change => ({
+			type: "update",
+			id: id("a"),
+			text,
+			base: "今日は👨‍👩‍👧と公園",
+		});
+		await commitTo(stub, [insertAfter(null, "a", "今日は👨‍👩‍👧と公園")]);
+
+		// 2人が、同じ本文を元に、別々の場所を書き換えた。
+		const first = await commitTo(stub, [typed("今日は👨‍👩‍👧と公園へ行く")]);
+		const second = await commitTo(stub, [typed("たぶん今日は👨‍👩‍👧と動物園")]);
+
+		expect(first.applied).toEqual([
+			{ type: "update", id: id("a"), text: "今日は👨‍👩‍👧と公園へ行く" },
+		]);
+		// 効いた変更は、統合した結果への置き換えとして配る。絵文字は途中で切らない。
+		expect(second.applied).toEqual([
+			{ type: "update", id: id("a"), text: "たぶん今日は👨‍👩‍👧と動物園へ行く" },
+		]);
+		expect((await stub.getPage()).lines).toEqual([line("a", "たぶん今日は👨‍👩‍👧と動物園へ行く")]);
+	});
+
 	it("行の並び順を保つ", async () => {
 		const stub = page("order");
 

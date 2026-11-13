@@ -13,6 +13,7 @@ import {
 	resync,
 	type Session,
 	send,
+	splitChanges,
 	withPending,
 } from "./session.ts";
 import type { Change, CommitId, CommitResult, Line, LineId } from "./types.ts";
@@ -82,7 +83,9 @@ describe("セッション(1つの端末から見たページの状態)", () => {
 	it("送信では、確定した文書との差分を送る", () => {
 		const session = edit(createSession(snapshot), [line("a", "A2"), line("b")]);
 
-		expect(mustSend(session).changes).toEqual([{ type: "update", id: id("a"), text: "A2" }]);
+		expect(mustSend(session).changes).toEqual([
+			{ type: "update", id: id("a"), text: "A2", base: "A" },
+		]);
 	});
 
 	it("送信中は、次の送信を始めない(1度に1つのコミットだけを送る)", () => {
@@ -110,7 +113,9 @@ describe("セッション(1つの端末から見たページの状態)", () => {
 		const next = acknowledge(typedMore, { version: 4, applied: sending.changes });
 
 		expect(next?.local).toEqual([line("a", "A2"), line("b", "B2")]);
-		expect(next && mustSend(next).changes).toEqual([{ type: "update", id: id("b"), text: "B2" }]);
+		expect(next && mustSend(next).changes).toEqual([
+			{ type: "update", id: id("b"), text: "B2", base: "B" },
+		]);
 	});
 
 	it("何も効かなかったコミットでは、バージョンは進まない", () => {
@@ -199,7 +204,7 @@ describe("pendingChanges / withPending(未送信の変更の取り出しと、�
 		expect(pendingChanges(session)).toEqual({
 			inflight: null,
 			changes: [
-				{ type: "update", id: id("a"), text: "A2" },
+				{ type: "update", id: id("a"), text: "A2", base: "A" },
 				{ type: "insert", line: line("n"), after: id("b"), before: null },
 			],
 		});
@@ -213,7 +218,7 @@ describe("pendingChanges / withPending(未送信の変更の取り出しと、�
 
 		expect(pendingChanges(typedMore)).toEqual({
 			inflight: sending.commit,
-			changes: [{ type: "update", id: id("n"), text: "書きかけの続き" }],
+			changes: [{ type: "update", id: id("n"), text: "書きかけの続き", base: "書きかけ" }],
 		});
 	});
 
@@ -261,7 +266,9 @@ describe("receive(他の人のコミットの受け取り)", () => {
 		const next = receive(session, fromOther(4, insertX));
 
 		expect(next?.local).toEqual([line("x"), line("a"), line("b", "B2")]);
-		expect(next && mustSend(next).changes).toEqual([{ type: "update", id: id("b"), text: "B2" }]);
+		expect(next && mustSend(next).changes).toEqual([
+			{ type: "update", id: id("b"), text: "B2", base: "B" },
+		]);
 	});
 
 	it("送信中に受け取ったら、送信中のままにして、あとから届く応答をそのまま反映できる", () => {
@@ -296,6 +303,30 @@ describe("receive(他の人のコミットの受け取り)", () => {
 
 	it("あいだのバージョンが抜けていたら、反映せず、読み直しを求める", () => {
 		expect(receive(createSession(snapshot), fromOther(5, insertX))).toBeNull();
+	});
+});
+
+describe("splitChanges(変更の列を、コミットに収まる大きさに分ける)", () => {
+	const deletes = (count: number): Change[] =>
+		Array.from({ length: count }, (_, index) => ({ type: "delete", id: id(`n${index}`) }));
+
+	it("変更がなければ、空", () => {
+		expect(splitChanges([])).toEqual([]);
+	});
+
+	it("1つのコミットに収まるなら、分けない", () => {
+		const changes = deletes(3);
+
+		expect(splitChanges(changes)).toEqual([changes]);
+	});
+
+	it("変更の数が上限を超えるなら、順序を保って分ける", () => {
+		const changes = deletes(MAX_CHANGES * 2 + 1);
+
+		const parts = splitChanges(changes);
+
+		expect(parts.map((part) => part.length)).toEqual([MAX_CHANGES, MAX_CHANGES, 1]);
+		expect(parts.flat()).toEqual(changes);
 	});
 });
 
@@ -335,6 +366,18 @@ describe("1つのコミットに収まらない変更", () => {
 		expect(server.snapshot().lines).toEqual(local);
 	});
 
+	it("本文を置き換える変更は、元にした本文も一緒に送るので、その長さも数える", () => {
+		const text = "あ".repeat(MAX_COMMIT_TEXT_LENGTH / 8);
+		const before = Array.from({ length: 10 }, (_, index) => line(`n${index}`, text));
+		const server = createServer(before);
+		const local = before.map((current) => ({ ...current, text: `${current.text}!` }));
+
+		const { commits } = saveAll(edit(createSession(server.snapshot()), local), server);
+
+		expect(commits.map((changes) => changes.length)).toEqual([3, 3, 3, 1]);
+		expect(server.snapshot().lines).toEqual(local);
+	});
+
 	it("1つの変更だけで本文の上限を超えるときも、その1つは送る(送れるかどうかはサーバーが決める)", () => {
 		const local = [line("a", "x".repeat(MAX_COMMIT_TEXT_LENGTH + 1)), line("b")];
 
@@ -371,11 +414,28 @@ describe("複数の端末が同じページを編集したとき", () => {
 	function editLocal(local: readonly Line[], seed: number, text: string, newId: LineId) {
 		const index = local.length === 0 ? 0 : seed % local.length;
 		const target = local[index];
-		const action = target === undefined ? 0 : seed % 4;
+		const action = target === undefined ? 0 : seed % 6;
 		if (target === undefined || action === 0) return local.toSpliced(index, 0, line(newId, text));
 		if (action === 1) return local.with(index, { id: target.id, text });
 		if (action === 2) return local.toSpliced(index, 1);
-		return [...local.toSpliced(index, 1), target];
+		if (action === 3) return [...local.toSpliced(index, 1), target];
+		// 行の中に文字を足す、行の中の文字を消す(同じ行を同時に書き換えると、文字単位で統合される)。
+		const at = (seed >> 3) % (target.text.length + 1);
+		const typed =
+			action === 4
+				? target.text.slice(0, at) + text + target.text.slice(at)
+				: target.text.slice(0, at) + target.text.slice(at + 1);
+		return local.with(index, { id: target.id, text: typed });
+	}
+
+	/** seed から決まる行の、seed から決まる位置に、文字を足す。 */
+	function typeLocal(local: readonly Line[], seed: number, text: string) {
+		const index = seed % local.length;
+		const target = local[index];
+		if (target === undefined) throw new Error("no line to type in");
+		const at = (seed >> 3) % (target.text.length + 1);
+		const typed = target.text.slice(0, at) + text + target.text.slice(at);
+		return local.with(index, { id: target.id, text: typed });
 	}
 
 	/**
@@ -398,9 +458,9 @@ describe("複数の端末が同じページを編集したとき", () => {
 		const world = {
 			server,
 			sessionOf,
-			edit(who: number, seed: number, text: string, newId: LineId) {
+			edit(who: number, change: (local: readonly Line[]) => readonly Line[]) {
 				const session = sessionOf(who);
-				sessions[who] = edit(session, editLocal(session.local, seed, text, newId));
+				sessions[who] = edit(session, change(session.local));
 			},
 			send(who: number) {
 				const sending = trySend(sessionOf(who));
@@ -451,7 +511,9 @@ describe("複数の端末が同じページを編集したとき", () => {
 				steps.forEach((current, serial) => {
 					if (current.type === "edit") {
 						const newId = id(`c${current.client}-${serial}`);
-						world.edit(current.client, current.seed, current.text, newId);
+						world.edit(current.client, (local) =>
+							editLocal(local, current.seed, current.text, newId),
+						);
 					} else {
 						world[current.type](current.client);
 					}
@@ -468,6 +530,47 @@ describe("複数の端末が同じページを編集したとき", () => {
 					expect(latest.local).toEqual(world.server.snapshot().lines);
 					expect(world.sessionOf(who).local).toEqual(world.server.snapshot().lines);
 					expect(hasUnsaved(latest)).toBe(false);
+				}
+			}),
+			{ numRuns: 500 },
+		);
+	});
+
+	it("全員が同じ行に同時に文字を足しても、足した文字はどれも失われず、2重にもならない(ADR-0022)", () => {
+		const typing: fc.Arbitrary<Step> = fc.oneof(
+			fc.record({
+				type: fc.constant("edit" as const),
+				client,
+				seed: fc.nat(),
+				text: fc.constant(""),
+			}),
+			fc.record({ type: fc.constantFrom("send", "respond", "deliver"), client }),
+		);
+		fc.assert(
+			fc.property(fc.array(typing, { maxLength: 40 }), (steps) => {
+				const world = createWorld();
+				/** 足した文字。1文字ずつ、すべて違う文字にする。 */
+				const typed: string[] = [];
+
+				steps.forEach((current, serial) => {
+					if (current.type === "edit") {
+						const character = String.fromCodePoint(0x4e00 + serial);
+						typed.push(character);
+						world.edit(current.client, (local) => typeLocal(local, current.seed, character));
+					} else {
+						world[current.type](current.client);
+					}
+				});
+				for (const who of CLIENTS) world.settle(who);
+				for (const who of CLIENTS) world.settle(who);
+
+				const text = world.server
+					.snapshot()
+					.lines.map((current) => current.text)
+					.join("");
+				expect([...text].toSorted()).toEqual([..."ABC", ...typed].toSorted());
+				for (const who of CLIENTS) {
+					expect(world.sessionOf(who).local).toEqual(world.server.snapshot().lines);
 				}
 			}),
 			{ numRuns: 500 },

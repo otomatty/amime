@@ -41,7 +41,8 @@ const changeSchema = <Text extends v.GenericSchema<unknown, string>>(text: Text)
 			line: v.object({ id: LineIdSchema, text }),
 			...placement,
 		}),
-		v.object({ type: v.literal("update"), id: LineIdSchema, text }),
+		// base は、この変更が元にした本文(ADR-0022)。本文と同じ検査をする。
+		v.object({ type: v.literal("update"), id: LineIdSchema, text, base: v.optional(text) }),
 		v.object({ type: v.literal("delete"), id: LineIdSchema }),
 		v.object({ type: v.literal("move"), id: LineIdSchema, ...placement }),
 	]);
@@ -83,6 +84,7 @@ const PendingRecordSchema = v.object({
 	savedAt: v.pipe(v.number(), v.minValue(0)),
 	entries: v.array(
 		v.object({
+			origin: v.optional(ClientIdSchema),
 			inflight: v.nullable(v.object({ id: CommitIdSchema, changes: StoredChangesSchema })),
 			changes: StoredChangesSchema,
 		}),

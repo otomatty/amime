@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { applyChanges } from "./changes.ts";
 import { reapplyEdit, recordEdit, revertEdit } from "./own-edit.ts";
+import { MAX_LINE_LENGTH } from "./schema.ts";
 import type { Change, Line, LineId } from "./types.ts";
 
 const id = (value: string): LineId => value as LineId;
@@ -55,7 +56,39 @@ describe("revertEdit(自分の編集を打ち消す)", () => {
 			expect(revertEdit(current, edit)).toEqual([line("x"), line("a"), line("b"), line("c", "C2")]);
 		});
 
-		it("自分が書き換えた行を他の人がさらに書き換えていたら、その行は戻さない", () => {
+		it("自分が書き換えた行を他の人がさらに書き換えていたら、自分の変更だけを打ち消す(ADR-0022)", () => {
+			const typed = recordEdit([line("a", "今日は晴れ")], [line("a", "今日は晴れです")]);
+			const current = afterRemote(
+				[line("a", "今日は晴れです")],
+				update("a", "たぶん今日は晴れです"),
+			);
+
+			expect(revertEdit(current, typed)).toEqual([line("a", "たぶん今日は晴れ")]);
+		});
+
+		it("自分が書き換えた文字を他の人がすべて書き換えていたら、書き換える前の文字を戻さない", () => {
+			const replaced = recordEdit([line("a", "b")], [line("a", "B2")]);
+			const current = afterRemote([line("a", "B2")], update("a", "他の人の本文"));
+
+			expect(revertEdit(current, replaced)).toBe(current);
+		});
+
+		it("打ち消すと行が長さの上限を超えるなら、その行は打ち消さない(送れない行を作らない)", () => {
+			const half = "あ".repeat(MAX_LINE_LENGTH / 2);
+			const deleted = recordEdit([line("a", half + half)], [line("a", half)]);
+			const current = afterRemote([line("a", half)], update("a", `${half}!`));
+
+			expect(revertEdit(current, deleted)).toBe(current);
+		});
+
+		it("元にした本文を持たない変更は、そのまま置き換える", () => {
+			const current = [line("a", "他の人の本文")];
+			const edit = { forward: [update("a", "A2")], backward: [update("a", "A")] };
+
+			expect(revertEdit(current, edit)).toEqual([line("a", "A")]);
+		});
+
+		it("自分が書いた文字を他の人がすべて書き換えていたら、その行は変わらない", () => {
 			const current = afterRemote(after, update("b", "他の人の本文"));
 
 			expect(revertEdit(current, edit)).toEqual([line("a"), line("b", "他の人の本文"), line("c")]);
@@ -102,10 +135,21 @@ describe("reapplyEdit(打ち消した編集を、もう一度行う)", () => {
 		expect(reapplyEdit(revertEdit(after, edit), edit)).toEqual(after);
 	});
 
-	it("打ち消したあとに他の人が書き換えた行には、もう一度行わない", () => {
-		const reverted = afterRemote(revertEdit(after, edit), update("a", "他の人の本文"));
+	it("打ち消したあとに他の人が書き換えた行には、その人の変更を残して、もう一度行う(ADR-0022)", () => {
+		const typed = recordEdit([line("a", "今日は晴れ")], [line("a", "今日は晴れです")]);
+		const reverted = afterRemote(
+			revertEdit([line("a", "今日は晴れです")], typed),
+			update("a", "たぶん今日は晴れ"),
+		);
 
-		expect(reapplyEdit(reverted, edit)).toEqual([line("a", "他の人の本文"), line("n"), line("c")]);
+		expect(reapplyEdit(reverted, typed)).toEqual([line("a", "たぶん今日は晴れです")]);
+	});
+
+	it("打ち消して戻した文字を他の人がすべて書き換えていたら、もう一度書き換えない", () => {
+		const replaced = recordEdit([line("a", "b")], [line("a", "B2")]);
+		const reverted = afterRemote(revertEdit([line("a", "B2")], replaced), update("a", "別の本文"));
+
+		expect(reapplyEdit(reverted, replaced)).toBe(reverted);
 	});
 
 	it("打ち消して戻した行を他の人が書き換えていたら、その行はもう一度消さない", () => {

@@ -209,7 +209,8 @@ export function createPendingStore({
 			if (storage === null) return false;
 			try {
 				const empty = pending.inflight === null && pending.changes.length === 0;
-				write(storage, empty ? [] : [pending], now());
+				// 残した端末の識別子を添える。復元のときに、内容が同じ別の変更と区別できる(ADR-0022)。
+				write(storage, empty ? [] : [{ ...pending, origin: client }], now());
 				return true;
 			} catch {
 				return false;
