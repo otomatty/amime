@@ -17,22 +17,27 @@ type ProjectGateProps = {
 export function ProjectGate({ name, children }: ProjectGateProps) {
 	const { state } = useAccount();
 	const [attempt, setAttempt] = useState(0);
-	const [loaded, setLoaded] = useState<LoadedProject | null>(null);
-	// ログインの状態が分かってから、読み込む。あとで変わったら(ログイン、ログアウト)、読み直す。
+	// 読み込んだ結果は、だれに対するものかと一緒に持つ。利用者が変わったら、前の人への結果は使わない
+	// (ログアウトしたあとに、前の人に見せていた中身を、出したままにしない)。
+	const [result, setResult] = useState<{
+		readonly user: string | null;
+		readonly loaded: LoadedProject;
+	} | null>(null);
+	// ログインの状態が分かってから、読み込む。利用者が変わったら(ログイン、ログアウト)、読み直す。
 	const known = state !== null;
 	const user = state?.user?.id ?? null;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt と user は、読み直すきっかけとして使う。
+	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt は、読み直すきっかけとして使う。
 	useEffect(() => {
 		if (!known) return;
 		let cancelled = false;
-		// 読み直しているあいだは、前の表示のままにする(中身を作り直すと、入力の途中のものが消える)。
-		void loadProject(name).then((result) => {
-			if (!cancelled) setLoaded(result);
+		void loadProject(name).then((loaded) => {
+			if (!cancelled) setResult({ user, loaded });
 		});
 		return () => {
 			cancelled = true;
 		};
 	}, [name, attempt, user, known]);
+	const loaded = known && result?.user === user ? result.loaded : null;
 
 	if (loaded === null) {
 		return (

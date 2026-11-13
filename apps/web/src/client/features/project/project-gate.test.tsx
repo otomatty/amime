@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountProvider, useAccount } from "../account/account.tsx";
 import { ProjectGate } from "./project-gate.tsx";
@@ -102,17 +102,41 @@ describe("ProjectGate(プロジェクトを読めることを確かめてから�
 		expect(urls).toEqual(["/api/me", "/api/projects/team"]);
 	});
 
-	it("ログインの状態が変わったら、読み直す。読み直しているあいだは、前の中身を出したままにする", async () => {
+	it("利用者が変わったら(ログアウトした)、前の人に見せていた中身を、すぐに隠して、読み直す", async () => {
 		let user: unknown = hanako;
-		let project = () => Response.json(team);
-		const urls: string[] = [];
+		let project: () => Promise<Response> | Response = () => Response.json(team);
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async (url: string) => {
-				urls.push(url);
-				return url === "/api/me" ? Response.json({ user, login: ["google"] }) : project();
-			}),
+			vi.fn(async (url: string) =>
+				url === "/api/me" ? Response.json({ user, login: ["google"] }) : project(),
+			),
 		);
+		render(
+			<AccountProvider>
+				<Refresh />
+				<ProjectGate name="team">
+					{(loaded) => <p>中身: {loaded.role ?? "見るだけ"}</p>}
+				</ProjectGate>
+			</AccountProvider>,
+		);
+		await screen.findByText("中身: member");
+
+		// ログアウトした。プロジェクトの読み直しは、まだ終わらない。
+		user = null;
+		let finish: (response: Response) => void = () => {};
+		project = () => new Promise<Response>((done) => (finish = done));
+		fireEvent.click(screen.getByRole("button", { name: "読み直す" }));
+
+		// 読み直しが終わるのを待たずに、隠す。
+		await waitFor(() => expect(screen.queryByText(/中身/)).toBeNull());
+		expect(screen.getByRole("status").textContent).toBe("読み込んでいます…");
+		// 公開のプロジェクトなら、読むだけの中身を出す。
+		finish(Response.json({ ...team, visibility: "public", role: null }));
+		expect(await screen.findByText("中身: 見るだけ")).toBeDefined();
+	});
+
+	it("同じ利用者のまま読み直しても(やり直し)、利用者が同じなら、中身を作り直さない", async () => {
+		const urls = stubServer(() => Response.json(team));
 		render(
 			<AccountProvider>
 				<Refresh />
@@ -124,15 +148,12 @@ describe("ProjectGate(プロジェクトを読めることを確かめてから�
 		const input = await screen.findByRole("textbox", { name: "中身 member" });
 		fireEvent.change(input, { target: { value: "書きかけ" } });
 
-		// ログアウトした。プロジェクトは、公開なので、読むだけになる。
-		user = null;
-		project = () => Response.json({ ...team, visibility: "public", role: null });
 		fireEvent.click(screen.getByRole("button", { name: "読み直す" }));
+		await waitFor(() => expect(urls.filter((url) => url === "/api/me")).toHaveLength(2));
 
-		const reloaded = await screen.findByRole("textbox", { name: "中身 null" });
-		// 同じ要素のまま(作り直していない)。入力の途中のものが、残っている。
-		expect(reloaded).toBe(input);
-		expect((reloaded as HTMLInputElement).value).toBe("書きかけ");
-		expect(urls.filter((url) => url === "/api/projects/team")).toHaveLength(2);
+		expect(screen.getByRole("textbox", { name: "中身 member" })).toBe(input);
+		expect((input as HTMLInputElement).value).toBe("書きかけ");
+		// 利用者が変わっていないので、プロジェクトは読み直さない。
+		expect(urls.filter((url) => url === "/api/projects/team")).toHaveLength(1);
 	});
 });

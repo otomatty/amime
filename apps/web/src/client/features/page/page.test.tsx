@@ -281,6 +281,37 @@ describe("Page", () => {
 			expect(pendingRecords()).toEqual([left]);
 		});
 
+		it("読むだけの表示から、書ける表示に戻ったら(ログインし直した)、残しておいた未送信の変更を復元して、送る", async () => {
+			let writable = false;
+			// サーバーにある内容。保存できたら、変わる。
+			let stored = saved;
+			const fetchMock = stubFetch((url, init) => {
+				if (init?.method !== "POST") return json(stored);
+				// ログアウトするまでは、保存が終わらない。ログインし直したあとは、保存できる。
+				if (!writable) return new Promise(() => {});
+				stored = { version: 2, lines: [{ id: "a", text: "買い物牛乳" }] };
+				return echo(url, init);
+			});
+			const { rerender } = render(<Page name="買い物" />);
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			fireEvent.mouseDown(screen.getByTestId("line"));
+			type("牛乳");
+			await waitFor(() => expect(status()).toBe("保存しています…"));
+			rerender(<Page name="買い物" readOnly />);
+			await waitFor(() => expect(status()).toMatch(/読むだけの表示です/));
+
+			writable = true;
+			rerender(<Page name="買い物" />);
+
+			await waitFor(() => expect(lines()).toEqual(["買い物牛乳"]));
+			await waitFor(() => expect(status()).toBe("保存済み"));
+			const sent = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST").at(-1);
+			expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({
+				changes: [{ type: "update", id: "a", text: "買い物牛乳" }],
+			});
+			expect(pendingRecords()).toEqual([]);
+		});
+
 		it("前回送れなかった変更が残っていたら、復元して表示し、そのまま保存する", async () => {
 			leavePending([{ type: "update", id: "a", text: "買い物 前回の入力" }]);
 			const fetchMock = stubFetch(echo);

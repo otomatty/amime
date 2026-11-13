@@ -148,7 +148,10 @@ const WITHOUT_TOOLS: ReadonlySet<SyncStatus> = new Set(["new", "deleted"]);
 export function Page({ name, readOnly = false }: PageProps) {
 	const opened = useLoading(useCallback(() => openPage(name), [name]));
 	if (opened.status !== "ready") return <Pending state={opened} />;
-	return <OpenedPage key={opened.value.id} info={opened.value} readOnly={readOnly} />;
+	// 読むだけの表示と、書ける表示を切り替えたときは、ページを開き直す(端末の識別子も、作り直す)。
+	// 書ける表示に戻ったときに、前に残した未送信の変更を、閉じたタブのものと同じように引き取って送る。
+	const mode = readOnly ? "read" : "write";
+	return <OpenedPage key={`${opened.value.id}:${mode}`} info={opened.value} readOnly={readOnly} />;
 }
 
 /** IDの分かったページ。保存されている内容を読み込み、前回送れなかった変更を復元する。 */
