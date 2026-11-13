@@ -5,8 +5,10 @@ import { Editor } from "../features/editor/editor.tsx";
 import { Page } from "../features/page/page.tsx";
 import { PageList } from "../features/pages/page-list.tsx";
 import { Home } from "../features/project/home.tsx";
+import { InvitePage } from "../features/project/invite.tsx";
 import { ProjectGate } from "../features/project/project-gate.tsx";
 import { parseRoute, type Route } from "../features/project/route.ts";
+import { ProjectSettings } from "../features/project/settings.tsx";
 import { SearchResults } from "../features/search/search-results.tsx";
 import { TitleSearch } from "../features/search/title-search.tsx";
 
@@ -49,7 +51,16 @@ function Playground() {
 function ProjectTop({ project }: { readonly project: ProjectInfo }) {
 	const query = new URLSearchParams(window.location.search).get("q")?.trim() ?? "";
 	if (query !== "") return <SearchResults query={query} />;
-	return <PageList readOnly={project.role === null} />;
+	return (
+		<>
+			{project.role !== null && (
+				<p className="project-links">
+					<a href={`/settings/${project.name}`}>メンバーと設定</a>
+				</p>
+			)}
+			<PageList readOnly={project.role === null} />
+		</>
+	);
 }
 
 /**
@@ -74,17 +85,18 @@ function Content({ route }: { readonly route: Route }) {
 			<Home />
 		);
 	}
+	if (route.kind === "invite") return <InvitePage token={route.token} />;
 	return (
 		<ProjectGate name={route.project}>
-			{(project) =>
-				route.kind === "project" ? (
-					<ProjectTop project={project} />
-				) : (
+			{(project) => {
+				if (route.kind === "settings") return <ProjectSettings project={project} />;
+				if (route.kind === "project") return <ProjectTop project={project} />;
+				return (
 					<article className="page">
 						<Page name={route.name} readOnly={project.role === null} />
 					</article>
-				)
-			}
+				);
+			}}
 		</ProjectGate>
 	);
 }
@@ -103,14 +115,14 @@ export function App() {
 				<header className="app-header">
 					<h1 className="app-title">
 						<a href="/">Amime</a>
-						{route.kind !== "home" && (
+						{"project" in route && (
 							<>
 								{" / "}
 								<a href={`/${encodeURIComponent(route.project)}/`}>{route.project}</a>
 							</>
 						)}
 					</h1>
-					{route.kind !== "home" && <ProjectSearch />}
+					{(route.kind === "project" || route.kind === "page") && <ProjectSearch />}
 					<AccountMenu />
 				</header>
 				<Content route={route} />

@@ -165,5 +165,9 @@ export const pages = new Hono<AppEnv>()
 		// 印は、ここで付け直す。要求に付いてきたものは、使わない。
 		const url = new URL(c.req.url);
 		url.searchParams.set("access", canWrite(c) ? "write" : "read");
+		// だれの接続かも、ここで付ける(権限がなくなったときに、その人の接続を閉じるため)。
+		url.searchParams.set("user", c.var.user?.id ?? "");
+		// ログインの状態が切れる時刻も、付ける(切れたあとは、変更を配らない)。
+		url.searchParams.set("expires", String(c.var.sessionExpires ?? ""));
 		return pageStub(c, page.value).fetch(new Request(url, c.req.raw));
 	});

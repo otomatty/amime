@@ -93,6 +93,16 @@ const WS_POLICY_VIOLATION = 1008;
  * 読むだけの人の接続に付けるタグ。端末の識別子(英数字と - と _)とは重ならない形にする。
  */
 const VIEWER_TAG = "access:read";
+/** メンバーの接続に付けるタグの先頭。あとに、利用者のIDが続く。 */
+const USER_TAG = "user:";
+/** 接続を受け付けた時刻を入れるタグの先頭。あとに、時刻(ミリ秒)が続く。 */
+const ACCEPTED_TAG = "at:";
+/** ログインの状態が切れる時刻を入れるタグの先頭。あとに、時刻(ミリ秒)が続く。 */
+const EXPIRES_TAG = "exp:";
+/** 権限を取り上げた相手を、台帳に聞き直すまでの長さ(ミリ秒)。 */
+const REVOCATION_CACHE_MS = 30_000;
+/** 権限を確かめ直させるために、接続を閉じるときのコード。 */
+const WS_REAUTHORIZE = 4001;
 
 /**
  * 1ページ = 1インスタンス。ページへのコミットをここで直列化する。
@@ -105,6 +115,9 @@ const VIEWER_TAG = "access:read";
  * どの環境にも保存されたページがない(ADR-0017)。今後テーブルの形を変えるときは、移行を書く。
  */
 export class PageDO extends DurableObject {
+	/** 権限を取り上げた相手(台帳に聞いた結果)と、聞いた時刻。まだ聞いていなければ null。 */
+	#revocations: { checked: number; list: readonly { subject: string; at: number }[] } | null = null;
+
 	constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
 		super(ctx, env);
 		ctx.storage.sql.exec(`
@@ -147,6 +160,12 @@ export class PageDO extends DurableObject {
 		const client = query.get("client") ?? "";
 		// 読むだけの人(公開のプロジェクトを見ている、メンバーでない人)の接続か。Worker が付けた印で決まる。
 		const viewer = query.get("access") === "read";
+		// だれの接続か(メンバーのID)と、いつ受け付けたか。権限がなくなったあとで、接続を閉じるために使う。
+		const owner = viewer ? VIEWER_TAG : `${USER_TAG}${query.get("user") ?? ""}`;
+		const tags = [client, `${ACCEPTED_TAG}${Date.now()}`, owner];
+		// ログインの状態が切れる時刻(ログインしていない人の接続には、ない)。
+		const expires = Number(query.get("expires") ?? "");
+		if (expires > 0) tags.push(`${EXPIRES_TAG}${expires}`);
 		const { 0: clientSocket, 1: serverSocket } = new WebSocketPair();
 		if (this.#deleted()) {
 			// 削除されたページ。接続は受け付けて、削除されたことだけを伝えて閉じる
@@ -165,8 +184,7 @@ export class PageDO extends DurableObject {
 			if (owner !== client && cursor !== null) others.set(owner, cursor);
 		}
 		// 端末の識別子をタグにする。その端末のコミットを、本人の接続には配信しないため。
-		// 読むだけの人の接続には、もう1つタグを付ける。
-		this.ctx.acceptWebSocket(serverSocket, viewer ? [client, VIEWER_TAG] : [client]);
+		this.ctx.acceptWebSocket(serverSocket, tags);
 		this.#send(serverSocket, { type: "hello", version: this.#version() });
 		// 台帳に確かめてあるページの名前も送る。切れているあいだに名前が変わっていても、追いつける。
 		const named = this.#named();
@@ -214,6 +232,44 @@ export class PageDO extends DurableObject {
 			.getWebSockets(client)
 			.some((other) => other !== socket && other.readyState === WebSocket.OPEN);
 		if (!remains) this.#broadcast({ type: "leave", client }, socket);
+	}
+
+	/**
+	 * 権限のなくなった人が、つないだままにしている接続を閉じる(ADR-0034)。
+	 * 権限を取り上げた相手は、台帳が覚えている。聞きに行くのは、ほかにつないでいる人がいるときだけで、
+	 * しばらくのあいだは、前に聞いた結果を使う。閉じられた端末は、つなぎ直すときに、権限を確かめ直される。
+	 */
+	async #dropRevoked(): Promise<void> {
+		if (this.ctx.getWebSockets().length === 0) return;
+		const now = Date.now();
+		// ログインの状態の期限が切れた接続。
+		for (const socket of this.ctx.getWebSockets()) {
+			if (this.#tagged(socket, EXPIRES_TAG, Number.POSITIVE_INFINITY) <= now) {
+				socket.close(WS_REAUTHORIZE, "session expired");
+			}
+		}
+		if (this.#revocations === null || now - this.#revocations.checked >= REVOCATION_CACHE_MS) {
+			const [project = ""] = (this.ctx.id.name ?? "").split("/");
+			// 台帳に聞けなくても、保存は止めない。前に聞いた結果で続ける。
+			const list = await exports.ProjectDO.getByName(project)
+				.revocations()
+				.catch(() => this.#revocations?.list ?? []);
+			this.#revocations = { checked: now, list };
+		}
+		for (const { subject, at } of this.#revocations.list) {
+			const tag = subject === "*" ? VIEWER_TAG : `${USER_TAG}${subject}`;
+			for (const socket of this.ctx.getWebSockets(tag)) {
+				if (this.#tagged(socket, ACCEPTED_TAG, 0) < at) {
+					socket.close(WS_REAUTHORIZE, "access changed");
+				}
+			}
+		}
+	}
+
+	/** 接続を受け付けたときに付けたタグのうち、prefix で始まるものの、あとに続く数。なければ fallback。 */
+	#tagged(socket: WebSocket, prefix: string, fallback: number): number {
+		const tag = this.ctx.getTags(socket).find((item) => item.startsWith(prefix));
+		return tag === undefined ? fallback : Number(tag.slice(prefix.length));
 	}
 
 	/** 接続している端末の識別子(接続を受け付けたときに付けたタグ)。 */
@@ -272,6 +328,8 @@ export class PageDO extends DurableObject {
 	 */
 	async commit(commit: Commit, client?: ClientId): Promise<CommitResult | "deleted"> {
 		if (this.#deleted()) return "deleted";
+		// 配信する前に、権限のなくなった人の接続を閉じる。
+		await this.#dropRevoked();
 		// 同じコミットを送り直してきた(前の応答が届かなかった)。もう適用してあるので、何もしない(ADR-0021)。
 		if (this.#seen(commit.id)) {
 			// 前回、保存したあとで台帳への知らせの予約に失敗していたら、ここで予約し直す。

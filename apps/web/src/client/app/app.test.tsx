@@ -226,4 +226,49 @@ describe("App", () => {
 			);
 		});
 	});
+	describe("設定と招待", () => {
+		it("/settings/プロジェクト では、そのプロジェクトの設定を表示する(ページを探す欄は、出さない)", async () => {
+			stubServer({
+				"/api/projects/team/members": () => Response.json({ members: [], invites: [] }),
+			});
+			open("/settings/team");
+
+			render(<App />);
+
+			expect(await screen.findByRole("heading", { name: "「team」の設定" })).toBeDefined();
+			expect(screen.getByRole("link", { name: "team" }).getAttribute("href")).toBe("/team/");
+			expect(screen.queryByRole("combobox", { name: "ページを探す" })).toBeNull();
+		});
+
+		it("メンバーには、プロジェクトのトップに、設定へのリンクを出す。メンバーでない人には、出さない", async () => {
+			const list = {
+				"/api/projects/team/pages?sort=updated&offset=0": () =>
+					Response.json({ pages: [], total: 0 }),
+			};
+			stubServer(list);
+			open("/team/");
+			const { unmount } = render(<App />);
+			const link = await screen.findByRole("link", { name: "メンバーと設定" });
+			expect(link.getAttribute("href")).toBe("/settings/team");
+			unmount();
+
+			stubServer({
+				...list,
+				"/api/projects/team": () => Response.json({ ...team, visibility: "public", role: null }),
+			});
+			render(<App />);
+			await screen.findByRole("region", { name: "ページの一覧" });
+			expect(screen.queryByRole("link", { name: "メンバーと設定" })).toBeNull();
+		});
+
+		it("/invite/値 では、招待リンクの画面を表示する", async () => {
+			stubServer({ "/api/invites/tok-1": () => Response.json({ project: "team", member: false }) });
+			open("/invite/tok-1");
+
+			render(<App />);
+
+			expect(await screen.findByRole("heading", { name: "「team」への招待" })).toBeDefined();
+			expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Amime");
+		});
+	});
 });

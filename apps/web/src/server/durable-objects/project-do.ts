@@ -122,6 +122,9 @@ type FoundPage = {
 	titled: number;
 };
 
+/** 権限を取り上げた相手(利用者のID。「*」は、メンバーでない人すべて)と、その時刻。 */
+type Revocation = { subject: string; at: number };
+
 type RewriteRow = {
 	seq: number;
 	page_id: string;
@@ -196,6 +199,11 @@ export const MIGRATIONS: readonly string[] = [
 		body TEXT NOT NULL,
 		folded TEXT NOT NULL
 	);`,
+	// 7: 権限を取り上げた相手と、その時刻(ADR-0034)。subject は、利用者のID。「*」は、メンバーでない人すべて。
+	`CREATE TABLE revocations (
+		subject TEXT PRIMARY KEY,
+		at INTEGER NOT NULL
+	);`,
 ];
 
 /**
@@ -260,6 +268,27 @@ export class ProjectDO extends DurableObject {
 		// IDを決めているあいだに、同じ名前が載っていたら、そちらを返す。
 		const raced = this.#byTitle(toTitleLc(name));
 		return raced === null ? this.#insert(id, titleFromName(name), null, 0) : toInfo(raced);
+	}
+
+	/**
+	 * 権限を取り上げたことを覚える(ADR-0034)。subject は、外したメンバーのID。
+	 * 「*」は、メンバーでない人すべて(プロジェクトを、非公開に変えた)。
+	 * ページ(PageDO)が、これを見て、その相手がつないだままの接続を閉じる。
+	 */
+	revoke(subject: string): void {
+		this.ctx.storage.sql.exec(
+			`INSERT INTO revocations (subject, at) VALUES (?, ?)
+			ON CONFLICT (subject) DO UPDATE SET at = excluded.at`,
+			subject,
+			Date.now(),
+		);
+	}
+
+	/** 権限を取り上げた相手と、その時刻。 */
+	revocations(): Revocation[] {
+		return this.ctx.storage.sql
+			.exec<Revocation>("SELECT subject, at FROM revocations ORDER BY subject")
+			.toArray();
 	}
 
 	/** 台帳に、そのIDのページがあるか(開いただけのページも含む)。 */

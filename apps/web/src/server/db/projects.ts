@@ -35,6 +35,15 @@ export async function listProjects(db: D1Database, user: UserId): Promise<Projec
 	return results;
 }
 
+/** その人が参加しているプロジェクトのID。 */
+export async function listProjectIds(db: D1Database, user: UserId): Promise<string[]> {
+	const { results } = await db
+		.prepare("SELECT project FROM members WHERE user = ?")
+		.bind(user)
+		.all<{ project: string }>();
+	return results.map((row) => row.project);
+}
+
 /**
  * プロジェクトを作り、作った人を管理者にする。同じ名前のプロジェクトがあれば、作らない(false)。
  */

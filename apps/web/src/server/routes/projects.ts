@@ -3,6 +3,7 @@ import type { ProjectInfo, ProjectList } from "@amime/sync";
 import { Hono } from "hono";
 import { type AppEnv, readJson } from "../context.ts";
 import { createProject, findProject, listProjects } from "../db/projects.ts";
+import { members } from "./members.ts";
 import { pages } from "./pages.ts";
 
 const VISIBILITIES: ReadonlySet<unknown> = new Set<Visibility>(["public", "private"]);
@@ -29,7 +30,8 @@ const inProject = new Hono<AppEnv>()
 		const { name, visibility, role } = c.var.project;
 		return c.json({ name, visibility, role } satisfies ProjectInfo);
 	})
-	.route("/pages", pages);
+	.route("/pages", pages)
+	.route("/", members);
 
 /** プロジェクト(ADR-0033)。 */
 export const projects = new Hono<AppEnv>()

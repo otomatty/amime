@@ -34,6 +34,9 @@ const MAX_RETRY_MS = 30_000;
  * - retrying: 保存に失敗し、再試行を待っている
  * - rejected: 送った内容をサーバーに断られた(内容を直すまで、送り直さない)
  */
+/** 権限がないことを表す失敗(ログインしていない・メンバーでない、プロジェクトを見られない)。 */
+const DENIED: ReadonlySet<PageApiError["kind"]> = new Set(["disabled", "missing"]);
+
 export type SyncStatus =
 	| "new"
 	| "saved"
@@ -42,7 +45,9 @@ export type SyncStatus =
 	| "retrying"
 	| "rejected"
 	/** ページが削除された(ADR-0026)。保存をやめている。 */
-	| "deleted";
+	| "deleted"
+	/** 読み書きする権限がなくなった(ADR-0034)。保存をやめている。未送信の変更は、端末内に残っている。 */
+	| "denied";
 
 export type PageApi = {
 	readonly load: () => Promise<PageSnapshot>;
@@ -109,6 +114,8 @@ export function createPageSync({
 	let failure: "none" | "failed" | "rejected" = "none";
 	/** ページが削除されたと分かった。保存も受け取りも、もう行わない。 */
 	let deleted = false;
+	/** 読み書きする権限がなくなったと分かったか。 */
+	let denied = false;
 	/** 送信中のコミットを作ったときの、画面の文書。断られたあとで、内容が直されたかどうかを見るのに使う。 */
 	let sentLocal: readonly Line[] | null = null;
 	/**
@@ -127,6 +134,7 @@ export function createPageSync({
 		sameLines(session.local, initial);
 	const status = (): SyncStatus => {
 		if (deleted) return "deleted";
+		if (denied) return "denied";
 		if (untouched()) return "new";
 		if (!hasUnsaved(session)) return "saved";
 		if (failure === "failed") return "retrying";
@@ -226,10 +234,25 @@ export function createPageSync({
 		publish();
 	}
 
+	/**
+	 * 読み書きする権限がなくなったと分かった。保存と受け取りをやめる(ADR-0034)。
+	 * 削除されたときと違って、未送信の変更は、端末内に残す(権限が戻って、開き直したときに送れる)。
+	 */
+	function lostAccess(): void {
+		denied = true;
+		if (timer !== null) clearTimeout(timer);
+		connection.close();
+		publish();
+	}
+
 	/** 失敗を記録する。続けてもう1回進めるべきなら true を返す。 */
 	function fail(error: unknown, committing: boolean): boolean {
 		if (error instanceof PageApiError && error.kind === "gone") {
 			gone();
+			return false;
+		}
+		if (error instanceof PageApiError && DENIED.has(error.kind)) {
+			lostAccess();
 			return false;
 		}
 		if (committing && error instanceof PageApiError && error.kind === "rejected") return rejected();
@@ -262,7 +285,7 @@ export function createPageSync({
 	 * 必ずその時点の session を使う。
 	 */
 	async function step(): Promise<boolean> {
-		if (deleted) return false;
+		if (deleted || denied) return false;
 		let committing = false;
 		try {
 			const commit = await nextCommit();
@@ -293,7 +316,7 @@ export function createPageSync({
 		busy = true;
 		try {
 			// 送るものがなくなるか、失敗するまで続ける。待っているあいだに遅れが分かったら、もう1回進める。
-			while ((await step()) || (behind() && failure !== "failed" && !deleted)) {
+			while ((await step()) || (behind() && failure !== "failed" && !deleted && !denied)) {
 				// 繰り返すだけ。
 			}
 		} finally {

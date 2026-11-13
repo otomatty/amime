@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
 import { signIn } from "../auth/accounts.ts";
 import { ready } from "./migrate.ts";
-import { createProject, findProject, listProjects } from "./projects.ts";
+import { createProject, findProject, listProjectIds, listProjects } from "./projects.ts";
 
 const unique = (name: string) => `${name}-${crypto.randomUUID().slice(0, 8)}`;
 const user = (name = unique("db-user")) =>
@@ -49,6 +49,23 @@ describe("createProject / findProject", () => {
 
 	it("ないプロジェクトは null", async () => {
 		expect(await findProject(env.DB, unique("db-none"), null)).toBeNull();
+	});
+});
+
+describe("listProjectIds", () => {
+	it("参加しているプロジェクトのIDを返す", async () => {
+		const [me, other] = [await user(), await user()];
+		const name = unique("db-ids");
+		await createProject(env.DB, { name, visibility: "private" }, me, 2_000);
+		await createProject(
+			env.DB,
+			{ name: unique("db-ids-other"), visibility: "public" },
+			other,
+			2_000,
+		);
+
+		const found = await findProject(env.DB, name, me);
+		expect(await listProjectIds(env.DB, me)).toEqual([found?.id]);
 	});
 });
 

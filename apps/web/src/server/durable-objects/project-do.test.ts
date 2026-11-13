@@ -55,6 +55,29 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 		});
 	});
 
+	describe("revoke / revocations(権限を取り上げた相手と、その時刻)", () => {
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it("取り上げた相手ごとに、いちばん新しい時刻を覚える", async () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			vi.setSystemTime(5_000);
+			const stub = project("revoke");
+
+			expect(await stub.revocations()).toEqual([]);
+			await stub.revoke("u1");
+			await stub.revoke("*");
+			vi.setSystemTime(9_000);
+			await stub.revoke("u1");
+
+			expect(await stub.revocations()).toEqual([
+				{ subject: "*", at: 5_000 },
+				{ subject: "u1", at: 9_000 },
+			]);
+		});
+	});
+
 	describe("has(台帳に、そのIDのページがあるか)", () => {
 		it("開いたことのあるページは true。知らないIDは false", async () => {
 			const stub = project("has");
@@ -1615,7 +1638,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				const { sql } = state.storage;
 				// ADR-0024 の時点の形に戻す。
 				sql.exec(
-					"DROP TABLE texts; DROP TABLE renames; DROP TABLE rewrites; DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
+					"DROP TABLE revocations; DROP TABLE texts; DROP TABLE renames; DROP TABLE rewrites; DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
 				);
 				sql.exec(`CREATE TABLE pages (
 					id TEXT PRIMARY KEY, title_lc TEXT NOT NULL UNIQUE, title TEXT NOT NULL, problem TEXT,

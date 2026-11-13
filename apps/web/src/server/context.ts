@@ -17,7 +17,12 @@ export type ProjectAccess = {
  */
 export type AppEnv = {
 	Bindings: Cloudflare.Env;
-	Variables: { user: Account | null; project: ProjectAccess };
+	Variables: {
+		user: Account | null;
+		/** ログインの状態が切れる時刻(ミリ秒)。ログインしていなければ null。 */
+		sessionExpires: number | null;
+		project: ProjectAccess;
+	};
 };
 
 /** Origin ヘッダーの指すサイトが、要求を受けたこのサイトと同じか(スキーム・ホスト・ポートがすべて同じ)。 */

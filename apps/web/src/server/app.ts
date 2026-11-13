@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { session } from "./auth/session.ts";
 import type { AppEnv } from "./context.ts";
 import { accountState, auth } from "./routes/auth.ts";
+import { invites } from "./routes/invites.ts";
 import { projects } from "./routes/projects.ts";
 
 /** HTTP API。パスはすべて /api 配下に置き、それ以外は静的アセット(SPA)が応答する。 */
@@ -13,4 +14,5 @@ export const app = new Hono<AppEnv>()
 	.get("/me", (c) => c.json(accountState(c.env, c.var.user)))
 	.route("/auth", auth)
 	.route("/projects", projects)
+	.route("/invites", invites)
 	.notFound((c) => c.json({ error: "not-found" }, 404));

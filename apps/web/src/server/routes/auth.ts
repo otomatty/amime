@@ -1,3 +1,4 @@
+import { exports } from "cloudflare:workers";
 import { safeReturnPath } from "@amime/shared";
 import type { AccountState, LoginMethod } from "@amime/sync";
 import { Hono } from "hono";
@@ -9,6 +10,7 @@ import type { LoginProvider } from "../auth/provider.types.ts";
 import { clearSessionCookie, isSecure, SESSION_COOKIE, setSessionCookie } from "../auth/session.ts";
 import type { AppEnv } from "../context.ts";
 import { readJson } from "../context.ts";
+import { listProjectIds } from "../db/projects.ts";
 
 /** ログインを始めてから、提供元から戻ってくるまでのあいだ、照合に使う値を入れる Cookie。 */
 const LOGIN_COOKIE = "amime_login";
@@ -124,5 +126,11 @@ export const auth = new Hono<AppEnv>()
 		const token = getCookie(c, SESSION_COOKIE);
 		if (token !== undefined) await endSession(c.env.DB, token);
 		clearSessionCookie(c);
+		// その人がつないだままの接続を、閉じさせる(ADR-0034)。ほかの端末の接続は、つなぎ直せば続けられる。
+		const user = c.var.user;
+		if (user !== null) {
+			const joined = await listProjectIds(c.env.DB, user.id);
+			await Promise.all(joined.map((id) => exports.ProjectDO.getByName(id).revoke(user.id)));
+		}
 		return c.body(null, 204);
 	});

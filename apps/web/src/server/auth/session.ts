@@ -42,6 +42,7 @@ export const session: MiddlewareHandler<AppEnv> = async (c, next) => {
 	const token = getCookie(c, SESSION_COOKIE);
 	const found = token === undefined ? null : await findSession(c.env.DB, token, Date.now());
 	c.set("user", found?.account ?? null);
+	c.set("sessionExpires", found?.expires ?? null);
 	if (token !== undefined && found?.renewed) setSessionCookie(c, token);
 	return next();
 };

@@ -5,7 +5,11 @@ export type Route =
 	/** プロジェクトのトップ。ページの一覧。 */
 	| { readonly kind: "project"; readonly project: string }
 	/** プロジェクトのページ。 */
-	| { readonly kind: "page"; readonly project: string; readonly name: string };
+	| { readonly kind: "page"; readonly project: string; readonly name: string }
+	/** プロジェクトの設定(メンバー、招待リンク、公開範囲)。パスは「/settings/プロジェクト」。 */
+	| { readonly kind: "settings"; readonly project: string }
+	/** 招待リンク。パスは「/invite/リンクの値」。 */
+	| { readonly kind: "invite"; readonly token: string };
 
 function decode(segment: string): string {
 	try {
@@ -25,6 +29,15 @@ function decode(segment: string): string {
 export function parseRoute(pathname: string): Route {
 	const [first = "", ...rest] = pathname.split("/").slice(1);
 	if (first === "") return { kind: "home" };
+	// 「settings」と「invite」は、プロジェクトの名前にできない(アプリが使う)。
+	const [second = ""] = rest;
+	if (first === "invite")
+		return second === "" ? { kind: "home" } : { kind: "invite", token: second };
+	if (first === "settings") {
+		return second === ""
+			? { kind: "home" }
+			: { kind: "settings", project: decode(second).toLowerCase() };
+	}
 	// プロジェクトの名前は、大文字と小文字を区別しない(サーバーも、小文字にそろえて探す)。
 	const project = decode(first).toLowerCase();
 	const last = rest.at(-1) ?? "";
@@ -37,5 +50,5 @@ export function parseRoute(pathname: string): Route {
  */
 export function currentProject(): string | null {
 	const route = parseRoute(window.location.pathname);
-	return route.kind === "home" ? null : route.project;
+	return "project" in route ? route.project : null;
 }

@@ -127,4 +127,85 @@ test.describe("プロジェクト", () => {
 		await expect(viewer.getByText("誰でも読める本文(追記)")).toBeVisible();
 		await viewer.context().close();
 	});
+	test("招待リンクを作って送ると、受け取った人がメンバーとして参加でき、書ける。外すと、見られなくなる", async ({
+		page,
+		browser,
+	}) => {
+		const name = unique("invite");
+		await createProject(page, name, "private");
+		await writePage(page, "会議のメモ", "管理者が書いた本文");
+
+		// 管理者が、設定で、招待リンクを作る。
+		await page.goto(`/${name}/`);
+		await page.getByRole("link", { name: "メンバーと設定" }).click();
+		await page.getByRole("button", { name: "招待リンクを作る" }).click();
+		const link = await page.getByRole("textbox", { name: /新しい招待リンク/ }).inputValue();
+		expect(link).toMatch(/\/invite\/[\w-]{43}$/);
+
+		// 受け取った人が、リンクを開く。ログインしていないので、まだ参加できない。
+		const guest = await freshPage(browser);
+		const guestName = unique("guest");
+		await guest.goto(new URL(link).pathname);
+		await expect(guest.getByRole("heading", { name: `「${name}」への招待` })).toBeVisible();
+		await expect(guest.getByText("参加するには、ログインしてください")).toBeVisible();
+		// ログインすると、参加できる。
+		await guest.getByRole("textbox", { name: "開発用ログインの名前" }).fill(guestName);
+		await guest.getByRole("button", { name: "開発用ログイン" }).click();
+		await guest.getByRole("button", { name: "参加する" }).click();
+		await expect(guest).toHaveURL(new RegExp(`/${name}/$`));
+
+		// メンバーとして、ページを読み書きできる。
+		await expectListed(guest, "会議のメモ");
+		await guest.getByRole("link", { name: /会議のメモ/ }).click();
+		await expect(guest.getByText("管理者が書いた本文")).toBeVisible();
+		const box = await guest.getByTestId("line").nth(1).boundingBox();
+		if (!box) throw new Error("the body line is not visible");
+		await guest.mouse.click(box.x + box.width - 2, box.y + box.height - 4);
+		await guest.keyboard.type("(参加した人の追記)");
+		await expect(guest.getByRole("status")).toHaveText("保存済み");
+
+		// 管理者の設定に、参加した人が並ぶ。外すと、その人は見られなくなる。
+		await page.reload();
+		await page.getByRole("button", { name: `${guestName} を外す` }).click();
+		await expect(page.getByRole("list", { name: "メンバー" }).getByRole("listitem")).toHaveCount(1);
+		await guest.goto(`/${name}/`);
+		await expect(guest.getByText(/ないか、見る権限がありません/)).toBeVisible();
+		await guest.context().close();
+	});
+
+	test("無効にした招待リンクでは、参加できない", async ({ page, browser }) => {
+		const name = unique("revoked");
+		await createProject(page, name, "private");
+		await page.goto(`/settings/${name}`);
+		await page.getByRole("button", { name: "招待リンクを作る" }).click();
+		const link = await page.getByRole("textbox", { name: /新しい招待リンク/ }).inputValue();
+
+		await page.getByRole("button", { name: "無効にする" }).click();
+		await expect(page.getByRole("list", { name: "使える招待リンク" })).toHaveCount(0);
+
+		const guest = await freshPage(browser);
+		await guest.goto(new URL(link).pathname);
+		await expect(guest.getByText(/この招待リンクは、使えません/)).toBeVisible();
+		await guest.context().close();
+	});
+
+	test("公開範囲を、あとから変えられる", async ({ page, browser }) => {
+		const name = unique("switch");
+		await createProject(page, name, "private");
+		const viewer = await freshPage(browser);
+		await viewer.goto(`/${name}/`);
+		await expect(viewer.getByText(/ないか、見る権限がありません/)).toBeVisible();
+
+		await page.goto(`/settings/${name}`);
+		await page.getByRole("combobox", { name: "公開範囲" }).selectOption("public");
+		await expect(page.getByRole("combobox", { name: "公開範囲" })).toHaveValue("public");
+
+		await expect(async () => {
+			await viewer.reload();
+			await expect(viewer.getByRole("region", { name: "ページの一覧" })).toBeVisible({
+				timeout: 1000,
+			});
+		}).toPass();
+		await viewer.context().close();
+	});
 });

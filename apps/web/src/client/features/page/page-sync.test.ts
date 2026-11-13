@@ -712,6 +712,52 @@ describe("createPageSync", () => {
 		expect(states).toHaveLength(count);
 	});
 
+	describe("権限がなくなったとき(ADR-0034)", () => {
+		it.each([
+			["書き込む権限がない", "disabled"],
+			["プロジェクトを見られなくなった", "missing"],
+		] as const)(
+			"保存しようとして、%sと分かったら、送り直すのをやめる。未送信の変更は、端末内に残す",
+			async (_name, kind) => {
+				const server = createServer([line("a")]);
+				server.api.commit.mockRejectedValue(new PageApiError(kind));
+				const { sync, latest, pendings } = start(server);
+
+				sync.edit([line("a", "A2")]);
+				await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+				expect(latest()?.status).toBe("denied");
+				// 権限が戻ったときに送れるように、残しておく。
+				expect(pendings.at(-1)?.inflight).not.toBeNull();
+				// 接続も閉じる(つなぎ直しても、断られる)。
+				expect(server.handlers).toBeNull();
+
+				// 待っても、送り直さない。そのあとで書いても、送らない(書いたものは、端末内に残す)。
+				await vi.advanceTimersByTimeAsync(60_000);
+				sync.edit([line("a", "A3")]);
+				await vi.advanceTimersByTimeAsync(60_000);
+				expect(server.api.commit).toHaveBeenCalledTimes(1);
+				expect(latest()?.status).toBe("denied");
+				expect(pendings.at(-1)?.changes).toEqual([
+					expect.objectContaining({ type: "update", id: "a", text: "A3" }),
+				]);
+			},
+		);
+
+		it("読み直しで、権限がないと分かったときも、やめる", async () => {
+			const server = createServer([line("a")]);
+			const { latest } = start(server);
+			server.api.load.mockRejectedValue(new PageApiError("missing"));
+
+			server.handlers?.onHello(5);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(latest()?.status).toBe("denied");
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(server.api.load).toHaveBeenCalledTimes(1);
+		});
+	});
+
 	describe("ページが削除されたとき(ADR-0026)", () => {
 		const gone = () => new PageApiError("gone");
 

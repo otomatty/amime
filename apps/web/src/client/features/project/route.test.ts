@@ -40,6 +40,21 @@ describe("parseRoute(URLのパスから、表示するものを決める)", () =
 	});
 });
 
+describe("parseRoute(アプリが使うパス)", () => {
+	it("/settings/プロジェクト は、そのプロジェクトの設定", () => {
+		expect(parseRoute("/settings/team")).toEqual({ kind: "settings", project: "team" });
+		expect(parseRoute("/settings/Team/")).toEqual({ kind: "settings", project: "team" });
+	});
+
+	it("/invite/値 は、招待リンク", () => {
+		expect(parseRoute("/invite/abc-DEF_123")).toEqual({ kind: "invite", token: "abc-DEF_123" });
+	});
+
+	it.each(["/settings", "/settings/", "/invite", "/invite/"])("%s だけなら、トップ", (path) => {
+		expect(parseRoute(path)).toEqual({ kind: "home" });
+	});
+});
+
 describe("currentProject(この画面で開いているプロジェクト)", () => {
 	it("URLの最初の部分を返す。トップでは null", () => {
 		window.history.replaceState(null, "", "/?playground");
@@ -48,5 +63,9 @@ describe("currentProject(この画面で開いているプロジェクト)", () 
 		expect(currentProject()).toBe("team");
 		window.history.replaceState(null, "", "/team");
 		expect(currentProject()).toBe("team");
+		window.history.replaceState(null, "", "/settings/team");
+		expect(currentProject()).toBe("team");
+		window.history.replaceState(null, "", "/invite/abc");
+		expect(currentProject()).toBeNull();
 	});
 });
