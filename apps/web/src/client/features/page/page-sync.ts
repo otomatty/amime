@@ -34,7 +34,15 @@ const MAX_RETRY_MS = 30_000;
  * - retrying: 保存に失敗し、再試行を待っている
  * - rejected: 送った内容をサーバーに断られた(内容を直すまで、送り直さない)
  */
-export type SyncStatus = "new" | "saved" | "unsaved" | "saving" | "retrying" | "rejected";
+export type SyncStatus =
+	| "new"
+	| "saved"
+	| "unsaved"
+	| "saving"
+	| "retrying"
+	| "rejected"
+	/** ページが削除された(ADR-0026)。保存をやめている。 */
+	| "deleted";
 
 export type PageApi = {
 	readonly load: () => Promise<PageSnapshot>;
@@ -60,7 +68,7 @@ type PageSyncOptions = {
 	 * 保存には関わらない知らせの届け先。そのまま渡す。
 	 * 他の人のカーソルと接続の状態(ADR-0023)、ページの名前(ADR-0024)。
 	 */
-	readonly listeners?: Omit<PageSocketHandlers, "onHello" | "onCommit">;
+	readonly listeners?: Omit<PageSocketHandlers, "onHello" | "onCommit" | "onDeleted">;
 	/** 保存の状態を知らせる。 */
 	readonly onStatus: (status: SyncStatus) => void;
 	/**
@@ -99,6 +107,8 @@ export function createPageSync({
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let retryDelay = FIRST_RETRY_MS;
 	let failure: "none" | "failed" | "rejected" = "none";
+	/** ページが削除されたと分かった。保存も受け取りも、もう行わない。 */
+	let deleted = false;
 	/** 送信中のコミットを作ったときの、画面の文書。断られたあとで、内容が直されたかどうかを見るのに使う。 */
 	let sentLocal: readonly Line[] | null = null;
 	/**
@@ -116,6 +126,7 @@ export function createPageSync({
 		session.inflight === null &&
 		sameLines(session.local, initial);
 	const status = (): SyncStatus => {
+		if (deleted) return "deleted";
 		if (untouched()) return "new";
 		if (!hasUnsaved(session)) return "saved";
 		if (failure === "failed") return "retrying";
@@ -131,12 +142,14 @@ export function createPageSync({
 	const publish = () => {
 		if (disposed) return;
 		onStatus(status());
-		onPending(untouched() ? NOTHING_PENDING : pendingChanges(session));
+		// 削除されたページの変更は、送る先がない。端末内にも残さない。
+		const settled = deleted || untouched();
+		onPending(settled ? NOTHING_PENDING : pendingChanges(session));
 	};
 
 	const schedule = (delay: number) => {
 		// 止めたあとに、待っていた通信が失敗して戻ってくることがある。そのときは、もう再試行しない。
-		if (disposed) return;
+		if (disposed || deleted) return;
 		if (timer !== null) clearTimeout(timer);
 		timer = setTimeout(() => {
 			timer = null;
@@ -161,12 +174,21 @@ export function createPageSync({
 	};
 
 	/**
+	 * サーバーの応答を待っているあいだにページが削除されていたら、応答を使わずにやめる(ADR-0026)。
+	 * 削除されたあとは、画面の文書を置き換えない。開いていた画面に残っている内容が、最後の写しかもしれない。
+	 */
+	const unlessDeleted = <T>(response: T): T => {
+		if (deleted) throw new PageApiError("gone");
+		return response;
+	};
+
+	/**
 	 * 読み直して、サーバーに追いつく。送信中のコミットがないときにだけ呼ぶ。
 	 * 読み直したページのほうが古ければ(待っているあいだに、配信でそれより先まで進んでいたら)、
 	 * 何もせず false を返す。
 	 */
 	async function catchUp(): Promise<boolean> {
-		const latest = await api.load();
+		const latest = unlessDeleted(await api.load());
 		if (latest.version < session.version) return false;
 		// 待っているあいだに送信が始まることはない(保存を進めるのは、1度に1つだけ)。
 		if (latest.version > session.version) settle(resync(receiving(), latest));
@@ -190,13 +212,26 @@ export function createPageSync({
 		}
 		// 自分のコミットは、サーバーに入っている(いま入ったか、送り直す前に入っていた)。
 		// 読み直したページには、それが含まれている。
-		const latest = await api.load();
+		const latest = unlessDeleted(await api.load());
 		if (latest.version < result.version) throw new PageApiError("failed");
 		settle(resync(session, latest));
 	}
 
+	/** ページが削除されたと分かった。保存と受け取りをやめる(ADR-0026)。 */
+	function gone(): void {
+		if (deleted) return;
+		deleted = true;
+		if (timer !== null) clearTimeout(timer);
+		connection.close();
+		publish();
+	}
+
 	/** 失敗を記録する。続けてもう1回進めるべきなら true を返す。 */
 	function fail(error: unknown, committing: boolean): boolean {
+		if (error instanceof PageApiError && error.kind === "gone") {
+			gone();
+			return false;
+		}
 		if (committing && error instanceof PageApiError && error.kind === "rejected") return rejected();
 		// 送信中のコミットは、そのまま残す。サーバーに入ったかどうかは分からないので、
 		// 次は、同じコミットを同じIDで送り直す。サーバーは、二重に適用しない(ADR-0021)。
@@ -227,6 +262,7 @@ export function createPageSync({
 	 * 必ずその時点の session を使う。
 	 */
 	async function step(): Promise<boolean> {
+		if (deleted) return false;
 		let committing = false;
 		try {
 			const commit = await nextCommit();
@@ -239,7 +275,7 @@ export function createPageSync({
 			publish();
 
 			committing = true;
-			const result = await api.commit(commit);
+			const result = unlessDeleted(await api.commit(commit));
 			committing = false;
 			await confirm(result);
 			failure = "none";
@@ -257,7 +293,7 @@ export function createPageSync({
 		busy = true;
 		try {
 			// 送るものがなくなるか、失敗するまで続ける。待っているあいだに遅れが分かったら、もう1回進める。
-			while ((await step()) || (behind() && failure !== "failed")) {
+			while ((await step()) || (behind() && failure !== "failed" && !deleted)) {
 				// 繰り返すだけ。
 			}
 		} finally {
@@ -267,6 +303,7 @@ export function createPageSync({
 
 	const connection = api.subscribe({
 		...listeners,
+		onDeleted: gone,
 		onHello(version) {
 			// つないだ時点でサーバーのほうが進んでいたら、切れているあいだのコミットを受け取りそこねている。
 			knownVersion = Math.max(knownVersion, version);

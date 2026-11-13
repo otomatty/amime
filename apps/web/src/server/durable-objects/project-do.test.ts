@@ -20,7 +20,12 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 		it("まだない名前を開くと、新しいIDを決める。名前は、URLの名前から作る", async () => {
 			const info = await project("open-new").open("買い物_メモ");
 
-			expect(info).toEqual({ id: expect.any(String), title: "買い物 メモ", problem: null });
+			expect(info).toEqual({
+				id: expect.any(String),
+				title: "買い物 メモ",
+				problem: null,
+				pinned: false,
+			});
 			expect(info.id).toMatch(/^[\w-]{1,64}$/);
 		});
 
@@ -99,7 +104,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 
 			const renamed = await stub.index(page.id, saved("新しい名前", 2));
 
-			expect(renamed).toEqual({ id: page.id, title: "新しい名前", problem: null });
+			expect(renamed).toEqual({ id: page.id, title: "新しい名前", problem: null, pinned: false });
 			expect((await stub.open("新しい名前")).id).toBe(page.id);
 			// 前の名前は空く。開くと、別の新しいページになる。
 			expect((await stub.open("旧い名前")).id).not.toBe(page.id);
@@ -121,7 +126,12 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 
 			const blocked = await stub.index(page.id, saved("先にある名前", 2));
 
-			expect(blocked).toEqual({ id: page.id, title: "自分の名前", problem: "taken" });
+			expect(blocked).toEqual({
+				id: page.id,
+				title: "自分の名前",
+				problem: "taken",
+				pinned: false,
+			});
 			expect((await stub.open("先にある名前")).id).toBe(other.id);
 			expect(await stub.open("自分の名前")).toEqual(blocked);
 		});
@@ -137,6 +147,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				id: page.id,
 				title: "c",
 				problem: null,
+				pinned: false,
 			});
 		});
 
@@ -148,7 +159,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 
 			const renamed = await stub.index(page.id, saved("取りたい名前", 2));
 
-			expect(renamed).toEqual({ id: page.id, title: "取りたい名前", problem: null });
+			expect(renamed).toEqual({ id: page.id, title: "取りたい名前", problem: null, pinned: false });
 			expect((await stub.open("取りたい名前")).id).toBe(page.id);
 			expect(placeholder.id).not.toBe(page.id);
 		});
@@ -162,7 +173,12 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			// 開いたままだったタブが、あとから書き始めた。
 			const adopted = await stub.index(placeholder.id, saved("名前"));
 
-			expect(adopted).toEqual({ id: placeholder.id, title: "名前 (2)", problem: "taken" });
+			expect(adopted).toEqual({
+				id: placeholder.id,
+				title: "名前 (2)",
+				problem: "taken",
+				pinned: false,
+			});
 			expect((await stub.open("名前 (2)")).id).toBe(placeholder.id);
 			expect((await stub.open("名前")).id).toBe(page.id);
 		});
@@ -197,7 +213,12 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				saved("  "),
 			);
 
-			expect(adopted).toEqual({ id: "unknown-page", title: "無題", problem: "empty" });
+			expect(adopted).toEqual({
+				id: "unknown-page",
+				title: "無題",
+				problem: "empty",
+				pinned: false,
+			});
 		});
 
 		it("1行目が空なら、名前を変えない。理由を返す", async () => {
@@ -223,7 +244,12 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				saved(".."),
 			);
 
-			expect(adopted).toEqual({ id: "unknown-page", title: "無題", problem: "reserved" });
+			expect(adopted).toEqual({
+				id: "unknown-page",
+				title: "無題",
+				problem: "reserved",
+				pinned: false,
+			});
 		});
 
 		it("1行目が長すぎるなら、名前を変えない。理由を返す", async () => {
@@ -308,6 +334,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 						updated: 5000,
 						created: expect.any(Number),
 						linked: 0,
+						pinned: false,
 					},
 				],
 				total: 1,
@@ -437,6 +464,137 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 		});
 	});
 
+	describe("pin(一覧の先頭に固定する)", () => {
+		const add = async (stub: ReturnType<typeof project>, title: string, updated: number) => {
+			const page = await stub.open(title);
+			await stub.index(page.id, { ...saved(title), updated });
+			return page.id;
+		};
+		const titles = (list: { pages: readonly { title: string }[] }) =>
+			list.pages.map((page) => page.title);
+
+		it("固定したページは、どの並び順でも先頭に並ぶ。あとから固定したものが前", async () => {
+			const stub = project("pin-order");
+			const old = await add(stub, "古い", 1000);
+			await add(stub, "新しい", 3000);
+			const middle = await add(stub, "中くらい", 2000);
+
+			expect(await stub.pin(old, true)).toMatchObject({ id: old, pinned: true });
+			await runInDurableObject(stub, (_instance, state) => {
+				state.storage.sql.exec("UPDATE pages SET pinned = 1 WHERE id = ?", old);
+			});
+			await stub.pin(middle, true);
+
+			expect(titles(await stub.list({ sort: "updated" }))).toEqual(["中くらい", "古い", "新しい"]);
+			expect(titles(await stub.list({ sort: "title" }))).toEqual(["中くらい", "古い", "新しい"]);
+			const list = await stub.list({ sort: "updated" });
+			expect(list.pages.map((page) => page.pinned)).toEqual([true, true, false]);
+		});
+
+		it("同じ時刻に続けて固定しても、あとから固定したものが前に並ぶ", async () => {
+			const stub = project("pin-same-time");
+			const newer = await add(stub, "更新が新しい", 3000);
+			const older = await add(stub, "更新が古い", 1000);
+
+			// 1回の呼び出しの中では、時刻が進まない。
+			await runInDurableObject(stub, (instance) => {
+				instance.pin(newer, true);
+				instance.pin(older, true);
+			});
+
+			expect(titles(await stub.list({ sort: "updated" }))).toEqual(["更新が古い", "更新が新しい"]);
+		});
+
+		it("すでに固定しているページを、もう一度固定しても、順は変わらない", async () => {
+			const stub = project("pin-again");
+			const first = await add(stub, "先に固定", 1000);
+			const second = await add(stub, "あとで固定", 2000);
+			await runInDurableObject(stub, (instance) => {
+				instance.pin(first, true);
+				instance.pin(second, true);
+				instance.pin(first, true);
+			});
+
+			expect(titles(await stub.list({ sort: "title" }))).toEqual(["あとで固定", "先に固定"]);
+		});
+
+		it("固定を外すと、ふつうの並びに戻る", async () => {
+			const stub = project("pin-off");
+			const old = await add(stub, "古い", 1000);
+			await add(stub, "新しい", 3000);
+			await stub.pin(old, true);
+
+			expect(await stub.pin(old, false)).toMatchObject({ pinned: false });
+
+			expect(titles(await stub.list({ sort: "updated" }))).toEqual(["新しい", "古い"]);
+		});
+
+		it("固定しているかどうかは、名前からページを引いたときにも分かる。名前を変えても残る", async () => {
+			const stub = project("pin-info");
+			const id = await add(stub, "名前", 1000);
+			await stub.pin(id, true);
+
+			expect(await stub.open("名前")).toMatchObject({ id, pinned: true });
+			expect(await stub.index(id, saved("新しい名前", 2))).toMatchObject({ pinned: true });
+		});
+
+		it("台帳にないページは、固定できない", async () => {
+			expect(await project("pin-unknown").pin("unknown" as PageId, true)).toBeNull();
+		});
+	});
+
+	describe("remove(ページを削除する)", () => {
+		it("台帳から消す。一覧に出なくなり、そのページからのリンクも数えなくなる", async () => {
+			const stub = project("remove-basic");
+			const egg = await stub.open("卵");
+			await stub.index(egg.id, saved("卵"));
+			const shopping = await stub.open("買い物");
+			await stub.index(shopping.id, saved("買い物", 1, { links: ["卵"] }));
+
+			await stub.remove(shopping.id);
+
+			const list = await stub.list({ sort: "title" });
+			expect(list).toMatchObject({ pages: [{ title: "卵", linked: 0 }], total: 1 });
+		});
+
+		it("同じ名前を開くと、別の新しいページになる(削除したページのIDは、使い回さない)", async () => {
+			const stub = project("remove-reopen");
+			const page = await stub.open("名前");
+			await stub.index(page.id, saved("名前"));
+
+			await stub.remove(page.id);
+
+			const reopened = await stub.open("名前");
+			expect(reopened.id).not.toBe(page.id);
+			// 新しいIDも、名前から決まる。
+			await runInDurableObject(stub, (_instance, state) => {
+				state.storage.sql.exec("DELETE FROM pages WHERE id = ?", reopened.id);
+			});
+			expect((await stub.open("名前")).id).toBe(reopened.id);
+		});
+
+		it("削除したページについての知らせが届いても、台帳に載せ直さない", async () => {
+			const stub = project("remove-late");
+			const page = await stub.open("名前");
+			await stub.index(page.id, saved("名前"));
+			await stub.remove(page.id);
+
+			await stub.index(page.id, saved("名前", 2));
+
+			expect((await stub.list({ sort: "title" })).total).toBe(0);
+			expect((await stub.open("名前")).id).not.toBe(page.id);
+		});
+
+		it("台帳にないページを削除しても、失敗しない。そのIDは使い回さない", async () => {
+			const stub = project("remove-unknown");
+
+			await stub.remove("unknown" as PageId);
+			await stub.index("unknown" as PageId, saved("あとから届いた"));
+
+			expect((await stub.list({ sort: "title" })).total).toBe(0);
+		});
+	});
+
 	describe("保存の形の移行", () => {
 		it("移行の途中で失敗したら、その移行はなかったことになる(やり直せる)", async () => {
 			const stub = project("migrate-atomic");
@@ -466,7 +624,9 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			await runInDurableObject(stub, (_instance, state) => {
 				const { sql } = state.storage;
 				// ADR-0024 の時点の形に戻す。
-				sql.exec("DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;");
+				sql.exec(
+					"DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
+				);
 				sql.exec(`CREATE TABLE pages (
 					id TEXT PRIMARY KEY, title_lc TEXT NOT NULL UNIQUE, title TEXT NOT NULL, problem TEXT,
 					version INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL
@@ -487,6 +647,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 						updated: 200,
 						created: 100,
 						linked: 0,
+						pinned: false,
 					},
 				],
 				total: 1,

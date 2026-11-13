@@ -16,8 +16,20 @@ import { connectPageSocket } from "./page-socket.ts";
 import type { PageApi } from "./page-sync.ts";
 
 const STATUS_FORBIDDEN = 403;
+/** 削除されたページへの要求への応答。 */
+const STATUS_GONE = 410;
 /** 送った内容に問題があるときの応答(形が正しくない、大きすぎる)。 */
 const STATUS_REJECTED: ReadonlySet<number | undefined> = new Set([400, 413]);
+
+/** APIを呼ぶ。失敗はすべて PageApiError にする。 */
+async function send(url: string, init: RequestInit | undefined): Promise<Response> {
+	const response = await fetch(url, init).catch(() => null);
+	if (response?.status === STATUS_FORBIDDEN) throw new PageApiError("disabled");
+	if (response?.status === STATUS_GONE) throw new PageApiError("gone");
+	if (STATUS_REJECTED.has(response?.status)) throw new PageApiError("rejected");
+	if (!response?.ok) throw new PageApiError("failed");
+	return response;
+}
 
 /** APIを呼び、応答の本文を検査して返す。失敗はすべて PageApiError にする。 */
 async function request<T>(
@@ -25,15 +37,14 @@ async function request<T>(
 	init: RequestInit | undefined,
 	parse: (body: unknown) => Result<T, "invalid">,
 ): Promise<T> {
-	const response = await fetch(url, init).catch(() => null);
-	if (response?.status === STATUS_FORBIDDEN) throw new PageApiError("disabled");
-	if (STATUS_REJECTED.has(response?.status)) throw new PageApiError("rejected");
-	if (!response?.ok) throw new PageApiError("failed");
+	const response = await send(url, init);
 
 	const parsed = parse(await response.json().catch(() => null));
 	if (!parsed.ok) throw new PageApiError("failed");
 	return parsed.value;
 }
+
+const JSON_HEADERS = { "content-type": "application/json" };
 
 const pagePath = (id: PageId): string => `/api/pages/${id}`;
 
@@ -54,6 +65,22 @@ export function listPages({
 	readonly offset: number;
 }): Promise<PageList> {
 	return request(`/api/pages?sort=${sort}&offset=${offset}`, undefined, parsePageList);
+}
+
+/** ページを、一覧の先頭に固定する(pinned が false なら、固定を外す)。ADR-0026。 */
+export function pinPage(id: PageId, pinned: boolean): Promise<PageInfo> {
+	// 固定の指定は、形が決まっている。サーバーが断るのは、台帳にないページのときだけ。
+	const init = { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ pinned }) };
+	return request(`${pagePath(id)}/pin`, init, parsePageInfo).catch((error: unknown) => {
+		throw error instanceof PageApiError && error.kind === "rejected"
+			? new PageApiError("failed")
+			: error;
+	});
+}
+
+/** ページを削除する(ADR-0026)。元には戻せない。 */
+export async function deletePage(id: PageId): Promise<void> {
+	await send(pagePath(id), { method: "DELETE" });
 }
 
 /** ページの WebSocket のURL。いま開いているページ(location)と同じ接続先にする。 */
@@ -77,7 +104,7 @@ export function createPageApi(id: PageId, client: ClientId): PageApi {
 				`${url}/commits`,
 				{
 					method: "POST",
-					headers: { "content-type": "application/json" },
+					headers: JSON_HEADERS,
 					body: JSON.stringify({ ...commit, client }),
 				},
 				parseCommitResult,

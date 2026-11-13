@@ -11,6 +11,7 @@ import {
 	parsePageInfo,
 	parsePageList,
 	parsePageSort,
+	parsePageTitle,
 	parsePendingRecord,
 	parseServerMessage,
 	parseSnapshot,
@@ -74,8 +75,8 @@ describe("parsePageId", () => {
 
 describe("parsePageInfo", () => {
 	it("ページのID、名前、名前を1行目に合わせられない理由を受け付ける", () => {
-		const named = { id: "p1", title: "買い物 メモ", problem: null };
-		const blocked = { id: "p1", title: "買い物 メモ", problem: "taken" };
+		const named = { id: "p1", title: "買い物 メモ", problem: null, pinned: false };
+		const blocked = { id: "p1", title: "買い物 メモ", problem: "taken", pinned: true };
 
 		expect(parsePageInfo(named)).toEqual({ ok: true, value: named });
 		expect(parsePageInfo(blocked)).toEqual({ ok: true, value: blocked });
@@ -85,9 +86,10 @@ describe("parsePageInfo", () => {
 	});
 
 	it.each([
-		["IDがない", { title: "a", problem: null }],
-		["名前が文字列でない", { id: "p1", title: 1, problem: null }],
-		["知らない理由", { id: "p1", title: "a", problem: "other" }],
+		["IDがない", { title: "a", problem: null, pinned: false }],
+		["名前が文字列でない", { id: "p1", title: 1, problem: null, pinned: false }],
+		["知らない理由", { id: "p1", title: "a", problem: "other", pinned: false }],
+		["固定しているかがない", { id: "p1", title: "a", problem: null }],
 	])("%s入力は受け付けない", (_name, input) => {
 		expect(parsePageInfo(input)).toEqual({ ok: false, error: "invalid" });
 	});
@@ -102,6 +104,7 @@ describe("parsePageList", () => {
 		updated: 2000,
 		created: 1000,
 		linked: 3,
+		pinned: false,
 	};
 
 	it("ページの一覧を受け付ける", () => {
@@ -131,6 +134,22 @@ describe("parsePageSort", () => {
 	it.each([["popular"], [""], [undefined]])("%j は受け付けない", (sort) => {
 		expect(parsePageSort(sort)).toEqual({ ok: false, error: "invalid" });
 	});
+});
+
+describe("parsePageTitle", () => {
+	it("ページの名前と、名前を1行目に合わせられない理由を受け付ける", () => {
+		expect(parsePageTitle({ title: "買い物", problem: "empty" })).toEqual({
+			ok: true,
+			value: { title: "買い物", problem: "empty" },
+		});
+	});
+
+	it.each([[null], [{ title: "買い物" }], [{ title: 1, problem: null }]])(
+		"%j は受け付けない",
+		(input) => {
+			expect(parsePageTitle(input)).toEqual({ ok: false, error: "invalid" });
+		},
+	);
 });
 
 describe("parseClientMessage", () => {
@@ -204,6 +223,13 @@ describe("parseServerMessage", () => {
 		const message = { type: "page", title: "買い物", problem: "empty" };
 
 		expect(parseServerMessage(JSON.stringify(message))).toEqual({ ok: true, value: message });
+	});
+
+	it("ページが削除された知らせを受け付ける", () => {
+		expect(parseServerMessage('{"type":"deleted"}')).toEqual({
+			ok: true,
+			value: { type: "deleted" },
+		});
 	});
 
 	it("他の端末が接続を閉じた知らせを受け付ける", () => {

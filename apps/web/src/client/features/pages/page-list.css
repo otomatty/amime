@@ -107,3 +107,12 @@
 	margin: 1rem auto 0;
 	cursor: pointer;
 }
+
+.card-pin {
+	align-self: flex-start;
+	padding: 0 0.4rem;
+	border: 1px solid var(--color-link);
+	border-radius: 0.2rem;
+	color: var(--color-link);
+	font-size: 0.65rem;
+}

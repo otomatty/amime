@@ -29,6 +29,8 @@ export type PageSocketHandlers = {
 	readonly onConnection?: (connected: boolean) => void;
 	/** ページの名前を、サーバーが1行目に合わせて確かめた(ADR-0024)。 */
 	readonly onPage?: (title: string, problem: TitleProblem | null) => void;
+	/** ページが削除された(ADR-0026)。 */
+	readonly onDeleted?: () => void;
 };
 
 /** ページの WebSocket の接続。 */
@@ -141,6 +143,9 @@ export function connectPageSocket({
 				return;
 			case "page":
 				handlers.onPage?.(message.title, message.problem);
+				return;
+			case "deleted":
+				handlers.onDeleted?.();
 				return;
 		}
 	};

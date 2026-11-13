@@ -13,6 +13,7 @@ const card = (id: string, title: string, extra: object = {}) => ({
 	updated: Date.UTC(2026, 10, 13, 1, 30),
 	created: Date.UTC(2026, 10, 1),
 	linked: 0,
+	pinned: false,
 	...extra,
 });
 
@@ -71,6 +72,23 @@ describe("PageList(ページの一覧)", () => {
 		expect(image?.getAttribute("referrerpolicy")).toBe("no-referrer");
 		expect(first.querySelector("time")?.getAttribute("datetime")).toBe("2026-11-13T01:30:00.000Z");
 		expect(second.querySelector("img")).toBeNull();
+	});
+
+	it("一覧の先頭に固定しているページには、その印を出す", async () => {
+		stubList(() =>
+			json({
+				pages: [card("p1", "固定したページ", { pinned: true }), card("p2", "ふつうのページ")],
+				total: 2,
+			}),
+		);
+
+		render(<PageList />);
+
+		await waitFor(() => expect(titles()).toEqual(["固定したページ", "ふつうのページ"]));
+		const [first, second] = cards();
+		if (!first || !second) throw new Error("no cards");
+		expect(within(first).getByText("固定")).toBeDefined();
+		expect(within(second).queryByText("固定")).toBeNull();
 	});
 
 	it("ページがなければ、最初のページの作り方を案内する", async () => {

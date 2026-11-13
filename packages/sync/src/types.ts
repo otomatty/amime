@@ -76,6 +76,8 @@ export type PageInfo = {
 	readonly title: string;
 	/** 名前を1行目に合わせられていなければ、その理由。合っていれば null。 */
 	readonly problem: TitleProblem | null;
+	/** 一覧の先頭に固定しているか(ADR-0026)。 */
+	readonly pinned: boolean;
 };
 
 /** ページの一覧の並び順。 */
@@ -95,6 +97,8 @@ export type PageCard = {
 	readonly created: number;
 	/** 他のページからリンクされている数。 */
 	readonly linked: number;
+	/** 一覧の先頭に固定しているか。 */
+	readonly pinned: boolean;
 };
 
 /** ページの一覧の、ひとまとまり。 */
@@ -165,7 +169,9 @@ export type ServerMessage =
 	/** 他の端末が接続を閉じたときに送る。 */
 	| { readonly type: "leave"; readonly client: ClientId }
 	/** ページの名前を、1行目に合わせて確かめたあとに送る(ADR-0024)。変わっていないこともある。 */
-	| { readonly type: "page"; readonly title: string; readonly problem: TitleProblem | null };
+	| { readonly type: "page"; readonly title: string; readonly problem: TitleProblem | null }
+	/** ページが削除されたときと、削除されたページに接続したときに送る(ADR-0026)。 */
+	| { readonly type: "deleted" };
 
 /** まだサーバーに入っていない(かもしれない)自分の変更。 */
 export type PendingEntry = {

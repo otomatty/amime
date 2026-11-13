@@ -15,7 +15,10 @@ type PageRow = {
 	title_lc: string;
 	problem: string | null;
 	version: number;
+	pinned: number;
 };
+
+const PAGE_COLUMNS = "id, title, title_lc, problem, version, pinned";
 
 /** PageDO が知らせてくる、ページのいまの状態。 */
 type PageState = {
@@ -42,6 +45,9 @@ type ListOptions = {
 export const MAX_LIST_LIMIT = 100;
 
 /** 並び順ごとの、SQL の並べ方。同じ値のページは、名前の順にする(順序が、取り出すたびに変わらないように)。 */
+/** 固定したページを先頭に並べる。あとから固定したものを前にする。 */
+const PINNED_FIRST = "pinned > 0 DESC, pinned DESC";
+
 const ORDER_BY: Readonly<Record<PageSort, string>> = {
 	updated: "updated DESC, title_lc",
 	created: "created DESC, title_lc",
@@ -74,6 +80,13 @@ export const MIGRATIONS: readonly string[] = [
 		PRIMARY KEY (from_id, to_lc)
 	);
 	CREATE INDEX links_to ON links (to_lc);`,
+	// 3: 一覧の先頭への固定と、削除したページの記録(ADR-0026)。pinned は固定した時刻(固定していなければ 0)。
+	`ALTER TABLE pages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+	CREATE TABLE removed (
+		id TEXT PRIMARY KEY,
+		title TEXT NOT NULL,
+		removed INTEGER NOT NULL
+	);`,
 ];
 
 /**
@@ -152,7 +165,8 @@ export class ProjectDO extends DurableObject {
 			// プロジェクト(この Durable Object の名前)も含める。別のプロジェクトの同じ名前のページと、IDが重ならない。
 			const source = `${this.ctx.id.name}\n${titleLc}\n${number}`;
 			const id = (await sha256(source)).slice(0, PAGE_ID_LENGTH) as PageId;
-			if (this.#byId(id) === null) return id;
+			// 削除したページのIDは、使い回さない。
+			if (this.#byId(id) === null && this.#removedTitle(id) === null) return id;
 		}
 	}
 
@@ -164,9 +178,9 @@ export class ProjectDO extends DurableObject {
 		const { sql } = this.ctx.storage;
 		const rows = sql
 			.exec<CardRow>(
-				`SELECT id, title, descriptions, image, updated, created,
+				`SELECT id, title, descriptions, image, updated, created, pinned,
 					(SELECT COUNT(*) FROM links WHERE to_lc = pages.title_lc AND from_id != pages.id) AS linked
-				FROM pages WHERE version > 0 ORDER BY ${ORDER_BY[sort]} LIMIT ? OFFSET ?`,
+				FROM pages WHERE version > 0 ORDER BY ${PINNED_FIRST}, ${ORDER_BY[sort]} LIMIT ? OFFSET ?`,
 				Math.min(Math.max(limit, 0), MAX_LIST_LIMIT),
 				Math.max(offset, 0),
 			)
@@ -185,12 +199,64 @@ export class ProjectDO extends DurableObject {
 	 * 一覧とリンクのつながりのための情報(冒頭の本文、画像、リンク先)も、ここで入れ替える(ADR-0025)。
 	 */
 	index(id: PageId, state: PageState): PageInfo {
+		// 削除したページについての知らせが、あとから届いた。台帳に載せ直さない。
+		const removed = this.#removedTitle(id);
+		if (removed !== null) return { id, title: removed, problem: null, pinned: false };
 		// 名前・要約・リンク先を、まとめて確定する。途中で失敗して、一部だけが新しくなることがないようにする。
 		return this.ctx.storage.transactionSync(() => {
 			const info = this.#retitle(id, state);
 			this.#summarize(id, state.summary);
 			return info;
 		});
+	}
+
+	/**
+	 * ページを、一覧の先頭に固定する(pinned が false なら、固定を外す)。ADR-0026。
+	 * 台帳にないページなら null。
+	 */
+	pin(id: PageId, pinned: boolean): PageInfo | null {
+		// 固定した順を、時刻で持つ。同じ時刻に続けて固定しても、あとのものが大きくなるようにする。
+		// すでに固定しているページは、そのままにする(順を変えない)。
+		this.ctx.storage.sql.exec(
+			`UPDATE pages SET pinned = CASE
+				WHEN ?1 = 0 THEN 0
+				WHEN pinned > 0 THEN pinned
+				ELSE MAX(?2, (SELECT COALESCE(MAX(pinned), 0) + 1 FROM pages))
+			END WHERE id = ?3`,
+			pinned ? 1 : 0,
+			Date.now(),
+			id,
+		);
+		const row = this.#byId(id);
+		return row === null ? null : toInfo(row);
+	}
+
+	/**
+	 * ページを台帳から消す(ADR-0026)。本文は、PageDO が消す。
+	 * 消したページのIDは覚えておき、使い回さない(同じ名前で作り直したページが、消したページの続きにならないように)。
+	 */
+	remove(id: PageId): void {
+		const { sql } = this.ctx.storage;
+		const title = this.#byId(id)?.title ?? "";
+		// 消したことの記録と、台帳から消すことを、まとめて確定する。
+		this.ctx.storage.transactionSync(() => {
+			sql.exec(
+				"INSERT INTO removed (id, title, removed) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING",
+				id,
+				title,
+				Date.now(),
+			);
+			sql.exec("DELETE FROM links WHERE from_id = ?", id);
+			sql.exec("DELETE FROM pages WHERE id = ?", id);
+		});
+	}
+
+	/** 削除したページなら、そのときの名前。削除していなければ null。 */
+	#removedTitle(id: PageId): string | null {
+		const rows = this.ctx.storage.sql
+			.exec<{ title: string }>("SELECT title FROM removed WHERE id = ?", id)
+			.toArray();
+		return rows[0]?.title ?? null;
 	}
 
 	/** 冒頭の本文・画像・リンク先を入れ替える。リンク先は、変わった分だけを書き込む。 */
@@ -237,7 +303,7 @@ export class ProjectDO extends DurableObject {
 			state.updated,
 			id,
 		);
-		return { id, title, problem };
+		return { id, title, problem, pinned: row.pinned > 0 };
 	}
 
 	/** 1行目(wanted)を名前にできない理由。できるなら null。 */
@@ -302,7 +368,7 @@ export class ProjectDO extends DurableObject {
 			Date.now(),
 			updated,
 		);
-		return { id, title, problem };
+		return { id, title, problem, pinned: false };
 	}
 
 	/** 開いただけで保存されないまま、期間を過ぎたページを消す。 */
@@ -314,14 +380,11 @@ export class ProjectDO extends DurableObject {
 	}
 
 	#byTitle(titleLc: string): PageRow | null {
-		return this.#one(
-			"SELECT id, title, title_lc, problem, version FROM pages WHERE title_lc = ?",
-			titleLc,
-		);
+		return this.#one(`SELECT ${PAGE_COLUMNS} FROM pages WHERE title_lc = ?`, titleLc);
 	}
 
 	#byId(id: PageId): PageRow | null {
-		return this.#one("SELECT id, title, title_lc, problem, version FROM pages WHERE id = ?", id);
+		return this.#one(`SELECT ${PAGE_COLUMNS} FROM pages WHERE id = ?`, id);
 	}
 
 	#one(query: string, value: string): PageRow | null {
@@ -337,18 +400,19 @@ type CardRow = {
 	updated: number;
 	created: number;
 	linked: number;
+	pinned: number;
 };
 
 /** 台帳の行を、一覧に出す情報にする。 */
 function toCard(row: CardRow): PageCard {
 	// 保存してあるIDと冒頭の本文は、書き込むときに決めたもの(冒頭の本文は、文字列の配列のJSON)。
 	const descriptions = JSON.parse(row.descriptions) as string[];
-	return { ...row, id: row.id as PageId, descriptions };
+	return { ...row, id: row.id as PageId, descriptions, pinned: row.pinned > 0 };
 }
 
 /** 台帳の行を、ページの情報にする。 */
 function toInfo(row: PageRow): PageInfo {
 	// 保存してあるIDと理由は、書き込むときに決めたもの。
 	const problem = PROBLEMS.has(row.problem) ? (row.problem as TitleProblem | null) : null;
-	return { id: row.id as PageId, title: row.title, problem };
+	return { id: row.id as PageId, title: row.title, problem, pinned: row.pinned > 0 };
 }

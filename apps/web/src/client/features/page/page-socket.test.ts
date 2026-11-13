@@ -36,6 +36,7 @@ function connect() {
 		onCursor: vi.fn(),
 		onLeave: vi.fn(),
 		onConnection: vi.fn(),
+		onDeleted: vi.fn(),
 	};
 	const { close, sendCursor } = connectPageSocket({
 		url: "ws://amime.test/socket",
@@ -263,6 +264,14 @@ describe("connectPageSocket", () => {
 
 			expect(cursors(sockets[0])).toEqual([at("a", 1)]);
 		});
+	});
+
+	it("ページが削除された知らせを受け取る", () => {
+		const { latest, handlers } = connect();
+
+		latest().receive('{"type":"deleted"}');
+
+		expect(handlers.onDeleted).toHaveBeenCalledOnce();
 	});
 
 	describe("接続の状態", () => {

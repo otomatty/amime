@@ -712,6 +712,100 @@ describe("createPageSync", () => {
 		expect(states).toHaveLength(count);
 	});
 
+	describe("ページが削除されたとき(ADR-0026)", () => {
+		const gone = () => new PageApiError("gone");
+
+		it("保存しようとして、削除されていると分かったら、保存をやめる。未送信の変更は残さない", async () => {
+			const server = createServer([line("a")]);
+			server.api.commit.mockRejectedValue(gone());
+			const { sync, latest, pendings } = start(server);
+
+			sync.edit([line("a", "A2")]);
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+			expect(latest()?.status).toBe("deleted");
+			expect(pendings.at(-1)).toEqual({ inflight: null, changes: [] });
+			expect(server.handlers).toBeNull();
+
+			// そのあとで書いても、送らない。
+			sync.edit([line("a", "A3")]);
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(server.api.commit).toHaveBeenCalledTimes(1);
+			expect(latest()?.status).toBe("deleted");
+		});
+
+		it("削除された知らせが届いたら、保存をやめる", async () => {
+			const server = createServer([line("a")]);
+			const { sync, latest } = start(server);
+			sync.edit([line("a", "A2")]);
+
+			server.handlers?.onDeleted?.();
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+
+			expect(latest()?.status).toBe("deleted");
+			expect(server.api.commit).not.toHaveBeenCalled();
+		});
+
+		it("読み直しで、削除されていると分かったときも、保存をやめる", async () => {
+			const server = createServer([line("a")]);
+			const { latest } = start(server);
+			server.api.load.mockRejectedValue(gone());
+
+			// サーバーのほうが進んでいると知らされて、読み直す。
+			server.handlers?.onHello(5);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(latest()?.status).toBe("deleted");
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(server.api.load).toHaveBeenCalledTimes(1);
+		});
+
+		it("読み直しているあいだに削除されたら、あとから届いた内容で、画面の文書を置き換えない。送信もしない", async () => {
+			// 開いていた画面に残っている内容が、最後の写しかもしれない。
+			const server = createServer([line("a")]);
+			const { sync, latest, remotes } = start(server);
+			let release: (page: { version: number; lines: readonly Line[] }) => void = () => {};
+			server.api.load.mockReturnValue(
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+			);
+			sync.edit([line("a", "A2")]);
+			server.handlers?.onHello(2);
+			await vi.advanceTimersByTimeAsync(0);
+
+			server.handlers?.onDeleted?.();
+			release({ version: 2, lines: [] });
+			await vi.advanceTimersByTimeAsync(60_000);
+
+			expect(remotes).toEqual([]);
+			expect(latest()?.status).toBe("deleted");
+			expect(server.api.commit).not.toHaveBeenCalled();
+		});
+
+		it("送信への応答を待っているあいだに削除されたら、応答が届いても、画面の文書を置き換えない", async () => {
+			const server = createServer([line("a")]);
+			const { sync, latest, remotes } = start(server);
+			let respond: (result: CommitResult) => void = () => {};
+			server.api.commit.mockReturnValue(
+				new Promise((resolve) => {
+					respond = resolve;
+				}),
+			);
+			sync.edit([line("a", "A2")]);
+			await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+
+			server.handlers?.onDeleted?.();
+			// 他の人の変更が先に入っていた、という応答。読み直して載せ直そうとする。
+			respond({ version: 3, applied: [{ type: "update", id: line("a").id, text: "A2" }] });
+			await vi.advanceTimersByTimeAsync(60_000);
+
+			expect(remotes).toEqual([]);
+			expect(latest()?.status).toBe("deleted");
+			expect(server.api.load).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("保存には関わらない知らせ(ADR-0023、ADR-0024)", () => {
 		it("届いた知らせを、そのまま渡す", () => {
 			const server = createServer([line("a")]);

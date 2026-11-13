@@ -1,6 +1,6 @@
 import type { ClientId, Commit, CommitId, LineId, PageId } from "@amime/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPageApi, listPages, openPage, pageSocketUrl } from "./api.ts";
+import { createPageApi, deletePage, listPages, openPage, pageSocketUrl, pinPage } from "./api.ts";
 import { PageApiError } from "./page-api-error.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -23,7 +23,7 @@ const client = "tab-1" as ClientId;
 const pageId = "p-1" as PageId;
 
 describe("openPage(名前からページを引く)", () => {
-	const info = { id: "p-1", title: "買い物/メモ", problem: null };
+	const info = { id: "p-1", title: "買い物/メモ", problem: null, pinned: false };
 
 	it("名前をURLに符号化して引く。ページのIDと名前を返す", async () => {
 		const fetchMock = stubFetch(json(info));
@@ -67,6 +67,48 @@ describe("listPages(ページの一覧)", () => {
 	});
 });
 
+describe("pinPage(一覧の先頭に固定する)", () => {
+	const info = { id: "p-1", title: "買い物", problem: null, pinned: true };
+
+	it("固定するかどうかを送り、ページの情報を返す", async () => {
+		const fetchMock = stubFetch(json(info));
+
+		expect(await pinPage(pageId, true)).toEqual(info);
+		const [url, init] = fetchMock.mock.calls[0] ?? [];
+		expect(url).toBe("/api/pages/p-1/pin");
+		expect(init?.method).toBe("PUT");
+		expect(JSON.parse(String(init?.body))).toEqual({ pinned: true });
+	});
+
+	it("失敗は、PageApiError になる", async () => {
+		stubFetch(json({ error: "unknown-page" }, 404));
+
+		await expect(pinPage(pageId, false)).rejects.toMatchObject({ kind: "failed" });
+	});
+});
+
+describe("deletePage(ページを削除する)", () => {
+	it("ページのIDを指して削除する", async () => {
+		const fetchMock = stubFetch(new Response(null, { status: 204 }));
+
+		await deletePage(pageId);
+
+		const [url, init] = fetchMock.mock.calls[0] ?? [];
+		expect(url).toBe("/api/pages/p-1");
+		expect(init?.method).toBe("DELETE");
+	});
+
+	it.each([
+		["サーバーの失敗", json({ error: "x" }, 500), "failed"],
+		["通信の失敗", new TypeError("network"), "failed"],
+		["ページのAPIが無効", json({ error: "page-api-disabled" }, 403), "disabled"],
+	])("%sは、PageApiError になる", async (_name, response, kind) => {
+		stubFetch(response);
+
+		await expect(deletePage(pageId)).rejects.toMatchObject({ kind });
+	});
+});
+
 describe("pageSocketUrl", () => {
 	it("いま開いているページと同じ接続先の、WebSocket のURLを作る", () => {
 		const page = new URL("https://amime.example/notes/x");
@@ -101,6 +143,12 @@ describe("createPageApi", () => {
 			stubFetch(json({ error: "page-api-disabled" }, 403));
 
 			await expect(api.load()).rejects.toMatchObject({ kind: "disabled" });
+		});
+
+		it("削除されたページでは、そのことが分かる失敗になる", async () => {
+			stubFetch(json({ error: "page-deleted" }, 410));
+
+			await expect(api.load()).rejects.toMatchObject({ kind: "gone" });
 		});
 
 		it.each([

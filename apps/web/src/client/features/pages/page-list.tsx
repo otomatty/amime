@@ -54,6 +54,7 @@ function Card({ page }: { readonly page: PageCard }) {
 		<li className="card">
 			<a className="card-link" href={pageHref(page.title)}>
 				<h2 className="card-title">{page.title}</h2>
+				{page.pinned && <span className="card-pin">固定</span>}
 				{page.image !== null && (
 					<img
 						className="card-image"

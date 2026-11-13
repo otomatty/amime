@@ -10,9 +10,16 @@ const nextCommitId = (): CommitId => {
 	commitSerial += 1;
 	return `test-${commitSerial}` as CommitId;
 };
+/** 削除されていないページの結果を取り出す。 */
+function alive<T>(result: T | "deleted"): T {
+	if (result === "deleted") throw new Error("the page is deleted");
+	return result;
+}
 /** 新しいIDのコミットとして、変更を送る。 */
-const commitTo = (stub: ReturnType<typeof page>, changes: readonly Change[]) =>
-	stub.commit({ id: nextCommitId(), changes });
+const commitTo = async (stub: ReturnType<typeof page>, changes: readonly Change[]) =>
+	alive(await stub.commit({ id: nextCommitId(), changes }));
+/** ページの内容を読む。 */
+const read = async (stub: ReturnType<typeof page>) => alive(await stub.getPage());
 
 /** after に指定した行の直後(null なら先頭)に行を入れる。 */
 const insertAfter = (after: string | null, lineId: string, text: string): Change => ({
@@ -27,7 +34,7 @@ const page = (name: string) => exports.PageDO.getByName(`test-project/${name}`);
 
 describe("PageDO", () => {
 	it("新しいページは行を持たず、バージョンは0", async () => {
-		expect(await page("empty").getPage()).toEqual({ version: 0, lines: [] });
+		expect(await read(page("empty"))).toEqual({ version: 0, lines: [] });
 	});
 
 	it("コミットすると変更が適用され、バージョンが1つ進む", async () => {
@@ -41,7 +48,7 @@ describe("PageDO", () => {
 
 		expect(first).toEqual({ version: 1, applied: inserts });
 		expect(second).toEqual({ version: 2, applied: [update] });
-		expect(await stub.getPage()).toEqual({
+		expect(await read(stub)).toEqual({
 			version: 2,
 			lines: [line("a", "タイトル"), line("b", "本文2")],
 		});
@@ -68,7 +75,7 @@ describe("PageDO", () => {
 		expect(second.applied).toEqual([
 			{ type: "update", id: id("a"), text: "たぶん今日は👨‍👩‍👧と動物園へ行く" },
 		]);
-		expect((await stub.getPage()).lines).toEqual([line("a", "たぶん今日は👨‍👩‍👧と動物園へ行く")]);
+		expect((await read(stub)).lines).toEqual([line("a", "たぶん今日は👨‍👩‍👧と動物園へ行く")]);
 	});
 
 	it("行の並び順を保つ", async () => {
@@ -78,7 +85,7 @@ describe("PageDO", () => {
 		await commitTo(stub, [insertAfter("c", "b", "2")]);
 		await commitTo(stub, [{ type: "move", id: id("c"), after: id("a"), before: null }]);
 
-		expect((await stub.getPage()).lines.map((l) => l.id)).toEqual(["b", "a", "c"]);
+		expect((await read(stub)).lines.map((l) => l.id)).toEqual(["b", "a", "c"]);
 	});
 
 	it("対象の行がなくなっている変更だけを捨て、残りを適用する。効いた変更を返す", async () => {
@@ -89,7 +96,7 @@ describe("PageDO", () => {
 		const result = await commitTo(stub, [{ type: "delete", id: id("missing") }, update]);
 
 		expect(result).toEqual({ version: 2, applied: [update] });
-		expect(await stub.getPage()).toEqual({ version: 2, lines: [line("a", "A2")] });
+		expect(await read(stub)).toEqual({ version: 2, lines: [line("a", "A2")] });
 	});
 
 	it("何も効かなかったコミットでは、バージョンを進めない", async () => {
@@ -99,13 +106,13 @@ describe("PageDO", () => {
 		const result = await commitTo(stub, [{ type: "delete", id: id("missing") }]);
 
 		expect(result).toEqual({ version: 1, applied: [] });
-		expect((await stub.getPage()).version).toBe(1);
+		expect((await read(stub)).version).toBe(1);
 	});
 
 	it("ページごとに状態が独立している", async () => {
 		await commitTo(page("isolated-1"), [insertAfter(null, "a", "A")]);
 
-		expect(await page("isolated-2").getPage()).toEqual({ version: 0, lines: [] });
+		expect(await read(page("isolated-2"))).toEqual({ version: 0, lines: [] });
 	});
 
 	it("メモリから追い出されても、保存した内容から復元できる", async () => {
@@ -114,7 +121,7 @@ describe("PageDO", () => {
 
 		await evictDurableObject(stub);
 
-		expect(await stub.getPage()).toEqual({ version: 1, lines: [line("a", "A")] });
+		expect(await read(stub)).toEqual({ version: 1, lines: [line("a", "A")] });
 	});
 
 	describe("同じコミットの送り直し", () => {
@@ -128,7 +135,7 @@ describe("PageDO", () => {
 
 			expect(first).toEqual({ version: 1, applied: commit.changes });
 			expect(second).toEqual({ version: 1, applied: [], duplicate: true });
-			expect(await stub.getPage()).toEqual({ version: 1, lines: [line("a", "A")] });
+			expect(await read(stub)).toEqual({ version: 1, lines: [line("a", "A")] });
 		});
 
 		it("送り直すまでのあいだに他のコミットが入っていても、重複だと分かる。応答のバージョンは、いまのバージョン", async () => {
@@ -137,7 +144,7 @@ describe("PageDO", () => {
 			await commitTo(stub, [{ type: "update", id: id("a"), text: "A2" }]);
 
 			expect(await stub.commit(commit)).toEqual({ version: 2, applied: [], duplicate: true });
-			expect((await stub.getPage()).lines).toEqual([line("a", "A2")]);
+			expect((await read(stub)).lines).toEqual([line("a", "A2")]);
 		});
 
 		it("何も効かなかったコミットも覚えておく(送り直しで、あとから効いてしまわないように)", async () => {
@@ -183,6 +190,45 @@ describe("PageDO", () => {
 		});
 	});
 
+	describe("削除(ADR-0026)", () => {
+		it("削除すると、読み込みも書き込みも「削除された」になる。休止から戻っても変わらない", async () => {
+			const stub = page("destroy");
+			await commitTo(stub, [insertAfter(null, "a", "タイトル")]);
+
+			await stub.destroy();
+
+			expect(await stub.getPage()).toBe("deleted");
+			expect(
+				await stub.commit({ id: nextCommitId(), changes: [insertAfter(null, "b", "x")] }),
+			).toBe("deleted");
+			await evictDurableObject(stub);
+			expect(await stub.getPage()).toBe("deleted");
+		});
+
+		it("削除すると、本文も、受け取ったコミットの記録も、台帳への知らせの予約も残さない", async () => {
+			const stub = page("destroy-storage");
+			await commitTo(stub, [insertAfter(null, "a", "タイトル"), insertAfter("a", "b", "本文")]);
+
+			await stub.destroy();
+
+			await runInDurableObject(stub, async (_instance, state) => {
+				const count = (table: string) =>
+					state.storage.sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n;
+				expect([count("page_lines"), count("commits"), count("notes")]).toEqual([0, 0, 0]);
+				expect(await state.storage.getAlarm()).toBeNull();
+			});
+		});
+
+		it("削除は、何度呼んでも同じ結果になる。まだ書かれていないページも削除できる", async () => {
+			const stub = page("destroy-twice");
+
+			await stub.destroy();
+			await stub.destroy();
+
+			expect(await stub.getPage()).toBe("deleted");
+		});
+	});
+
 	describe("台帳への知らせ(ADR-0024)", () => {
 		const directory = exports.ProjectDO.getByName("test-project");
 
@@ -197,6 +243,7 @@ describe("PageDO", () => {
 				id: info.id,
 				title: "知らせたあとの名前",
 				problem: null,
+				pinned: false,
 			});
 		});
 
@@ -309,7 +356,7 @@ describe("PageDO", () => {
 
 		const after = await positions();
 		expect(after).toMatchObject(before);
-		expect((await stub.getPage()).lines).toEqual([line("a", "A"), line("b", "B"), line("c", "C2")]);
+		expect((await read(stub)).lines).toEqual([line("a", "A"), line("b", "B"), line("c", "C2")]);
 	});
 
 	it("挿入・移動・削除を繰り返しても、保存した並び順は変更を順に適用した結果と一致する", async () => {
@@ -337,10 +384,10 @@ describe("PageDO", () => {
 			model = applyChanges(model, [change]).lines;
 		}
 
-		const saved = await stub.getPage();
+		const saved = await read(stub);
 		expect(saved.lines).toEqual(model);
 		expect(model.length).toBeGreaterThan(10);
 		await evictDurableObject(stub);
-		expect((await stub.getPage()).lines).toEqual(model);
+		expect((await read(stub)).lines).toEqual(model);
 	});
 });
