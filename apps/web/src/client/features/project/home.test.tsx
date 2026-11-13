@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AccountProvider } from "../account/account.tsx";
+import { AccountProvider, useAccount } from "../account/account.tsx";
 import { Home } from "./home.tsx";
 
 afterEach(() => {
@@ -30,6 +30,16 @@ function stubServer({ user = hanako, list, create }: Options = {}) {
 		}),
 	);
 	return requests;
+}
+
+/** ログインの状態を読み直すボタン(別の利用者でのログインの代わり)。 */
+function Switch() {
+	const { refresh } = useAccount();
+	return (
+		<button type="button" onClick={() => void refresh()}>
+			利用者を切り替える
+		</button>
+	);
 }
 
 function renderHome() {
@@ -99,6 +109,33 @@ describe("Home(トップ。参加しているプロジェクトの一覧)", () =
 		renderHome();
 
 		expect(await screen.findByText(/一覧を読み込めませんでした/)).toBeDefined();
+	});
+
+	it("別の利用者でログインし直したら、前の利用者のプロジェクトの一覧を、出したままにしない", async () => {
+		let user: unknown = hanako;
+		let list: () => Promise<Response> | Response = listOf([team], true);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) =>
+				url === "/api/me" ? Response.json({ user, login: ["dev"] }) : list(),
+			),
+		);
+		render(
+			<AccountProvider>
+				<Switch />
+				<Home />
+			</AccountProvider>,
+		);
+		await screen.findByRole("link", { name: "team" });
+
+		// 別の利用者になった。その人の一覧は、まだ届かない。
+		user = { ...hanako, id: "u2", name: "太郎" };
+		list = () => new Promise(() => {});
+		fireEvent.click(screen.getByRole("button", { name: "利用者を切り替える" }));
+
+		await waitFor(() => expect(screen.queryByRole("link", { name: "team" })).toBeNull());
+		expect(screen.queryByRole("button", { name: "プロジェクトを作る" })).toBeNull();
+		expect(screen.getByRole("status").textContent).toBe("読み込んでいます…");
 	});
 
 	it("作る権限のない人には、プロジェクトを作る欄を出さない", async () => {

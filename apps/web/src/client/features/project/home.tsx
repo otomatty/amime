@@ -84,17 +84,22 @@ function CreateProject({ navigate }: { readonly navigate: (href: string) => void
 export function Home({ navigate = (href) => window.location.assign(href) }: HomeProps) {
 	const { state } = useAccount();
 	const user = state?.user?.id ?? null;
-	const [list, setList] = useState<ProjectList | null | "failed">(null);
+	// 読み込んだ一覧は、だれのものかと一緒に持つ。別の利用者に変わったら、前の人の一覧は出さない。
+	const [loaded, setLoaded] = useState<{
+		readonly user: string;
+		readonly list: ProjectList | "failed";
+	} | null>(null);
 	useEffect(() => {
 		if (user === null) return;
 		let cancelled = false;
-		void listProjects().then((loaded) => {
-			if (!cancelled) setList(loaded ?? "failed");
+		void listProjects().then((list) => {
+			if (!cancelled) setLoaded({ user, list: list ?? "failed" });
 		});
 		return () => {
 			cancelled = true;
 		};
 	}, [user]);
+	const list = loaded?.user === user ? loaded.list : null;
 
 	if (state === null) return null;
 	if (state.user === null) {
