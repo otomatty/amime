@@ -29,11 +29,11 @@ function linkedTitle(written: string, type: "page-link" | "hashtag"): string | n
 }
 
 /**
- * to へのリンクの書き方。タグは、書けるならタグのままにする。
+ * to へのリンクの書き方([名前] か #名前)。type が hashtag なら、書けるならタグにする。
  * 書いたものが、to へのリンクとして読めることを確かめる(URLや装飾の記法として読める名前がある)。
  * リンクとして書けない名前なら null。
  */
-function writeLink(to: string, type: "page-link" | "hashtag"): string | null {
+export function writePageLink(to: string, type: "page-link" | "hashtag"): string | null {
 	const tag = `#${to.replaceAll(" ", "_")}`;
 	if (type === "hashtag" && toTitleLc(linkedTitle(tag, "hashtag") ?? "") === toTitleLc(to)) {
 		return tag;
@@ -69,7 +69,7 @@ function renameInLine(
 	for (const node of linksIn(raw, role).reverse()) {
 		const linked = toTitleLc(node.title);
 		const to = targets.get(linked);
-		const written = to === undefined ? null : writeLink(to, node.type);
+		const written = to === undefined ? null : writePageLink(to, node.type);
 		expected.unshift(to === undefined || written === null ? linked : toTitleLc(to));
 		if (written === null) continue;
 		text = text.slice(0, node.start) + written + text.slice(node.end);

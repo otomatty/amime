@@ -1,5 +1,5 @@
 import type { LineId } from "@amime/sync";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "./editor.tsx";
 
@@ -813,6 +813,236 @@ describe("Editor", () => {
 			"true",
 		);
 		expect(screen.getByRole("link", { name: "ある" }).hasAttribute("data-missing")).toBe(false);
+	});
+
+	describe("リンクの名前の補完(ADR-0030)", () => {
+		const search = async (query: string) =>
+			["買い物", "買い物 メモ", "旅行"].filter((title) => title.includes(query));
+		const options = () => screen.queryAllByRole("option").map((option) => option.textContent);
+		const active = () =>
+			screen
+				.queryAllByRole("option")
+				.find((option) => option.getAttribute("aria-selected") === "true")?.textContent ?? null;
+		/** 2行目の末尾にカーソルを置いて、文字を打つ。 */
+		async function typeOnBody(text: string) {
+			render(<Editor initialLines={["題", ""]} completeTitles={search} />);
+			focusEditor();
+			press("ArrowDown");
+			type(text);
+		}
+
+		it("リンクを書いている途中に、合う名前の候補を出す。最初は、どれも選んでいない", async () => {
+			await typeOnBody("[買い");
+
+			await waitFor(() => expect(options()).toEqual(["買い物", "買い物 メモ"]));
+			expect(active()).toBeNull();
+			const list = screen.getByRole("listbox", { name: "ページの名前の候補" });
+			expect(input().getAttribute("aria-controls")).toBe(list.id);
+			expect(input().hasAttribute("aria-activedescendant")).toBe(false);
+		});
+
+		it("下の矢印キーで候補を選び、Enter で補完する。括弧を閉じて、その後ろにカーソルを置く", async () => {
+			await typeOnBody("[買い");
+			await waitFor(() => expect(options()).toHaveLength(2));
+
+			press("ArrowDown");
+			press("ArrowDown");
+			expect(active()).toBe("買い物 メモ");
+			expect(input().getAttribute("aria-activedescendant")).toBe(
+				screen.getAllByRole("option")[1]?.id,
+			);
+			// カーソルは、動いていない。
+			expect(caret()).toEqual({ line: 1, column: 3 });
+			press("Enter");
+
+			expect(lines()).toEqual(["題", "[買い物 メモ]"]);
+			expect(caret()).toEqual({ line: 1, column: 8 });
+			expect(options()).toEqual([]);
+		});
+
+		it("補完は、1回の取り消しで元に戻る", async () => {
+			await typeOnBody("[買い");
+			await waitFor(() => expect(options()).toHaveLength(2));
+			press("ArrowDown");
+			press("Enter");
+
+			press("z", { ctrlKey: true });
+
+			expect(lines()).toEqual(["題", "[買い"]);
+		});
+
+		it("候補を選んでいないときの Enter は、改行する(候補が出ていても、書く手を止めない)", async () => {
+			await typeOnBody("[買い");
+			await waitFor(() => expect(options()).toHaveLength(2));
+
+			press("Enter");
+
+			expect(lines()).toEqual(["題", "[買い", ""]);
+		});
+
+		it("上の矢印キーでも候補を選べる(最後の候補から)", async () => {
+			await typeOnBody("[買い");
+			await waitFor(() => expect(options()).toHaveLength(2));
+
+			press("ArrowUp");
+
+			expect(active()).toBe("買い物 メモ");
+			expect(caret()).toEqual({ line: 1, column: 3 });
+		});
+
+		it("候補を押して補完できる", async () => {
+			await typeOnBody("#旅");
+			await waitFor(() => expect(options()).toEqual(["旅行"]));
+
+			fireEvent.mouseDown(screen.getByRole("option", { name: "旅行" }));
+
+			expect(lines()).toEqual(["題", "#旅行"]);
+			expect(caret()).toEqual({ line: 1, column: 3 });
+		});
+
+		it("タグを補完したら、カーソルがタグの中に残っていても、候補を閉じる(探し直して、また出さない)", async () => {
+			const titles = vi.fn(search);
+			render(<Editor initialLines={["題", ""]} completeTitles={titles} />);
+			focusEditor();
+			press("ArrowDown");
+			type("#旅");
+			await waitFor(() => expect(options()).toEqual(["旅行"]));
+
+			press("ArrowDown");
+			press("Enter");
+			// 補完したあとの名前で探し直すのを、待つ。
+			await waitFor(() => expect(titles).toHaveBeenCalledWith("旅行"));
+			await act(async () => {});
+
+			expect(lines()).toEqual(["題", "#旅行"]);
+			expect(options()).toEqual([]);
+		});
+
+		it("タグが、もう候補の名前と同じでも、補完したら候補を閉じる。次の Enter は、改行する", async () => {
+			await typeOnBody("#旅行");
+			await waitFor(() => expect(options()).toEqual(["旅行"]));
+
+			press("ArrowDown");
+			press("Enter");
+
+			expect(lines()).toEqual(["題", "#旅行"]);
+			expect(options()).toEqual([]);
+			press("Enter");
+			expect(lines()).toEqual(["題", "#旅行", ""]);
+		});
+
+		it("Esc で候補を閉じる。そのあとの矢印キーは、カーソルを動かす。続けて Tab を押しても、編集欄から抜けない", async () => {
+			await typeOnBody("[買い");
+			await waitFor(() => expect(options()).toHaveLength(2));
+
+			press("Escape");
+			expect(options()).toEqual([]);
+			press("ArrowUp");
+
+			expect(caret().line).toBe(0);
+			// Esc は候補を閉じるために使った。次の Tab は、インデントになる(既定の動作を止める)。
+			expect(press("Tab")).toBe(false);
+		});
+
+		it("候補が出る前に Esc を押していても、補完したあとの Tab は、字下げになる(編集欄から抜けない)", async () => {
+			render(<Editor initialLines={["題", ""]} completeTitles={search} />);
+			focusEditor();
+			press("ArrowDown");
+			type("[買い");
+			// まだ候補が出ていない。この Esc は、編集欄から抜ける準備になる。
+			press("Escape");
+			await waitFor(() => expect(options()).toHaveLength(2));
+
+			press("ArrowDown");
+			press("Enter");
+
+			expect(lines()).toEqual(["題", "[買い物]"]);
+			// 既定の動作(フォーカスの移動)を止めている。
+			expect(press("Tab")).toBe(false);
+		});
+
+		it("入力を続けると、候補が絞り込まれる。括弧を閉じると、候補は消える", async () => {
+			await typeOnBody("[買い");
+			await waitFor(() => expect(options()).toHaveLength(2));
+
+			type("物 ");
+			await waitFor(() => expect(options()).toEqual(["買い物 メモ"]));
+			type("]");
+
+			expect(options()).toEqual([]);
+		});
+
+		it("テーブルの行で補完しても、他のセルは変えない", async () => {
+			render(
+				<Editor initialLines={["題", "table:予定", " [買\t別のセル]"]} completeTitles={search} />,
+			);
+			clickChar(2, 2);
+			press("ArrowRight");
+			await waitFor(() => expect(options()).toEqual(["買い物", "買い物 メモ"]));
+
+			press("ArrowDown");
+			press("Enter");
+
+			expect(lines()).toEqual(["題", "table:予定", " [買い物]\t別のセル]"]);
+		});
+
+		it.each([
+			["コマンドの行(リンクにならない)", ["題", "$ echo "], 1],
+			["1行目(タイトル)", ["", "本文"], 0],
+			["コードブロックの中", ["題", "code:memo", " "], 2],
+		])("%sでは、候補を出さない", async (_name, initial, line) => {
+			const spy = vi.fn(search);
+			render(<Editor initialLines={initial} completeTitles={spy} />);
+			focusEditor();
+			for (let count = 0; count < line; count += 1) press("ArrowDown");
+			press("End");
+
+			type("[買い");
+			await new Promise((resolve) => setTimeout(resolve, 150));
+
+			expect(options()).toEqual([]);
+			expect(spy).not.toHaveBeenCalled();
+		});
+
+		it("日本語入力の変換中は、候補を探さない。確定してから探す", async () => {
+			const spy = vi.fn(search);
+			render(<Editor initialLines={["題", "[買"]} completeTitles={spy} />);
+			focusEditor();
+			press("ArrowDown");
+			press("End");
+			await waitFor(() => expect(options()).toEqual(["買い物", "買い物 メモ"]));
+			spy.mockClear();
+
+			fireEvent.compositionStart(input());
+			fireEvent.compositionUpdate(input(), { data: "い" });
+			expect(options()).toEqual([]);
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			expect(spy).not.toHaveBeenCalled();
+
+			input().value = "い";
+			fireEvent.compositionEnd(input());
+			await waitFor(() => expect(spy).toHaveBeenCalledExactlyOnceWith("買い"));
+		});
+
+		it("フォーカスが外れると、候補を閉じる", async () => {
+			await typeOnBody("[買い");
+			await waitFor(() => expect(options()).toHaveLength(2));
+
+			fireEvent.blur(input());
+
+			expect(options()).toEqual([]);
+		});
+
+		it("探す方法が渡されていなければ(試し書きなど)、補完しない", async () => {
+			render(<Editor initialLines={["題", ""]} />);
+			focusEditor();
+			press("ArrowDown");
+
+			type("[買い");
+			await new Promise((resolve) => setTimeout(resolve, 150));
+
+			expect(options()).toEqual([]);
+		});
 	});
 
 	describe("他の人のカーソル(ADR-0023)", () => {

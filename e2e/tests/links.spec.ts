@@ -116,4 +116,63 @@ test.describe("リンクでつながる", () => {
 			.click();
 		await expect(other.getByTestId("line").nth(1)).toHaveAttribute("data-text", "中身");
 	});
+
+	test("リンクを書いている途中に、既存のページの名前が候補に出る。選ぶと、その名前へのリンクになる", async ({
+		page,
+	}) => {
+		// 他のテストのページと混ざらないように、このテストだけの語を名前に入れる。
+		const token = randomUUID().slice(0, 8);
+		await createPage(page, `${token}_買い物_メモ`, "牛乳");
+		await page.goto(`/${newPageName()}`);
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Enter");
+		const options = page.getByRole("option");
+
+		await page.keyboard.type(`[${token} 買`);
+		// 候補に出るのは、台帳に反映されてから(書き換えが落ち着いてから)。打ち直して、探し直す。
+		await expect(async () => {
+			await page.keyboard.press("Backspace");
+			await page.keyboard.type("買");
+			await expect(options).toHaveText([`${token} 買い物 メモ`], { timeout: 1000 });
+		}).toPass();
+		await page.keyboard.press("ArrowDown");
+		await expect(options.first()).toHaveAttribute("aria-selected", "true");
+		await page.keyboard.press("Enter");
+
+		// 括弧が閉じられ、カーソルはその後ろにある。続けて書ける。
+		await page.keyboard.type(" を見る");
+		await expect(page.getByTestId("line").nth(1)).toHaveAttribute(
+			"data-text",
+			`[${token} 買い物 メモ] を見る`,
+		);
+		await expect(options).toHaveCount(0);
+		await expect(status(page)).toHaveText("保存済み");
+	});
+
+	test("候補の一覧の余白を押しても、候補は閉じない。編集欄のカーソルは、書いていたところから動かない", async ({
+		page,
+	}) => {
+		const token = randomUUID().slice(0, 8);
+		await createPage(page, `${token}_候補`, "中身");
+		// 候補の一覧が、下の行に重なるようにする(一覧を押したことが編集欄に伝わると、カーソルが下の行へ移る)。
+		await createPage(page, newPageName(), "", "下の行1", "下の行2", "下の行3");
+		await clickLineEnd(page, 1);
+		const list = page.getByRole("listbox", { name: "ページの名前の候補" });
+
+		await page.keyboard.type(`[${token} 候`);
+		await expect(async () => {
+			await page.keyboard.press("Backspace");
+			await page.keyboard.type("候");
+			await expect(list.getByRole("option")).toHaveCount(1, { timeout: 1000 });
+		}).toPass();
+		const box = await list.boundingBox();
+		if (!box) throw new Error("the list is not visible");
+		// 枠のすぐ内側(候補のない余白)を押す。
+		await page.mouse.click(box.x + 2, box.y + box.height / 2);
+
+		await expect(list).toBeVisible();
+		await page.keyboard.type("補");
+		await expect(page.getByTestId("line").nth(1)).toHaveAttribute("data-text", `[${token} 候補`);
+		await expect(page.getByTestId("line").nth(2)).toHaveAttribute("data-text", "下の行1");
+	});
 });

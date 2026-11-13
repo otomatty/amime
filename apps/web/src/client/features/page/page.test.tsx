@@ -25,12 +25,15 @@ function stubFetch(
 		pinned?: boolean;
 		/** ページのつながりへの応答。省くと、つながりのないページ。 */
 		links?: () => Response;
+		/** 名前で探したときに返す名前。省くと、何も見つからない。 */
+		titles?: readonly string[];
 	} = {},
 ) {
 	const fetchMock = vi.fn(handler);
 	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
 		// ページのつながりにも、ここで答える。
 		if (url.endsWith("/links")) return info.links?.() ?? json(NO_LINKS);
+		if (url.startsWith("/api/pages/titles")) return json({ titles: info.titles ?? [] });
 		if (!url.startsWith(BY_TITLE)) return fetchMock(url, init);
 		const name = decodeURIComponent(url.slice(BY_TITLE.length));
 		const title = info.title ?? name.replaceAll("_", " ");
@@ -439,6 +442,23 @@ describe("Page", () => {
 
 			expect(relatedTitles()).toEqual(["料理"]);
 			expect(lines()).toEqual(["買い物"]);
+		});
+
+		it("リンクを書いている途中に、ページの名前の候補を出す(ADR-0030)", async () => {
+			stubFetch(() => json(saved), { titles: ["買い物 メモ", "買い置き"] });
+			render(<Page name="買い物" />);
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			fireEvent.focus(screen.getByLabelText("ページの本文"));
+			fireEvent.keyDown(screen.getByLabelText("ページの本文"), { key: "End" });
+
+			type("\n[買い");
+
+			await waitFor(() =>
+				expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+					"買い物 メモ",
+					"買い置き",
+				]),
+			);
 		});
 
 		it("つながりのないページでは、関連するページの欄を出さない", async () => {

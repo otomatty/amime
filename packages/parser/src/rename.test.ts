@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { renameLinks } from "./rename.ts";
+import { renameLinks, writePageLink } from "./rename.ts";
+
+describe("writePageLink(ページへのリンクの書き方)", () => {
+	it("[名前] と書く。タグとして書くときは、空白をアンダースコアにする", () => {
+		expect(writePageLink("買い物 メモ", "page-link")).toBe("[買い物 メモ]");
+		expect(writePageLink("買い物 メモ", "hashtag")).toBe("#買い物_メモ");
+	});
+
+	it("タグとして書けない名前は、[名前] と書く", () => {
+		expect(writePageLink("a`b", "hashtag")).toBe("[a`b]");
+	});
+
+	it.each([
+		["括弧を含む", "買い物[仮]"],
+		["アイコンとして読まれる", "名前.icon"],
+		["URLとして読まれる", "https://example.com"],
+	])("[名前] と書いても、そのページへのリンクにならない名前(%s)は、書けない", (_name, title) => {
+		expect(writePageLink(title, "page-link")).toBeNull();
+	});
+});
 
 /** 1つの名前の変更で、書き換えた行(行番号と、書き換えたあとの文字列)。 */
 const rename = (lines: readonly string[], from: string, to: string) =>

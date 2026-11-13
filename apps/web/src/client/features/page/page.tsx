@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "../editor/editor.tsx";
 import { createIdPrefix } from "../editor/editor-model.ts";
 import { pageHref } from "../editor/links.ts";
-import { createPageApi, loadLinks, openPage } from "./api.ts";
+import { createPageApi, loadLinks, openPage, searchTitles } from "./api.ts";
 import { createChannel } from "./channel.ts";
 import { createClientId } from "./client-id.ts";
 import { createCommitId } from "./commit-id.ts";
@@ -340,6 +340,7 @@ function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEdi
 				others={others}
 				onCursor={handleCursor}
 				missingLinks={missing}
+				completeTitles={searchTitles}
 			/>
 			<RelatedPages links={links} />
 		</>
