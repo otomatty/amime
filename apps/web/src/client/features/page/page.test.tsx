@@ -244,6 +244,24 @@ describe("Page", () => {
 			expect(pendingRecords()).toEqual([]);
 		});
 
+		it("読むだけの表示では、端末内に残っている未送信の変更を、復元も送信もしない(残したままにする)", async () => {
+			const left = [{ type: "update", id: "a", text: "買い物 前回の入力" }];
+			leavePending(left);
+			// 書き込みは、断られる。
+			const fetchMock = stubFetch((_url, init) =>
+				init?.method === "POST" ? json({ error: "read-only" }, 403) : json(saved),
+			);
+
+			render(<Page name="買い物" readOnly />);
+
+			// サーバーにある内容を、そのまま表示する。
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			expect(screen.queryByRole("note")).toBeNull();
+			expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toEqual([]);
+			// メンバーとして開き直せば、送れる。
+			expect(pendingRecords()).toEqual([left]);
+		});
+
 		it("前回送れなかった変更が残っていたら、復元して表示し、そのまま保存する", async () => {
 			leavePending([{ type: "update", id: "a", text: "買い物 前回の入力" }]);
 			const fetchMock = stubFetch(echo);

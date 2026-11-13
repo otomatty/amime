@@ -168,10 +168,20 @@ function OpenedPage({ info, readOnly }: { readonly info: PageInfo; readonly read
 	}, [info.id]);
 
 	// このタブが開いているあいだ、このタブの未送信の変更を、他のタブに引き取らせない(ADR-0020)。
-	useEffect(() => pending.hold(), [pending]);
+	// 読むだけの表示では、端末内の未送信の変更に触れない。
+	useEffect(() => (readOnly ? undefined : pending.hold()), [pending, readOnly]);
 
 	// 前回送れなかった変更が端末内に残っていたら、復元する(ADR-0020)。
-	const loaded = useLoading(useCallback(() => restorePage(api, pending), [api, pending]));
+	// 読むだけの表示では、復元しない(送れないので、ページを開けなくなる)。メンバーとして開き直したときに、送る。
+	const loaded = useLoading(
+		useCallback(
+			() =>
+				readOnly
+					? api.load().then((snapshot) => ({ snapshot, restored: null, noticed: false }))
+					: restorePage(api, pending),
+			[api, pending, readOnly],
+		),
+	);
 	if (loaded.status !== "ready") return <Pending state={loaded} />;
 	return (
 		<PageEditor

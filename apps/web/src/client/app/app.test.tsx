@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./app.tsx";
 
@@ -112,6 +112,38 @@ describe("App", () => {
 			await waitFor(() =>
 				expect(screen.getByRole("combobox", { name: "ページを探す" })).toBeDefined(),
 			);
+		});
+
+		it("ログアウトしたら、ページを探す欄を作り直す(前に読み込んだ名前の候補を、残さない)", async () => {
+			let user: unknown = hanako;
+			let project = () => Response.json(team);
+			let titles = () => Response.json({ titles: ["秘密の計画"] });
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (url: string) => {
+					if (url === "/api/me") return Response.json({ user, login: ["google"] });
+					if (url === "/api/projects/team") return project();
+					if (url.startsWith("/api/projects/team/pages/titles")) return titles();
+					return Response.json({ pages: [], total: 0 });
+				}),
+			);
+			open("/team/");
+			render(<App />);
+			const search = await screen.findByRole("combobox", { name: "ページを探す" });
+			fireEvent.focus(search);
+			expect(await screen.findByRole("option", { name: "秘密の計画" })).toBeDefined();
+
+			// ログアウトした。非公開のプロジェクトなので、もう見られない。
+			user = null;
+			project = () => Response.json({ error: "unknown-project" }, { status: 404 });
+			titles = () => Response.json({ error: "unknown-project" }, { status: 404 });
+			fireEvent.click(screen.getByRole("button", { name: "ログアウト" }));
+
+			expect(await screen.findByText(/ないか、見る権限がありません/)).toBeDefined();
+			await waitFor(() =>
+				expect(screen.queryByRole("combobox", { name: "ページを探す" })).toBeNull(),
+			);
+			expect(screen.queryByText("秘密の計画")).toBeNull();
 		});
 
 		it("末尾に / のないURLは、/ を付けたURLにそろえる(ページへのリンクが、同じ階層を指すように)", () => {

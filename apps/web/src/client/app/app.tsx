@@ -1,5 +1,5 @@
 import type { ProjectInfo } from "@amime/sync";
-import { AccountProvider } from "../features/account/account.tsx";
+import { AccountProvider, useAccount } from "../features/account/account.tsx";
 import { AccountMenu } from "../features/account/account-menu.tsx";
 import { Editor } from "../features/editor/editor.tsx";
 import { Page } from "../features/page/page.tsx";
@@ -52,6 +52,15 @@ function ProjectTop({ project }: { readonly project: ProjectInfo }) {
 	return <PageList readOnly={project.role === null} />;
 }
 
+/**
+ * プロジェクトの、ページを探す欄。ログインの状態が変わったら、作り直す
+ * (ログアウトしたあとに、前に読み込んだ名前の候補を、残さない)。
+ */
+function ProjectSearch() {
+	const { state } = useAccount();
+	return <TitleSearch key={state?.user?.id ?? ""} />;
+}
+
 /** URLのパスが指すものを表示する(ADR-0033)。 */
 function Content({ route }: { readonly route: Route }) {
 	if (route.kind === "home") {
@@ -101,7 +110,7 @@ export function App() {
 							</>
 						)}
 					</h1>
-					{route.kind !== "home" && <TitleSearch />}
+					{route.kind !== "home" && <ProjectSearch />}
 					<AccountMenu />
 				</header>
 				<Content route={route} />
