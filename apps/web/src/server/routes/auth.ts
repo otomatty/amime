@@ -123,14 +123,17 @@ export const auth = new Hono<AppEnv>()
 		return c.body(null, 204);
 	})
 	.post("/logout", async (c) => {
+		// その人がつないだままの接続を、閉じさせる(ADR-0034)。ほかの端末の接続は、つなぎ直せば続けられる。
+		// ログインの状態を消す前と、消したあとの両方で、台帳に覚えさせる
+		// (前だけだと、そのあいだにつなぎ直した接続が残る。あとだけだと、失敗したときに接続が残る)。
+		const user = c.var.user;
+		const joined = user === null ? [] : await listProjectIds(c.env.DB, user.id);
+		const revoke = () =>
+			Promise.all(joined.map((id) => exports.ProjectDO.getByName(id).revoke(user?.id ?? "")));
+		await revoke();
 		const token = getCookie(c, SESSION_COOKIE);
 		if (token !== undefined) await endSession(c.env.DB, token);
 		clearSessionCookie(c);
-		// その人がつないだままの接続を、閉じさせる(ADR-0034)。ほかの端末の接続は、つなぎ直せば続けられる。
-		const user = c.var.user;
-		if (user !== null) {
-			const joined = await listProjectIds(c.env.DB, user.id);
-			await Promise.all(joined.map((id) => exports.ProjectDO.getByName(id).revoke(user.id)));
-		}
+		await revoke();
 		return c.body(null, 204);
 	});

@@ -199,6 +199,25 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			expect(input.readOnly).toBe(true);
 		});
 
+		it("招待リンクを作ったあとで、一覧の読み直しに失敗しても、作ったリンクは表示したままにする", async () => {
+			const server = stubServer();
+			server.replies["POST /api/projects/team/invites"] = () =>
+				Response.json({ id: "i2", created: 1, expires: 2, token: "tok-en_1" }, { status: 201 });
+			renderSettings();
+			const button = await screen.findByRole("button", { name: "招待リンクを作る" });
+
+			// 作ったあとの、一覧の読み直しが失敗する。
+			server.members = null;
+			fireEvent.click(button);
+
+			const input = (await screen.findByRole("textbox", {
+				name: /新しい招待リンク/,
+			})) as HTMLInputElement;
+			expect(input.value).toBe("https://amime.example/invite/tok-en_1");
+			// 前に読み込んだメンバーも、出したままにする。
+			expect(await memberItems()).toHaveLength(2);
+		});
+
 		it("招待リンクを作れなかったら、そのことを伝える", async () => {
 			const server = stubServer();
 			server.replies["POST /api/projects/team/invites"] = () => new Response("x", { status: 500 });

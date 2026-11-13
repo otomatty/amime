@@ -49,9 +49,13 @@ export const members = new Hono<AppEnv>()
 		if (!can(c, "manage")) return notAdmin(c);
 		const visibility = await field(c, "visibility");
 		if (!VISIBILITIES.has(visibility)) return c.json({ error: "invalid-visibility" }, 400);
+		// 非公開にするときは、メンバーでない人がつないだままの接続を、閉じさせる。
+		// 変える前と、変えたあとの両方で、台帳に覚えさせる。前だけだと、そのあいだにつなぎ直した接続が残る。
+		// あとだけだと、覚えさせるのに失敗したときに、権限だけが変わって、接続が残る。
+		const revoking = visibility === "private";
+		if (revoking) await directory(c).revoke("*");
 		await setVisibility(c.env.DB, c.var.project.id, visibility as Visibility);
-		// 非公開にしたら、メンバーでない人がつないだままの接続を、閉じさせる。
-		if (visibility === "private") await directory(c).revoke("*");
+		if (revoking) await directory(c).revoke("*");
 		const { name, role } = c.var.project;
 		return c.json({ name, visibility, role });
 	})
@@ -79,11 +83,13 @@ export const members = new Hono<AppEnv>()
 		if (!can(c, "write")) return notMember(c);
 		const user = c.req.param("user") as UserId;
 		if (!can(c, "manage") && user !== c.var.user?.id) return notAdmin(c);
-		const result = await removeMember(c.env.DB, c.var.project.id, user);
-		if (result !== "removed") return refused(c, result);
-		// 外した人がつないだままの接続を、閉じさせる。
+		// 外す人がつないだままの接続を、閉じさせる。外す前と、外したあとの両方で、台帳に覚えさせる(上と同じ理由)。
+		// 途中で失敗して、やり直されたときも(もう外れている)、覚えさせ直す。
 		await directory(c).revoke(user);
-		return c.body(null, 204);
+		const result = await removeMember(c.env.DB, c.var.project.id, user);
+		if (result === "last-admin") return refused(c, result);
+		await directory(c).revoke(user);
+		return result === "removed" ? c.body(null, 204) : refused(c, result);
 	})
 	// 招待リンクを作る。リンクに入れる値は、ここでしか返さない。
 	.post("/invites", async (c) => {

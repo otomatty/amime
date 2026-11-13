@@ -176,7 +176,10 @@ export function ProjectSettings({
 	const [list, setList] = useState<ProjectMembers | null | "failed">(null);
 	const [failure, setFailure] = useState<string | null>(null);
 	const reload = useCallback(async () => {
-		setList((await loadMembers(project.name)) ?? "failed");
+		const loaded = await loadMembers(project.name);
+		// 読み直しに失敗しても、前に読み込んだ一覧があれば、それを出したままにする
+		// (作ったばかりの招待リンクの表示を、消さない)。
+		setList((current) => loaded ?? (current === null ? "failed" : current));
 	}, [project.name]);
 	useEffect(() => {
 		void reload();

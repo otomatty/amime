@@ -1,3 +1,4 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { app } from "../app.ts";
@@ -63,6 +64,7 @@ const membersOf = async (path: string, as: Session) =>
 
 afterEach(() => {
 	vi.useRealTimers();
+	vi.restoreAllMocks();
 });
 
 describe("招待リンク", () => {
@@ -404,6 +406,145 @@ describe("権限がなくなった人の接続", () => {
 		// ログインし直してからつないだ接続は、そのまま。
 		expect(fresh.closes).toEqual([]);
 		fresh.socket.close();
+	});
+
+	/** プロジェクトのID(Durable Object の名前に使われる)。 */
+	const projectId = async (path: string) =>
+		(
+			await env.DB.prepare("SELECT id FROM projects WHERE name = ?")
+				.bind(path.slice("/api/projects/".length))
+				.first<{ id: string }>()
+		)?.id ?? "";
+
+	/**
+	 * 台帳のメソッドを、このプロジェクトの台帳でだけ、差し替える。
+	 * 外から呼べるのは、クラスに定義したメソッドだけなので、クラスの側を差し替える。
+	 */
+	async function replace<Name extends "revocations" | "revoke">(
+		path: string,
+		method: Name,
+		replacement: () => Promise<never[]> | never[],
+	) {
+		const stub = exports.ProjectDO.getByName(await projectId(path));
+		await runInDurableObject(stub, (instance) => {
+			const prototype = Object.getPrototypeOf(instance);
+			const original = prototype[method];
+			vi.spyOn(prototype, method).mockImplementation(function (this: unknown, ...args: unknown[]) {
+				return this === instance ? replacement() : original.apply(this, args);
+			});
+		});
+	}
+
+	it("リンクの書き換え(ページの名前を変えたとき)でも、権限のなくなった人の接続には配らない", async () => {
+		const { path, admin } = await project();
+		const leaving = await member(path, admin);
+		// だれもつないでいないうちに、リンクのあるページを書いておく。1行目は名前なので、リンクは2行目に書く。
+		const opened = await call(`${path}/pages/by-title/${encodeURIComponent("会議")}`, {
+			as: admin,
+		});
+		const page = (await opened.json()) as { id: string };
+		const link = {
+			type: "insert",
+			line: { id: "b", text: "[旧い名前] を見る" },
+			after: "t",
+			before: null,
+		};
+		await send("POST", `${path}/pages/${page.id}/commits`, admin, {
+			id: unique("c"),
+			changes: [title, link],
+		});
+		const removed = await watch(path, leaving, "leaving");
+		const kept = await watch(path, admin, "admin-1");
+
+		expect((await send("DELETE", `${path}/members/${leaving.id}`, admin)).status).toBe(204);
+		// 台帳が、リンクを書き換える(ふつうのコミットを通らない)。
+		const stub = exports.PageDO.getByName(`${await projectId(path)}/${page.id}`);
+		await stub.rewriteLinks([{ id: 1, from: "旧い名前", to: "新しい名前" }]);
+
+		await vi.waitFor(() => expect(commits(kept.messages)).toHaveLength(1));
+		await vi.waitFor(() => expect(removed.closes).toEqual([4001]));
+		expect(commits(removed.messages)).toEqual([]);
+		kept.socket.close();
+	});
+
+	it("同じ時刻(ミリ秒)に受け付けた接続も、閉じる", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-05-01T00:00:00Z"));
+		const { path, admin } = await project();
+		const leaving = await member(path, admin);
+		const removed = await watch(path, leaving, "leaving");
+
+		// 時刻を進めずに、外す。
+		expect((await send("DELETE", `${path}/members/${leaving.id}`, admin)).status).toBe(204);
+		expect((await commit(path, removed.id, admin)).status).toBe(200);
+
+		await vi.waitFor(() => expect(removed.closes).toEqual([4001]));
+		expect(commits(removed.messages)).toEqual([]);
+	});
+
+	it("権限を取り上げた相手を、台帳に聞けなかったら、つないでいる接続をすべて閉じる(確かめられないまま、配らない)", async () => {
+		const { path, admin } = await project();
+		const other = await watch(path, await member(path, admin), "member-1");
+		await replace(path, "revocations", () => {
+			throw new Error("the directory is down");
+		});
+
+		// 保存は、止めない。
+		expect((await commit(path, other.id, admin)).status).toBe(200);
+
+		await vi.waitFor(() => expect(other.closes).toEqual([4001]));
+		expect(commits(other.messages)).toEqual([]);
+		// 台帳が戻れば、つなぎ直した接続に、ふつうに配る(失敗した結果を、覚えていない)。
+		vi.restoreAllMocks();
+		const again = await watch(path, admin, "admin-2");
+		const change = { type: "update", id: "t", text: "題2" };
+		expect((await commit(path, other.id, await member(path, admin), change)).status).toBe(200);
+		await vi.waitFor(() => expect(commits(again.messages)).toHaveLength(1));
+		expect(again.closes).toEqual([]);
+		again.socket.close();
+	});
+
+	it("権限を取り上げたことを、台帳に覚えさせられなかったら、権限も変えない(メンバーを外す、非公開にする)", async () => {
+		const { path, admin } = await project("public");
+		const leaving = await member(path, admin);
+		await replace(path, "revoke", () => {
+			throw new Error("the directory is down");
+		});
+
+		const removed = await send("DELETE", `${path}/members/${leaving.id}`, admin);
+		const closed = await send("PATCH", path, admin, { visibility: "private" });
+
+		expect(removed.status).toBe(500);
+		expect(closed.status).toBe(500);
+		vi.restoreAllMocks();
+		expect((await membersOf(path, admin)).members.map((item) => item.id)).toContain(leaving.id);
+		expect(await (await call(path)).json()).toMatchObject({ visibility: "public" });
+	});
+
+	it("権限を確かめているあいだに、ページが削除されたら、書き込まない", async () => {
+		const { path, admin } = await project();
+		// だれもつないでいないうちに、書いておく(このときは、台帳に聞かない)。
+		const opened = await call(`${path}/pages/by-title/${encodeURIComponent("会議")}`, {
+			as: admin,
+		});
+		const page = (await opened.json()) as { id: string };
+		expect((await commit(path, page.id, admin)).status).toBe(200);
+		const other = await watch(path, await member(path, admin), "member-1");
+		const id = await projectId(path);
+		await replace(path, "revocations", async () => {
+			await exports.PageDO.getByName(`${id}/${other.id}`).destroy();
+			return [];
+		});
+
+		const late = await commit(path, other.id, admin, {
+			type: "update",
+			id: "t",
+			text: "遅れた変更",
+		});
+
+		expect(late.status).toBe(410);
+		vi.restoreAllMocks();
+		expect((await call(`${path}/pages/${other.id}`, { as: admin })).status).toBe(410);
 	});
 
 	it("外されたあとで、もう一度招待されて参加した人の、新しい接続は閉じない", async () => {
