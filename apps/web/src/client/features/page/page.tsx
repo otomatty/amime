@@ -1,7 +1,9 @@
 import {
 	type CursorPosition,
 	type Line,
+	type PageId,
 	type PageInfo,
+	type PageLinks,
 	type PageSnapshot,
 	startTracking,
 	type TitleProblem,
@@ -10,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "../editor/editor.tsx";
 import { createIdPrefix } from "../editor/editor-model.ts";
 import { pageHref } from "../editor/links.ts";
-import { createPageApi, openPage } from "./api.ts";
+import { createPageApi, loadLinks, openPage } from "./api.ts";
 import { createChannel } from "./channel.ts";
 import { createClientId } from "./client-id.ts";
 import { createCommitId } from "./commit-id.ts";
@@ -24,6 +26,7 @@ import {
 	type PendingStore,
 } from "./pending-store.ts";
 import { createPresence, type RemoteCursor } from "./presence.ts";
+import { RelatedPages } from "./related-pages.tsx";
 import { restorePage } from "./restore.ts";
 import "./page.css";
 
@@ -174,6 +177,44 @@ function OpenedPage({ info }: { readonly info: PageInfo }) {
 	);
 }
 
+const NO_LINKS: PageLinks = { missing: [], related: [], hops: [] };
+
+/**
+ * ページのつながり(ADR-0027)。開いたときに取り出す。refresh を呼ぶと、取り出し直す。
+ * 取り出せなくても、ページは読み書きできる。そのときは、前に取り出したものをそのまま使う。
+ */
+function useLinks(id: PageId) {
+	const [links, setLinks] = useState(NO_LINKS);
+	// まだないページの名前。中身が同じなら同じものを保ち、行を描き直させない。
+	const [missing, setMissing] = useState<ReadonlySet<string>>(new Set());
+	// 取り出し直すたびに進める。あとから届いた古い応答で、新しい内容を上書きしない。
+	const latest = useRef(0);
+	const refresh = useCallback(() => {
+		latest.current += 1;
+		const started = latest.current;
+		loadLinks(id).then(
+			(loaded) => {
+				if (latest.current !== started) return;
+				setLinks(loaded);
+				setMissing((current) =>
+					current.size === loaded.missing.length &&
+					loaded.missing.every((title) => current.has(title))
+						? current
+						: new Set(loaded.missing),
+				);
+			},
+			() => {},
+		);
+	}, [id]);
+	useEffect(() => {
+		refresh();
+		return () => {
+			latest.current += 1;
+		};
+	}, [refresh]);
+	return { links, missing, refresh };
+}
+
 type PageEditorProps = {
 	/** 台帳にある、ページのIDと名前。まだないページを開いたときは、名前を1行目に入れる。 */
 	readonly info: PageInfo;
@@ -190,6 +231,7 @@ function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEdi
 	// ページのいまの名前と、名前を1行目に合わせられない理由。1行目を変えると、サーバーが名前を合わせて知らせてくる。
 	const [named, setNamed] = useState({ title: info.title, problem: info.problem });
 	const [pinned, setPinned] = useState(info.pinned);
+	const { links, missing, refresh: refreshLinks } = useLinks(info.id);
 	useEffect(() => {
 		// URLを、ページのいまの名前に合わせる。再読み込みしても、共有しても、同じページが開く。
 		const target = new URL(pageHref(named.title), window.location.href);
@@ -225,11 +267,15 @@ function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEdi
 					presence.onConnection(connected);
 					setConnection(connected ? "online" : "offline");
 				},
-				// サーバーは、名前が変わっていなくても知らせてくる。同じなら、描き直さない。
-				onPage: (title, problem) =>
+				// サーバーは、台帳への反映が済むたびに、名前が変わっていなくても知らせてくる。
+				onPage(title, problem) {
+					// 同じなら、描き直さない。
 					setNamed((current) =>
 						current.title === title && current.problem === problem ? current : { title, problem },
-					),
+					);
+					// リンクのつながりも、台帳に反映されている。取り出し直す。
+					refreshLinks();
+				},
 			},
 			onStatus: setStatus,
 			onRemote: remote.emit,
@@ -246,7 +292,7 @@ function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEdi
 			current.dispose();
 			sync.current = null;
 		};
-	}, [snapshot, initial, placeholder, api, remote, pending]);
+	}, [snapshot, initial, placeholder, api, remote, pending, refreshLinks]);
 
 	const unsaved = !SETTLED.has(status);
 	useEffect(() => {
@@ -293,7 +339,9 @@ function PageEditor({ info, snapshot, restored, noticed, api, pending }: PageEdi
 				onChange={handleChange}
 				others={others}
 				onCursor={handleCursor}
+				missingLinks={missing}
 			/>
+			<RelatedPages links={links} />
 		</>
 	);
 }

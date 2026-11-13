@@ -98,6 +98,12 @@ const pages = new Hono<AppEnv>()
 		await directory().remove(id.value);
 		return c.json(DELETED, 410);
 	})
+	// ページのつながり(関連するページ、同じリンクを持つページ、まだないページへのリンク)。ADR-0027。
+	.get("/:id/links", async (c) => {
+		const id = parsePageId(c.req.param("id"));
+		if (!id.ok) return c.json({ error: "invalid-page" }, 400);
+		return c.json(await directory().links(id.value));
+	})
 	// ページを削除する(ADR-0026)。本文を消してから、台帳から消す。何度呼んでも、結果は同じ。
 	.delete("/:id", async (c) => {
 		const id = parsePageId(c.req.param("id"));

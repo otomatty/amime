@@ -9,6 +9,7 @@ import {
 	parseCursorPosition,
 	parsePageId,
 	parsePageInfo,
+	parsePageLinks,
 	parsePageList,
 	parsePageSort,
 	parsePageTitle,
@@ -92,6 +93,39 @@ describe("parsePageInfo", () => {
 		["固定しているかがない", { id: "p1", title: "a", problem: null }],
 	])("%s入力は受け付けない", (_name, input) => {
 		expect(parsePageInfo(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parsePageLinks", () => {
+	const card = {
+		id: "p1",
+		title: "買い物",
+		descriptions: ["牛乳"],
+		image: null,
+		updated: 2000,
+		created: 1000,
+		linked: 1,
+		pinned: false,
+	};
+
+	it("ページのつながりを受け付ける", () => {
+		const links = {
+			missing: ["まだない_ページ"],
+			related: [card],
+			hops: [{ title: "料理", exists: true, pages: [{ ...card, id: "p2" }] }],
+		};
+
+		expect(parsePageLinks(links)).toEqual({ ok: true, value: links });
+	});
+
+	it.each([
+		["オブジェクトでない", null],
+		["missing がない", { related: [], hops: [] }],
+		["missing が文字列の配列でない", { missing: [1], related: [], hops: [] }],
+		["related のカードの形が違う", { missing: [], related: [{ id: "p1" }], hops: [] }],
+		["hops に exists がない", { missing: [], related: [], hops: [{ title: "料理", pages: [] }] }],
+	])("%s入力は受け付けない", (_name, input) => {
+		expect(parsePageLinks(input)).toEqual({ ok: false, error: "invalid" });
 	});
 });
 

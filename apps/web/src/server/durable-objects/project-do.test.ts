@@ -3,7 +3,13 @@ import { exports } from "cloudflare:workers";
 import type { PageSummary } from "@amime/parser";
 import type { PageId } from "@amime/sync";
 import { describe, expect, it } from "vitest";
-import { MAX_LIST_LIMIT, MIGRATIONS, migrate, PLACEHOLDER_MAX_AGE_MS } from "./project-do.ts";
+import {
+	MAX_GROUP_PAGES,
+	MAX_LIST_LIMIT,
+	MIGRATIONS,
+	migrate,
+	PLACEHOLDER_MAX_AGE_MS,
+} from "./project-do.ts";
 
 /** テストごとに別のプロジェクト(=別の Durable Object)を使い、状態を共有しない。 */
 const project = (name: string) => exports.ProjectDO.getByName(`test-${name}`);
@@ -592,6 +598,164 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			await stub.index("unknown" as PageId, saved("あとから届いた"));
 
 			expect((await stub.list({ sort: "title" })).total).toBe(0);
+		});
+	});
+
+	describe("links(ページのつながり。ADR-0027)", () => {
+		/** 保存されたページを作る。links は、そのページからのリンク先の名前。 */
+		async function write(
+			stub: ReturnType<typeof project>,
+			title: string,
+			links: readonly string[] = [],
+			version = 1,
+		) {
+			const { id } = await stub.open(title);
+			await stub.index(id, saved(title, version, { links: [...links] }));
+			return id;
+		}
+		const titles = (pages: readonly { title: string }[]) => pages.map((page) => page.title);
+
+		it("リンクしているページと、リンクされているページを、関連するページとして返す。自分は含めない", async () => {
+			const stub = project("links-related");
+			const here = await write(stub, "ここ", ["行き先", "ここ"]);
+			await write(stub, "行き先");
+			await write(stub, "ここを 指すページ", ["ここ"]);
+			await write(stub, "関係ない ページ", ["どこか"]);
+
+			const links = await stub.links(here);
+
+			expect(titles(links.related).sort()).toEqual(["ここを 指すページ", "行き先"]);
+		});
+
+		it("関連するページは、更新が新しい順に並べる。カードには、冒頭の本文とリンクされている数が入る", async () => {
+			const stub = project("links-order");
+			const here = await write(stub, "ここ", ["古い", "新しい"]);
+			await write(stub, "古い", [], 2);
+			const newer = await stub.open("新しい");
+			await stub.index(newer.id, saved("新しい", 5, { descriptions: ["冒頭"] }));
+
+			const { related } = await stub.links(here);
+
+			expect(titles(related)).toEqual(["新しい", "古い"]);
+			expect(related[0]).toMatchObject({ id: newer.id, descriptions: ["冒頭"], linked: 1 });
+		});
+
+		it("リンク先の名前は、大文字小文字と、空白かアンダースコアかの違いを区別しない", async () => {
+			const stub = project("links-normalized");
+			const here = await write(stub, "Here Page", ["target_page"]);
+			await write(stub, "Target Page", ["here_page"]);
+
+			const links = await stub.links(here);
+
+			expect(titles(links.related)).toEqual(["Target Page"]);
+			expect(links.missing).toEqual([]);
+		});
+
+		it("まだないページへのリンクを、正規化した名前で返す。開いただけのページも、まだないページ", async () => {
+			const stub = project("links-missing");
+			const here = await write(stub, "ここ", ["ある ページ", "まだない Page", "開いただけ"]);
+			await write(stub, "ある ページ");
+			await stub.open("開いただけ");
+
+			const links = await stub.links(here);
+
+			expect([...links.missing].sort()).toEqual(["まだない_page", "開いただけ"]);
+		});
+
+		it("同じリンクを持つ他のページを、リンク先ごとにまとめて返す(2ホップ先)", async () => {
+			const stub = project("links-hops");
+			const here = await write(stub, "ここ", ["料理", "旅行", "だれも書いていない"]);
+			await write(stub, "料理");
+			await write(stub, "カレー", ["料理"], 2);
+			await write(stub, "パスタ", ["料理"], 3);
+			await write(stub, "京都", ["旅行"]);
+
+			const { hops } = await stub.links(here);
+
+			expect(hops.map((group) => [group.title, group.exists, titles(group.pages)])).toEqual([
+				// まとまりの中は、更新が新しい順。同じリンクを持つページがないリンク先は、出さない。
+				["料理", true, ["パスタ", "カレー"]],
+				["旅行", false, ["京都"]],
+			]);
+		});
+
+		it("まだないページへのリンクのまとまりには、書かれたとおりの名前を付ける", async () => {
+			const stub = project("links-hops-title");
+			const here = await write(stub, "ここ", ["Road Trip"]);
+			await write(stub, "別のページ", ["road_trip"]);
+
+			const { hops } = await stub.links(here);
+
+			expect(hops.map((group) => group.title)).toEqual(["Road Trip"]);
+		});
+
+		it("書かれたとおりの名前を持たないリンク(前の形で保存したもの)には、正規化した名前から作った名前を付ける", async () => {
+			const stub = project("links-hops-legacy");
+			const here = await write(stub, "ここ", ["Road Trip"]);
+			await write(stub, "別のページ", ["road_trip"]);
+			await runInDurableObject(stub, (_instance, state) => {
+				state.storage.sql.exec("UPDATE links SET title = ''");
+			});
+
+			const { hops } = await stub.links(here);
+
+			expect(hops.map((group) => group.title)).toEqual(["road trip"]);
+		});
+
+		it("リンクの書き方だけを変えたら(大文字小文字など)、まとまりの名前も変わる", async () => {
+			const stub = project("links-hops-rewritten");
+			const here = await write(stub, "ここ", ["road trip"]);
+			await write(stub, "別のページ", ["road_trip"]);
+
+			await stub.index(here, saved("ここ", 2, { links: ["Road Trip"] }));
+
+			expect((await stub.links(here)).hops.map((group) => group.title)).toEqual(["Road Trip"]);
+		});
+
+		it("リンク先のページそのものは、2ホップ先のまとまりに入れない(関連するページに出ている)", async () => {
+			const stub = project("links-hops-self");
+			const here = await write(stub, "ここ", ["料理"]);
+			await write(stub, "料理", ["料理"]);
+
+			const links = await stub.links(here);
+
+			expect(titles(links.related)).toEqual(["料理"]);
+			expect(links.hops).toEqual([]);
+		});
+
+		it("1つのまとまりに入れるページは、20件まで", async () => {
+			const stub = project("links-hops-limit");
+			const here = await write(stub, "ここ", ["人気"]);
+			for (let number = 0; number < 22; number += 1) {
+				await write(stub, `ページ${number}`, ["人気"], number + 1);
+			}
+
+			const { hops } = await stub.links(here);
+
+			expect(hops[0]?.pages).toHaveLength(MAX_GROUP_PAGES);
+			expect(hops[0]?.pages[0]?.title).toBe("ページ21");
+		});
+
+		it("まだ保存されていないページでも、その名前へリンクしているページを返す", async () => {
+			// まだないページへのリンクを開いたとき、どこから参照されているかが分かる。
+			const stub = project("links-placeholder");
+			const { id } = await stub.open("これから 書く");
+			await write(stub, "参照元", ["これから_書く"]);
+
+			const links = await stub.links(id);
+
+			expect(titles(links.related)).toEqual(["参照元"]);
+			expect(links).toMatchObject({ missing: [], hops: [] });
+		});
+
+		it("リンクを消すと、つながりからも消える。台帳にないページには、つながりがない", async () => {
+			const stub = project("links-removed");
+			const here = await write(stub, "ここ", ["行き先"]);
+			await write(stub, "行き先");
+			await stub.index(here, saved("ここ", 2));
+
+			expect(await stub.links(here)).toEqual({ missing: [], related: [], hops: [] });
+			expect(await stub.links("unknown" as PageId)).toEqual({ missing: [], related: [], hops: [] });
 		});
 	});
 

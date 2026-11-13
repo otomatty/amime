@@ -4,6 +4,7 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useStat
 import { pageHref } from "../editor/links.ts";
 import { listPages } from "../page/api.ts";
 import { PageApiError } from "../page/page-api-error.ts";
+import { PageCards } from "./page-card.tsx";
 import "./page-list.css";
 
 const SORT_LABELS: Readonly<Record<PageSort, string>> = {
@@ -26,8 +27,6 @@ function sortFromUrl(): PageSort {
 /** URLの中で、別の場所を指す書き方になる名前。ページの名前にできない(ADR-0024)。 */
 const DOT_SEGMENTS: ReadonlySet<string> = new Set([".", ".."]);
 
-const timeFormat = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" });
-
 type Loaded =
 	| { readonly status: "loading" }
 	| {
@@ -46,40 +45,6 @@ type PageListProps = {
 	/** ページのAPIが無効な環境で、一覧の代わりに表示する内容。 */
 	readonly whenDisabled?: ReactNode;
 };
-
-/** ページのカード。名前・冒頭の本文・画像・更新した時刻を見せる。 */
-function Card({ page }: { readonly page: PageCard }) {
-	const updated = new Date(page.updated);
-	return (
-		<li className="card">
-			<a className="card-link" href={pageHref(page.title)}>
-				<h2 className="card-title">{page.title}</h2>
-				{page.pinned && <span className="card-pin">固定</span>}
-				{page.image !== null && (
-					<img
-						className="card-image"
-						src={page.image}
-						// 画像の内容は分からない。名前は見出しにあるので、代替テキストは空にする。
-						alt=""
-						loading="lazy"
-						// 画像の置き場所に、見ているページのURLを伝えない。
-						referrerPolicy="no-referrer"
-					/>
-				)}
-				{page.descriptions.map((text, index) => (
-					// 冒頭の本文は、並びが変わらない。同じ本文の行もあるので、位置で識別する。
-					// biome-ignore lint/suspicious/noArrayIndexKey: 上のとおり。
-					<p className="card-text" key={index}>
-						{text}
-					</p>
-				))}
-				<time className="card-time" dateTime={updated.toISOString()}>
-					{timeFormat.format(updated)}
-				</time>
-			</a>
-		</li>
-	);
-}
 
 /**
  * ページの一覧(ADR-0025)。保存されたページをカードとして並べ、並び順を選べる。
@@ -202,13 +167,7 @@ export function PageList({
 					まだページがありません。上の欄に名前を入れて、最初のページを作りましょう。
 				</p>
 			)}
-			{loaded.status === "ready" && loaded.pages.length > 0 && (
-				<ul className="cards">
-					{loaded.pages.map((page) => (
-						<Card key={page.id} page={page} />
-					))}
-				</ul>
-			)}
+			{loaded.status === "ready" && loaded.pages.length > 0 && <PageCards pages={loaded.pages} />}
 			{loaded.status === "ready" && loaded.more && (
 				<button className="page-list-more" type="button" disabled={busy} onClick={loadMore}>
 					もっと見る

@@ -7,6 +7,7 @@ import {
 	type Span,
 	type TableCell,
 } from "@amime/parser";
+import { toTitleLc } from "@amime/shared";
 import { type CSSProperties, Fragment, memo, type ReactNode } from "react";
 import { pageHref, projectHref } from "./links.ts";
 
@@ -30,6 +31,8 @@ type EditorLineProps = {
 	readonly selectsLineBreak?: boolean;
 	/** この行にいる、他の人のカーソル(ADR-0023)。 */
 	readonly others?: readonly RemoteCaret[] | undefined;
+	/** まだないページの名前(正規化したもの)。そのページへのリンクに、印を付ける(ADR-0027)。 */
+	readonly missingLinks?: ReadonlySet<string> | undefined;
 };
 
 /** 他の人のカーソル。 */
@@ -43,6 +46,7 @@ export type RemoteCaret = {
 };
 
 const NO_OTHERS: readonly RemoteCaret[] = [];
+const NO_MISSING: ReadonlySet<string> = new Set();
 
 /** 太字の段階(* の数)として見た目に反映する上限。 */
 const MAX_DECORATION_LEVEL = 10;
@@ -67,6 +71,8 @@ type RenderContext = {
 	readonly lineBreak: ReactNode;
 	/** この行にいる、他の人のカーソル。 */
 	readonly others: readonly RemoteCaret[];
+	/** まだないページの名前(正規化したもの)。 */
+	readonly missing: ReadonlySet<string>;
 };
 
 /**
@@ -167,17 +173,30 @@ function withNotation(ctx: RenderContext, node: ContentNode, inner: ReactNode): 
 	);
 }
 
-type LinkTarget = { readonly href: string; readonly external: boolean };
+type LinkTarget = {
+	readonly href: string;
+	readonly external: boolean;
+	/** まだないページへのリンクか。 */
+	readonly missing?: boolean;
+};
 
 /**
  * リンク。編集中の行では実体のリンクにしない
  * (押したときに移動せず、その位置にカーソルを置けるようにするため)。
  */
 function link(ctx: RenderContext, target: LinkTarget, body: ReactNode): ReactNode {
-	if (ctx.editing) return <span className="link">{body}</span>;
+	// まだないページへのリンクは、見た目で区別する。開けば、その名前で書き始められる。
+	const missing = target.missing ? true : undefined;
+	if (ctx.editing) {
+		return (
+			<span className="link" data-missing={missing}>
+				{body}
+			</span>
+		);
+	}
 	if (!target.external) {
 		return (
-			<a className="link" href={target.href}>
+			<a className="link" href={target.href} data-missing={missing}>
 				{body}
 			</a>
 		);
@@ -189,11 +208,15 @@ function link(ctx: RenderContext, target: LinkTarget, body: ReactNode): ReactNod
 	);
 }
 
-function linkTarget(node: ContentNode): LinkTarget | null {
+function linkTarget(ctx: RenderContext, node: ContentNode): LinkTarget | null {
 	switch (node.type) {
 		case "page-link":
 		case "hashtag":
-			return { href: pageHref(node.title), external: false };
+			return {
+				href: pageHref(node.title),
+				external: false,
+				missing: ctx.missing.has(toTitleLc(node.title)),
+			};
 		case "project-link":
 			return { href: projectHref(node.project, node.title), external: false };
 		case "external-link":
@@ -268,7 +291,7 @@ function renderNode(ctx: RenderContext, node: InlineNode): ReactNode {
 	if ("children" in node) return container(ctx, node);
 
 	const body = withNotation(ctx, node, chars(ctx, node.content));
-	const target = linkTarget(node);
+	const target = linkTarget(ctx, node);
 	if (target !== null) return link(ctx, target, body);
 	return <code className={node.type}>{body}</code>;
 }
@@ -347,6 +370,7 @@ export const EditorLine = memo(function EditorLine({
 	selectionEnd = null,
 	selectsLineBreak = false,
 	others = NO_OTHERS,
+	missingLinks = NO_MISSING,
 }: EditorLineProps) {
 	const parsed = parseLine(text, { kind, blockIndent });
 	const style = { "--indent": parsed.indent } as CSSProperties;
@@ -375,6 +399,7 @@ export const EditorLine = memo(function EditorLine({
 		selection,
 		lineBreak,
 		others,
+		missing: missingLinks,
 	};
 	const isRow = parsed.kind === "table-row";
 	// コードとテーブルの行は箇条書きではないので、印を付けない。

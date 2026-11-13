@@ -312,6 +312,50 @@ describe("EditorLine", () => {
 			]);
 		});
 
+		describe("まだないページへのリンク(ADR-0027)", () => {
+			const renderWithMissing = (text: string, caretColumn: number | null = null) => {
+				render(
+					<EditorLine
+						index={1}
+						text={text}
+						kind="text"
+						blockIndent={0}
+						caretColumn={caretColumn}
+						composing={null}
+						missingLinks={new Set(["まだない_page"])}
+					/>,
+				);
+				return line();
+			};
+
+			it("まだないページへのリンクには、印を付ける。名前は、大文字小文字と空白の違いを区別せずに照らし合わせる", () => {
+				const element = renderWithMissing("[まだない Page] と [ある ページ] と #まだない_page");
+
+				const [missing, existing, tag] = element.querySelectorAll("a");
+				expect(missing?.getAttribute("data-missing")).toBe("true");
+				expect(existing?.hasAttribute("data-missing")).toBe(false);
+				expect(tag?.getAttribute("data-missing")).toBe("true");
+				// 開けば、その名前で書き始められる。リンク先は変わらない。
+				expect(missing?.getAttribute("href")).toBe("./%E3%81%BE%E3%81%A0%E3%81%AA%E3%81%84_Page");
+			});
+
+			it("編集中の行でも、印を付ける", () => {
+				const element = renderWithMissing("[まだない page]", 0);
+
+				expect(element.querySelector(".link")?.getAttribute("data-missing")).toBe("true");
+			});
+
+			it("他のプロジェクトへのリンクや、外部へのリンクには、印を付けない", () => {
+				const element = renderWithMissing(
+					"[/まだない_page/まだない_page] [https://example.com まだない_page]",
+				);
+
+				for (const link of element.querySelectorAll("a")) {
+					expect(link.hasAttribute("data-missing")).toBe(false);
+				}
+			});
+		});
+
 		it("#タグ は # ごとリンクにする", () => {
 			renderShown("#タグ");
 

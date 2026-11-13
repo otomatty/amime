@@ -10,6 +10,7 @@ import type {
 	LineId,
 	PageId,
 	PageInfo,
+	PageLinks,
 	PageList,
 	PageSnapshot,
 	PageSort,
@@ -120,6 +121,13 @@ const PageCardSchema = v.object({
 	pinned: v.boolean(),
 });
 const PageListSchema = v.object({ pages: v.array(PageCardSchema), total: VersionSchema });
+const PageLinksSchema = v.object({
+	missing: v.array(v.string()),
+	related: v.array(PageCardSchema),
+	hops: v.array(
+		v.object({ title: v.string(), exists: v.boolean(), pages: v.array(PageCardSchema) }),
+	),
+});
 const PageSortSchema = v.picklist(["updated", "created", "title", "linked"]);
 const CursorSchema = v.nullable(
 	v.object({
@@ -172,6 +180,10 @@ export const parsePageTitle = (
 /** サーバーから届いた、ページの情報を検査する。 */
 export const parsePageInfo = (input: unknown): Result<PageInfo, "invalid"> =>
 	parse(PageInfoSchema, input);
+
+/** サーバーから届いた、ページのつながりを検査する。 */
+export const parsePageLinks = (input: unknown): Result<PageLinks, "invalid"> =>
+	parse(PageLinksSchema, input);
 
 /** サーバーから届いた、ページの一覧を検査する。 */
 export const parsePageList = (input: unknown): Result<PageList, "invalid"> =>

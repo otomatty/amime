@@ -108,6 +108,26 @@ export type PageList = {
 	readonly total: number;
 };
 
+/** 同じリンクでつながっているページのまとまり(2ホップ先。ADR-0027)。 */
+export type LinkGroup = {
+	/** 共通のリンク先の名前。 */
+	readonly title: string;
+	/** その名前のページが、保存されているか。 */
+	readonly exists: boolean;
+	/** 同じリンクを持つ、他のページ。 */
+	readonly pages: readonly PageCard[];
+};
+
+/** ページのつながり(ADR-0027)。 */
+export type PageLinks = {
+	/** このページからのリンクのうち、まだないページを指しているもの(正規化した名前)。 */
+	readonly missing: readonly string[];
+	/** このページがリンクしているページと、このページへリンクしているページ。 */
+	readonly related: readonly PageCard[];
+	/** 同じリンクを持つページ。リンク先ごとにまとめる。 */
+	readonly hops: readonly LinkGroup[];
+};
+
 /** コミットを識別するID。送る側が作る。同じコミットを送り直しても、サーバーは1度しか適用しない(ADR-0021)。 */
 export type CommitId = string & { readonly __brand: "CommitId" };
 

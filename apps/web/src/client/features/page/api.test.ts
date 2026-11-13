@@ -1,6 +1,14 @@
 import type { ClientId, Commit, CommitId, LineId, PageId } from "@amime/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPageApi, deletePage, listPages, openPage, pageSocketUrl, pinPage } from "./api.ts";
+import {
+	createPageApi,
+	deletePage,
+	listPages,
+	loadLinks,
+	openPage,
+	pageSocketUrl,
+	pinPage,
+} from "./api.ts";
 import { PageApiError } from "./page-api-error.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -64,6 +72,22 @@ describe("listPages(ページの一覧)", () => {
 		await expect(listPages({ sort: "updated", offset: 0 })).rejects.toMatchObject({
 			kind: "failed",
 		});
+	});
+});
+
+describe("loadLinks(ページのつながり)", () => {
+	it("ページのIDを指して、つながりを取り出す", async () => {
+		const links = { missing: ["まだない"], related: [], hops: [] };
+		const fetchMock = stubFetch(json(links));
+
+		expect(await loadLinks(pageId)).toEqual(links);
+		expect(fetchMock).toHaveBeenCalledWith("/api/pages/p-1/links", undefined);
+	});
+
+	it("形の違う応答は、失敗として扱う", async () => {
+		stubFetch(json({ version: 1, lines: [] }));
+
+		await expect(loadLinks(pageId)).rejects.toMatchObject({ kind: "failed" });
 	});
 });
 
