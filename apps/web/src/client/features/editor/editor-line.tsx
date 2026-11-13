@@ -28,7 +28,21 @@ type EditorLineProps = {
 	readonly selectionEnd?: number | null;
 	/** 選択がこの行の改行を越えて、次の行へ続いているか。 */
 	readonly selectsLineBreak?: boolean;
+	/** この行にいる、他の人のカーソル(ADR-0023)。 */
+	readonly others?: readonly RemoteCaret[] | undefined;
 };
+
+/** 他の人のカーソル。 */
+export type RemoteCaret = {
+	/** 人(端末)を区別する値。 */
+	readonly key: string;
+	/** 行の本文の中の位置。相手の画面での位置なので、この行の本文より後ろを指していることがある。 */
+	readonly column: number;
+	/** 人ごとの色の番号。 */
+	readonly color: number;
+};
+
+const NO_OTHERS: readonly RemoteCaret[] = [];
 
 /** 太字の段階(* の数)として見た目に反映する上限。 */
 const MAX_DECORATION_LEVEL = 10;
@@ -51,7 +65,29 @@ type RenderContext = {
 	readonly selection: Span | null;
 	/** 選択が次の行へ続いていることを示す、行末の印。続いていなければ null。 */
 	readonly lineBreak: ReactNode;
+	/** この行にいる、他の人のカーソル。 */
+	readonly others: readonly RemoteCaret[];
 };
+
+/**
+ * start 以上 end 未満の位置にいる、他の人のカーソルの要素。
+ * 行の本文のどの位置も、描画するどれか1つの要素の範囲に入るようにしてあるので、カーソルは必ず1度だけ描画される。
+ * 文字の途中や、隠している記法の中を指す位置は、その要素の前に寄せる。
+ */
+function othersIn(ctx: RenderContext, start: number, end: number): ReactNode {
+	if (ctx.others.length === 0) return null;
+	return ctx.others
+		.filter(({ column }) => column >= start && column < end)
+		.map(({ key, color }) => (
+			<span
+				className="remote-caret"
+				data-testid="remote-caret"
+				data-color={color}
+				aria-hidden="true"
+				key={`other-${key}`}
+			/>
+		));
+}
 
 /** span の全体が選択されていれば、クラス名に選択の印を足す。 */
 function marked(ctx: RenderContext, span: Span, className: string): string {
@@ -86,6 +122,7 @@ function pieces(ctx: RenderContext, span: Span): Piece[] {
 function chars(ctx: RenderContext, span: Span, className = "char"): ReactNode[] {
 	return pieces(ctx, span).map((piece) => (
 		<Fragment key={piece.start}>
+			{othersIn(ctx, piece.start, piece.end)}
 			{piece.start === ctx.caretColumn && ctx.caret}
 			<span
 				className={marked(ctx, piece, className)}
@@ -102,6 +139,7 @@ function chars(ctx: RenderContext, span: Span, className = "char"): ReactNode[] 
 function indents(ctx: RenderContext, indent: number, bullet: boolean): ReactNode[] {
 	return pieces(ctx, { start: 0, end: indent }).map((piece) => (
 		<Fragment key={piece.start}>
+			{othersIn(ctx, piece.start, piece.end)}
 			{piece.start === ctx.caretColumn && ctx.caret}
 			<span
 				className={marked(ctx, piece, "indent")}
@@ -113,9 +151,9 @@ function indents(ctx: RenderContext, indent: number, bullet: boolean): ReactNode
 	));
 }
 
-/** 記法の記号。編集中の行でだけ見せる。 */
+/** 記法の記号。編集中の行でだけ見せる。隠しているときも、その中にいる他の人のカーソルは描画する。 */
 function notation(ctx: RenderContext, span: Span): ReactNode {
-	return ctx.editing ? chars(ctx, span, "char notation") : null;
+	return ctx.editing ? chars(ctx, span, "char notation") : othersIn(ctx, span.start, span.end);
 }
 
 /** 中身(inner)の前後に、そのノードの記法の記号を並べる。 */
@@ -182,16 +220,24 @@ function image(ctx: RenderContext, node: NodeOf<"image">): ReactNode {
 			{...atomPosition(node)}
 		/>
 	);
-	return node.link === null ? element : link(ctx, { href: node.link, external: true }, element);
+	return (
+		<>
+			{othersIn(ctx, node.start, node.end)}
+			{node.link === null ? element : link(ctx, { href: node.link, external: true }, element)}
+		</>
+	);
 }
 
 function icon(ctx: RenderContext, node: NodeOf<"icon">): ReactNode {
 	if (ctx.editing) return chars(ctx, node);
 	return (
-		<span className={marked(ctx, node, "icon")} title={node.name} {...atomPosition(node)}>
-			{node.name}
-			{node.count > 1 && `×${node.count}`}
-		</span>
+		<>
+			{othersIn(ctx, node.start, node.end)}
+			<span className={marked(ctx, node, "icon")} title={node.name} {...atomPosition(node)}>
+				{node.name}
+				{node.count > 1 && `×${node.count}`}
+			</span>
+		</>
 	);
 }
 
@@ -240,6 +286,7 @@ function renderNodes(ctx: RenderContext, nodes: readonly InlineNode[]): ReactNod
  */
 function tableCell(ctx: RenderContext, cell: TableCell): ReactNode {
 	const { content } = cell;
+	const last = content.end === ctx.text.length;
 	return (
 		<span
 			className="cell"
@@ -250,6 +297,8 @@ function tableCell(ctx: RenderContext, cell: TableCell): ReactNode {
 			<span className="cell-box">
 				<span className="cell-text">
 					{renderNodes(ctx, cell.nodes)}
+					{/* セルの末尾(区切りのタブの位置)。最後のセルでは、行の本文より後ろの位置も引き受ける。 */}
+					{othersIn(ctx, content.end, last ? Number.POSITIVE_INFINITY : content.end + 1)}
 					{ctx.caretColumn === content.end && ctx.caret}
 					{/* テーブルの行では、行末の印を最後のセルの中に置く(行の直下に置くと列が1つ増えてしまう)。 */}
 					{content.end === ctx.text.length && ctx.lineBreak}
@@ -297,6 +346,7 @@ export const EditorLine = memo(function EditorLine({
 	selectionStart = null,
 	selectionEnd = null,
 	selectsLineBreak = false,
+	others = NO_OTHERS,
 }: EditorLineProps) {
 	const parsed = parseLine(text, { kind, blockIndent });
 	const style = { "--indent": parsed.indent } as CSSProperties;
@@ -324,6 +374,7 @@ export const EditorLine = memo(function EditorLine({
 		editing: caretColumn !== null,
 		selection,
 		lineBreak,
+		others,
 	};
 	const isRow = parsed.kind === "table-row";
 	// コードとテーブルの行は箇条書きではないので、印を付けない。
@@ -342,6 +393,7 @@ export const EditorLine = memo(function EditorLine({
 			{isRow ? <span className="cell indent-cell">{indentSpans}</span> : indentSpans}
 			{lineBody(ctx, parsed)}
 			{/* テーブルの行では、行末のカーソルは最後のセルが描画する。 */}
+			{!isRow && othersIn(ctx, text.length, Number.POSITIVE_INFINITY)}
 			{!isRow && caretColumn === text.length && caret}
 			{!isRow && lineBreak}
 		</div>

@@ -18,7 +18,7 @@ import {
 	send,
 } from "@amime/sync";
 import { PageApiError } from "./page-api-error.ts";
-import type { PageSocketHandlers } from "./page-socket.ts";
+import type { PageSocket, PageSocketHandlers } from "./page-socket.ts";
 
 /** 最後の編集から保存を始めるまでの待ち時間。続けて打っているあいだは保存を始めない。 */
 export const SAVE_DELAY_MS = 300;
@@ -39,8 +39,8 @@ export type SyncStatus = "new" | "saved" | "unsaved" | "saving" | "retrying" | "
 export type PageApi = {
 	readonly load: () => Promise<PageSnapshot>;
 	readonly commit: (commit: Commit) => Promise<CommitResult>;
-	/** 他の端末のコミットを受け取り始める。返した関数を呼ぶと、受け取りをやめる。 */
-	readonly subscribe: (handlers: PageSocketHandlers) => () => void;
+	/** 他の端末のコミットを受け取り始める。返した接続を閉じると、受け取りをやめる。 */
+	readonly subscribe: (handlers: PageSocketHandlers) => PageSocket;
 };
 
 type PageSyncOptions = {
@@ -56,6 +56,8 @@ type PageSyncOptions = {
 	 */
 	readonly placeholder: boolean;
 	readonly api: PageApi;
+	/** 他の人のカーソルと、接続の状態の知らせの届け先(ADR-0023)。保存には関わらないので、そのまま渡す。 */
+	readonly presence?: Pick<PageSocketHandlers, "onCursor" | "onLeave" | "onConnection">;
 	/** 保存の状態を知らせる。 */
 	readonly onStatus: (status: SyncStatus) => void;
 	/**
@@ -84,6 +86,7 @@ export function createPageSync({
 	initial,
 	placeholder,
 	api,
+	presence,
 	onStatus,
 	onRemote,
 	onPending,
@@ -259,7 +262,8 @@ export function createPageSync({
 		}
 	}
 
-	const unsubscribe = api.subscribe({
+	const connection = api.subscribe({
+		...presence,
 		onHello(version) {
 			// つないだ時点でサーバーのほうが進んでいたら、切れているあいだのコミットを受け取りそこねている。
 			knownVersion = Math.max(knownVersion, version);
@@ -295,10 +299,12 @@ export function createPageSync({
 		flush(): void {
 			void save();
 		},
+		/** 自分のカーソルの位置を、他の端末に知らせる。 */
+		sendCursor: connection.sendCursor,
 		/** 保存をやめる。 */
 		dispose(): void {
 			disposed = true;
-			unsubscribe();
+			connection.close();
 			if (timer !== null) clearTimeout(timer);
 		},
 	};

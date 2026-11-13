@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { LineId } from "@amime/sync";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "./editor.tsx";
 
@@ -536,6 +537,39 @@ describe("Editor", () => {
 			expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getByTestId("caret"));
 		});
 
+		it("他の人のカーソルが動いただけでは、スクロールしない(離れた場所を読んでいる人を、引き戻さない)", () => {
+			const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+			const document = [{ id: "a" as LineId, text: "abc" }];
+			const other = (column: number) => [{ client: "bob", line: "a" as LineId, column }];
+			const { rerender } = render(<Editor initialDocument={document} others={other(1)} />);
+			clickChar(0, 0);
+			scrollIntoView.mockClear();
+
+			rerender(<Editor initialDocument={document} others={other(2)} />);
+
+			expect(scrollIntoView).not.toHaveBeenCalled();
+		});
+
+		it("他の人の変更を取り込んだだけでは、スクロールしない", () => {
+			const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+			const document = [{ id: "a" as LineId, text: "abc" }];
+			let apply: (lines: typeof document) => void = () => {};
+			const remote = {
+				subscribe(listener: typeof apply) {
+					apply = listener;
+					return () => {};
+				},
+			};
+			render(<Editor initialDocument={document} remote={remote} />);
+			clickChar(0, 0);
+			scrollIntoView.mockClear();
+
+			act(() => apply([{ id: "x" as LineId, text: "他の人の行" }, ...document]));
+
+			expect(lines()).toEqual(["他の人の行", "abc"]);
+			expect(scrollIntoView).not.toHaveBeenCalled();
+		});
+
 		it("フォーカスがないときはスクロールしない", () => {
 			const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
 
@@ -764,6 +798,85 @@ describe("Editor", () => {
 
 			expect(notPrevented).toBe(true);
 			expect(lines()).toEqual(["ab"]);
+		});
+	});
+
+	describe("他の人のカーソル(ADR-0023)", () => {
+		const id = (value: string) => value as LineId;
+		const document = [
+			{ id: id("a"), text: "タイトル" },
+			{ id: id("b"), text: "本文" },
+		];
+
+		it("他の人のカーソルを、行IDの指す行の、その位置に描画する", () => {
+			render(
+				<Editor
+					initialDocument={document}
+					others={[{ client: "bob", line: id("b"), column: 1 }]}
+				/>,
+			);
+
+			const remote = screen.getByTestId("remote-caret");
+			expect(remote.closest("[data-line]")?.getAttribute("data-line")).toBe("1");
+			expect(remote.nextElementSibling?.getAttribute("data-column")).toBe("1");
+		});
+
+		it("行が動いても、同じ行についていく", () => {
+			render(
+				<Editor
+					initialDocument={document}
+					others={[{ client: "bob", line: id("b"), column: 1 }]}
+				/>,
+			);
+			focusEditor();
+
+			// 1行目の先頭で改行して、上に行を足す。
+			press("Enter");
+
+			expect(lines()).toEqual(["", "タイトル", "本文"]);
+			const remote = screen.getByTestId("remote-caret");
+			expect(remote.closest("[data-line]")?.getAttribute("data-text")).toBe("本文");
+		});
+
+		it("この文書にない行を指すカーソルは、描画しない", () => {
+			render(
+				<Editor
+					initialDocument={document}
+					others={[{ client: "bob", line: id("gone"), column: 0 }]}
+				/>,
+			);
+
+			expect(screen.queryByTestId("remote-caret")).toBeNull();
+		});
+
+		it("自分のカーソルの位置を、行IDで知らせる。動くたびに知らせる", () => {
+			const onCursor = vi.fn();
+			render(<Editor initialDocument={document} onCursor={onCursor} />);
+
+			focusEditor();
+			expect(onCursor).toHaveBeenLastCalledWith({ line: "a", column: 0 });
+
+			press("ArrowDown");
+			expect(onCursor).toHaveBeenLastCalledWith({ line: "b", column: 0 });
+
+			type("追記");
+			expect(onCursor).toHaveBeenLastCalledWith({ line: "b", column: 2 });
+		});
+
+		it("編集欄にフォーカスがないあいだは、カーソルを出していないと知らせる", () => {
+			const onCursor = vi.fn();
+			render(<Editor initialDocument={document} onCursor={onCursor} />);
+			expect(onCursor).toHaveBeenLastCalledWith(null);
+
+			focusEditor();
+			fireEvent.blur(input());
+
+			expect(onCursor).toHaveBeenLastCalledWith(null);
+			expect(onCursor.mock.calls.map(([cursor]) => cursor)).toEqual([
+				null,
+				{ line: "a", column: 0 },
+				null,
+			]);
 		});
 	});
 });

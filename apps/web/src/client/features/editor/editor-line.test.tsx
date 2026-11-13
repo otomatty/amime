@@ -171,6 +171,128 @@ describe("EditorLine", () => {
 		});
 	});
 
+	describe("他の人のカーソル(ADR-0023)", () => {
+		const TABLE_ROW: Role = { kind: "table-row", blockIndent: 0 };
+		const other = (column: number, key = "bob", color = 3) => ({ key, column, color });
+		/** 他の人のカーソルを付けて描画する。caretColumn を渡すと、自分のカーソルもある行にする。 */
+		function renderWith(
+			text: string,
+			others: readonly ReturnType<typeof other>[],
+			caretColumn: number | null = null,
+			role: Role = TEXT,
+		) {
+			render(
+				<EditorLine
+					index={1}
+					text={text}
+					kind={role.kind}
+					blockIndent={role.blockIndent}
+					caretColumn={caretColumn}
+					composing={null}
+					others={others}
+				/>,
+			);
+			return screen.getAllByTestId("remote-caret");
+		}
+
+		it("他の人のカーソルがなければ、描画しない", () => {
+			renderShown("abc");
+
+			expect(screen.queryByTestId("remote-caret")).toBeNull();
+		});
+
+		it.each([
+			[0, ""],
+			[1, "a"],
+			[3, "abc"],
+		])("文字位置 %i に描画する", (column, before) => {
+			const [caret] = renderWith("abc", [other(column)]);
+
+			expect(caret && textBefore(caret)).toBe(before);
+		});
+
+		it("人ごとの色の番号を持つ。画面を読み上げる道具には伝えない", () => {
+			const [caret] = renderWith("abc", [other(1, "bob", 5)]);
+
+			expect(caret?.getAttribute("data-color")).toBe("5");
+			expect(caret?.getAttribute("aria-hidden")).toBe("true");
+		});
+
+		it("行の本文より後ろの位置は、行末に描画する(相手の本文が、まだ届いていない)", () => {
+			const [caret] = renderWith("abc", [other(10)]);
+
+			expect(caret && textBefore(caret)).toBe("abc");
+			expect(caret?.nextElementSibling).toBeNull();
+		});
+
+		it("文字の途中の位置は、その文字の前に描画する", () => {
+			const [caret] = renderWith("a😀b", [other(2)]);
+
+			expect(caret && textBefore(caret)).toBe("a");
+		});
+
+		it("同じ位置に何人いても、全員の分を描画する。自分のカーソルも描画する", () => {
+			const carets = renderWith("abc", [other(1, "bob"), other(1, "carol")], 1);
+
+			expect(carets).toHaveLength(2);
+			expect(textBefore(screen.getByTestId("caret"))).toBe("a");
+		});
+
+		it("インデントの中にも描画する", () => {
+			const [caret] = renderWith("  item", [other(1)]);
+
+			expect(caret?.previousElementSibling?.getAttribute("data-column")).toBe("0");
+			expect(caret?.nextElementSibling?.getAttribute("data-column")).toBe("1");
+		});
+
+		it("隠している記法の中の位置は、その記法のあった場所に描画する", () => {
+			// 「[」は隠れている。「a」と「b」のあいだに描画する。
+			const [opening] = renderWith("a[b]c", [other(1)]);
+			expect(opening && textBefore(opening)).toBe("a");
+			cleanup();
+
+			// 「]」も隠れている。「b」と「c」のあいだに描画する。
+			const [closing] = renderWith("a[b]c", [other(3)]);
+			expect(closing && textBefore(closing)).toBe("ab");
+		});
+
+		it("記法を見せている行(自分のカーソルのある行)では、記法の中の位置にそのまま描画する", () => {
+			const [caret] = renderWith("a[b]c", [other(2)], 0);
+
+			expect(caret && textBefore(caret)).toBe("a[");
+		});
+
+		it("画像やアイコンの記法の中の位置は、その画像やアイコンの前に描画する", () => {
+			const [onImage] = renderWith("a[https://example.com/b.png]", [other(5)]);
+			expect(onImage?.nextElementSibling?.tagName).toBe("IMG");
+			cleanup();
+
+			const [onIcon] = renderWith("a[bob.icon]", [other(3)]);
+			expect(onIcon?.nextElementSibling?.className).toContain("icon");
+		});
+
+		it("テーブルの行では、セルの中と、セルの区切りの位置に描画する", () => {
+			// " a\tbc": 位置 2 は「a」のあと(区切りのタブの前)、位置 4 は「b」と「c」のあいだ。
+			const [afterA, insideBc] = renderWith(
+				" a\tbc",
+				[other(2, "bob"), other(4, "carol")],
+				null,
+				TABLE_ROW,
+			);
+
+			expect(afterA?.closest(".cell-text")?.textContent).toBe("a");
+			expect(insideBc?.closest(".cell-text")?.textContent).toBe("bc");
+			expect(insideBc?.previousElementSibling?.textContent).toBe("b");
+		});
+
+		it("テーブルの行の末尾より後ろの位置は、最後のセルの末尾に描画する", () => {
+			const [caret] = renderWith(" a\tbc", [other(9)], null, TABLE_ROW);
+
+			expect(caret?.closest(".cell-text")?.textContent).toBe("bc");
+			expect(caret?.previousElementSibling?.textContent).toBe("c");
+		});
+	});
+
 	describe("カーソルのない行: 記法を隠して装飾する", () => {
 		it("[タイトル] は括弧を隠し、ページへのリンクにする", () => {
 			const element = renderShown("前[a b]後");

@@ -10,6 +10,41 @@
 	color: var(--color-warning);
 }
 
+/* 接続の状態。保存の状態のすぐ下に、小さく示す。 */
+.page-status:has(+ .page-connection) {
+	margin-bottom: 0.15rem;
+}
+
+.page-connection {
+	margin: 0 0 0.75rem;
+	color: var(--color-muted);
+	font-size: 0.75rem;
+	text-align: right;
+}
+
+.page-connection::before {
+	content: "";
+	display: inline-block;
+	width: 0.5em;
+	height: 0.5em;
+	margin-right: 0.4em;
+	border-radius: 50%;
+	background: var(--color-muted);
+	vertical-align: 0.05em;
+}
+
+.page-connection[data-connection="online"]::before {
+	background: #2f9e44;
+}
+
+.page-connection[data-connection="offline"] {
+	color: var(--color-warning);
+}
+
+.page-connection[data-connection="offline"]::before {
+	background: var(--color-warning);
+}
+
 .page-message {
 	margin: 0;
 	line-height: 1.8;

@@ -235,12 +235,153 @@ describe("ページの WebSocket", () => {
 		await vi.waitFor(() => expect(messages).toContain("pong"));
 	});
 
-	it("ping 以外のメッセージを送ってきた接続は閉じる", async () => {
+	it("決めていないメッセージを送ってきた接続は閉じる", async () => {
 		const { socket, closes } = await connect("ws-unexpected", "reader");
 
 		socket.send("hello?");
 
 		await vi.waitFor(() => expect(closes).toEqual([1008]));
+	});
+
+	describe("他の人のカーソル(ADR-0023)", () => {
+		const cursor = (line: string, column: number) => ({ line, column });
+		const sendCursor = (socket: WebSocket, position: unknown) =>
+			socket.send(JSON.stringify({ type: "cursor", cursor: position }));
+		const hello = { type: "hello", version: 0 };
+
+		it("カーソルの位置を送ると、他の端末に届く。本人には届かない", async () => {
+			const alice = await connect("cursor-move", "alice");
+			const bob = await connect("cursor-move", "bob");
+
+			sendCursor(alice.socket, cursor("a", 3));
+
+			await vi.waitFor(() =>
+				expect(bob.messages).toEqual([
+					hello,
+					{ type: "cursor", client: "alice", cursor: cursor("a", 3) },
+				]),
+			);
+			expect(alice.messages).toEqual([hello]);
+		});
+
+		it("カーソルを出すのをやめたこと(null)も届く", async () => {
+			const alice = await connect("cursor-hide", "alice");
+			const bob = await connect("cursor-hide", "bob");
+
+			sendCursor(alice.socket, cursor("a", 3));
+			sendCursor(alice.socket, null);
+
+			await vi.waitFor(() =>
+				expect(bob.messages.at(-1)).toEqual({ type: "cursor", client: "alice", cursor: null }),
+			);
+		});
+
+		it("あとから接続した端末に、いまいる端末のカーソルが届く。カーソルを出していない端末の分は届かない", async () => {
+			const alice = await connect("cursor-join", "alice");
+			const carol = await connect("cursor-join", "carol");
+			sendCursor(alice.socket, cursor("a", 3));
+			sendCursor(carol.socket, cursor("b", 1));
+			sendCursor(carol.socket, null);
+			await vi.waitFor(() => expect(alice.messages).toHaveLength(3));
+
+			const bob = await connect("cursor-join", "bob");
+
+			await vi.waitFor(() =>
+				expect(bob.messages).toEqual([
+					hello,
+					{ type: "cursor", client: "alice", cursor: cursor("a", 3) },
+				]),
+			);
+		});
+
+		it("メモリから追い出されたあとでも、カーソルの位置を覚えている(休止からの復帰)", async () => {
+			const alice = await connect("cursor-hibernate", "alice");
+			const watcher = await connect("cursor-hibernate", "watcher");
+			sendCursor(alice.socket, cursor("a", 3));
+			await vi.waitFor(() => expect(watcher.messages).toHaveLength(2));
+			await evictDurableObject(exports.PageDO.getByName("default/cursor-hibernate"), {
+				webSockets: "hibernate",
+			});
+
+			const bob = await connect("cursor-hibernate", "bob");
+
+			await vi.waitFor(() =>
+				expect(bob.messages).toContainEqual({
+					type: "cursor",
+					client: "alice",
+					cursor: cursor("a", 3),
+				}),
+			);
+		});
+
+		it("接続が閉じると、他の端末に知らせる", async () => {
+			const alice = await connect("cursor-leave", "alice");
+			const bob = await connect("cursor-leave", "bob");
+
+			alice.socket.close(1000, "bye");
+
+			await vi.waitFor(() =>
+				expect(bob.messages).toEqual([hello, { type: "leave", client: "alice" }]),
+			);
+		});
+
+		it("同じ端末の接続が他にも残っていれば、閉じたことを知らせない(つなぎ直しの途中)", async () => {
+			const first = await connect("cursor-reconnect", "alice");
+			await connect("cursor-reconnect", "alice");
+			const bob = await connect("cursor-reconnect", "bob");
+
+			first.socket.close(1000, "replaced");
+			// 知らせが来ないことを確かめるために、あとから別の知らせを起こして、それが先に届くのを待つ。
+			const carol = await connect("cursor-reconnect", "carol");
+			sendCursor(carol.socket, cursor("a", 0));
+
+			await vi.waitFor(() => expect(bob.messages).toHaveLength(2));
+			expect(bob.messages).toEqual([
+				hello,
+				{ type: "cursor", client: "carol", cursor: cursor("a", 0) },
+			]);
+		});
+
+		it("同じ端末の接続がいくつかあっても、最後に知らせてきた位置だけを伝える", async () => {
+			// つなぎ直しの途中で、前の接続が残っている。新しい接続で、カーソルを出すのをやめた。
+			const former = await connect("cursor-twice", "alice");
+			sendCursor(former.socket, cursor("a", 3));
+			const current = await connect("cursor-twice", "alice");
+			sendCursor(current.socket, null);
+			const watcher = await connect("cursor-twice", "watcher");
+			sendCursor(watcher.socket, cursor("b", 0));
+			await vi.waitFor(() => expect(current.messages).toHaveLength(2));
+
+			const bob = await connect("cursor-twice", "bob");
+
+			await vi.waitFor(() => expect(bob.messages).toHaveLength(2));
+			expect(bob.messages).toEqual([
+				hello,
+				{ type: "cursor", client: "watcher", cursor: cursor("b", 0) },
+			]);
+		});
+
+		it("同じ端末の接続がいくつかあっても、その端末のカーソルは1つだけ伝える", async () => {
+			const former = await connect("cursor-once", "alice");
+			sendCursor(former.socket, cursor("a", 3));
+			const current = await connect("cursor-once", "alice");
+			sendCursor(current.socket, cursor("a", 5));
+			const watcher = await connect("cursor-once", "watcher");
+			await vi.waitFor(() => expect(watcher.messages).toHaveLength(2));
+
+			expect(watcher.messages).toEqual([
+				hello,
+				{ type: "cursor", client: "alice", cursor: cursor("a", 5) },
+			]);
+		});
+
+		it("形の違うカーソルを送ってきた接続は閉じる", async () => {
+			const { socket, closes } = await connect("cursor-invalid", "reader");
+
+			sendCursor(socket, { line: "a b", column: 0 });
+
+			await vi.waitFor(() => expect(closes).toEqual([1008]));
+		});
 	});
 
 	it("WebSocket への切り替えでない要求は 426 で断る", async () => {

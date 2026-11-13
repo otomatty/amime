@@ -228,6 +228,54 @@ a.link:hover {
 }
 
 /*
+ * 他の人のカーソル(ADR-0023)。幅を持たせず、文字の並びを動かさない。色は、人ごとの番号で決める。
+ * 色だけで人を区別している。名前は、ログインの仕組み(P4)ができてから添える。
+ */
+.remote-caret {
+	display: inline-block;
+	position: relative;
+	width: 0;
+	height: 1em;
+	text-indent: 0;
+	vertical-align: baseline;
+	pointer-events: none;
+}
+
+.remote-caret::after {
+	content: "";
+	position: absolute;
+	left: -1px;
+	top: -0.2em;
+	height: 1.3em;
+	border-left: 2px solid var(--remote-color, #868e96);
+}
+
+.remote-caret[data-color="0"] {
+	--remote-color: #e8590c;
+}
+.remote-caret[data-color="1"] {
+	--remote-color: #1c7ed6;
+}
+.remote-caret[data-color="2"] {
+	--remote-color: #2f9e44;
+}
+.remote-caret[data-color="3"] {
+	--remote-color: #ae3ec9;
+}
+.remote-caret[data-color="4"] {
+	--remote-color: #e03131;
+}
+.remote-caret[data-color="5"] {
+	--remote-color: #0c8599;
+}
+.remote-caret[data-color="6"] {
+	--remote-color: #f08c00;
+}
+.remote-caret[data-color="7"] {
+	--remote-color: #6741d9;
+}
+
+/*
  * 文字入力を受け取る textarea。画面には見せないが、変換候補のウィンドウの
  * 位置の基準になるため、display: none にはせずカーソルの位置に重ねる。
  */
