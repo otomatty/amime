@@ -117,6 +117,8 @@ const STATUS_LABELS: Record<SyncStatus, string> = {
 	rejected:
 		"保存できない内容があります。1行が20,000文字を超えていないか確かめてください。直すと保存されます",
 	deleted: "このページは削除されました。ここに書いても、保存されません",
+	denied:
+		"保存できません。このプロジェクトに書き込む権限がなくなりました。書いたものは、この端末に残っています。権限が戻ったら、再読み込みしてください",
 };
 
 /** 他の人の変更やカーソルを受け取る接続(WebSocket)の状態。 */
@@ -139,7 +141,7 @@ const TITLE_PROBLEMS: Record<TitleProblem, string> = {
 /** 保存を待っている変更がない状態。ページを離れても何も失われない(削除されたページは、保存する先がない)。 */
 const SETTLED: ReadonlySet<SyncStatus> = new Set(["new", "saved", "deleted"]);
 /** ページの操作(固定、削除)を出さない状態。まだ保存されていないページと、削除されたページ。 */
-const WITHOUT_TOOLS: ReadonlySet<SyncStatus> = new Set(["new", "deleted"]);
+const WITHOUT_TOOLS: ReadonlySet<SyncStatus> = new Set(["new", "deleted", "denied"]);
 
 /**
  * 保存されるページ。URLの中の名前からページを引き、読み込んでから編集欄を表示する。

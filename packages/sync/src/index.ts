@@ -10,10 +10,18 @@ export { type LineTracker, startTracking, trackLines } from "./line-ids.ts";
 export { mapColumn } from "./merge-text.ts";
 export { type OwnEdit, reapplyEdit, recordEdit, revertEdit } from "./own-edit.ts";
 export {
+	type Invite,
+	type InviteTarget,
+	type Member,
+	type NewInvite,
 	type ProjectInfo,
 	type ProjectList,
+	type ProjectMembers,
+	parseInviteTarget,
+	parseNewInvite,
 	parseProjectInfo,
 	parseProjectList,
+	parseProjectMembers,
 } from "./project.ts";
 export {
 	MAX_LINE_LENGTH,

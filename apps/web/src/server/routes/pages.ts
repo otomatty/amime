@@ -8,11 +8,7 @@ import {
 	parsePageSort,
 } from "@amime/sync";
 import { type Context, Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import { type AppEnv, readJson } from "../context.ts";
-
-/** コミットの本文の大きさの上限(バイト)。 */
-const MAX_COMMIT_BYTES = 2 * 1024 * 1024;
 
 /** 削除されたページへの要求に返す本文。 */
 const DELETED = { error: "page-deleted" };
@@ -135,22 +131,16 @@ export const pages = new Hono<AppEnv>()
 		const info = await directory(c).pin(id.value, pinned);
 		return info === null ? c.json({ error: "unknown-page" }, 404) : c.json(info);
 	})
-	.post(
-		"/:id/commits",
-		bodyLimit({
-			maxSize: MAX_COMMIT_BYTES,
-			onError: (c) => c.json({ error: "commit-too-large" }, 413),
-		}),
-		async (c) => {
-			const page = parsePageId(c.req.param("id"));
-			if (!page.ok) return c.json({ error: "invalid-page" }, 400);
-			const commit = parseCommitRequest(await readJson(c.req.raw));
-			if (!commit.ok) return c.json({ error: "invalid-commit" }, 400);
-			const { id, changes, client } = commit.value;
-			const result = await pageStub(c, page.value).commit({ id, changes }, client);
-			return result === "deleted" ? c.json(DELETED, 410) : c.json(result);
-		},
-	)
+	// コミットを受け付ける。本文の大きさの上限は、手前で確かめてある(received)。
+	.post("/:id/commits", async (c) => {
+		const page = parsePageId(c.req.param("id"));
+		if (!page.ok) return c.json({ error: "invalid-page" }, 400);
+		const commit = parseCommitRequest(await readJson(c.req.raw));
+		if (!commit.ok) return c.json({ error: "invalid-commit" }, 400);
+		const { id, changes, client } = commit.value;
+		const result = await pageStub(c, page.value).commit({ id, changes }, client);
+		return result === "deleted" ? c.json(DELETED, 410) : c.json(result);
+	})
 	// 他の端末のコミットを受け取るための WebSocket(ADR-0018)。
 	.get("/:id/socket", async (c) => {
 		// 検査は Worker の側で済ませ、正しい要求だけを Durable Object に渡す。
@@ -165,5 +155,12 @@ export const pages = new Hono<AppEnv>()
 		// 印は、ここで付け直す。要求に付いてきたものは、使わない。
 		const url = new URL(c.req.url);
 		url.searchParams.set("access", canWrite(c) ? "write" : "read");
+		// 権限を確かめ始めた時刻も、付ける。確かめたあと、接続を受け付けるまでのあいだに権限がなくなっても、
+		// この時刻で比べれば、閉じられる。
+		url.searchParams.set("at", String(c.var.authorizedAt));
+		// だれの接続かも、ここで付ける(権限がなくなったときに、その人の接続を閉じるため)。
+		url.searchParams.set("user", c.var.user?.id ?? "");
+		// ログインの状態が切れる時刻も、付ける(切れたあとは、変更を配らない)。
+		url.searchParams.set("expires", String(c.var.sessionExpires ?? ""));
 		return pageStub(c, page.value).fetch(new Request(url, c.req.raw));
 	});

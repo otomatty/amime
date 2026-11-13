@@ -93,6 +93,16 @@ const WS_POLICY_VIOLATION = 1008;
  * 読むだけの人の接続に付けるタグ。端末の識別子(英数字と - と _)とは重ならない形にする。
  */
 const VIEWER_TAG = "access:read";
+/** メンバーの接続に付けるタグの先頭。あとに、利用者のIDが続く。 */
+const USER_TAG = "user:";
+/** その接続の権限を確かめた時刻を入れるタグの先頭。あとに、時刻(ミリ秒)が続く。 */
+const ACCEPTED_TAG = "at:";
+/** ログインの状態が切れる時刻を入れるタグの先頭。あとに、時刻(ミリ秒)が続く。 */
+const EXPIRES_TAG = "exp:";
+/** 権限を取り上げた相手を、台帳に聞き直すまでの長さ(ミリ秒)。 */
+const REVOCATION_CACHE_MS = 30_000;
+/** 権限を確かめ直させるために、接続を閉じるときのコード。 */
+const WS_REAUTHORIZE = 4001;
 
 /**
  * 1ページ = 1インスタンス。ページへのコミットをここで直列化する。
@@ -105,6 +115,11 @@ const VIEWER_TAG = "access:read";
  * どの環境にも保存されたページがない(ADR-0017)。今後テーブルの形を変えるときは、移行を書く。
  */
 export class PageDO extends DurableObject {
+	/** 権限を取り上げた相手(台帳に聞いた結果)と、聞いた時刻。まだ聞いていなければ null。 */
+	#revocations: { checked: number; list: readonly { subject: string; at: number }[] } | null = null;
+	/** 台帳に聞いている途中の、問い合わせ。 */
+	#asking: Promise<void> | null = null;
+
 	constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
 		super(ctx, env);
 		ctx.storage.sql.exec(`
@@ -147,6 +162,14 @@ export class PageDO extends DurableObject {
 		const client = query.get("client") ?? "";
 		// 読むだけの人(公開のプロジェクトを見ている、メンバーでない人)の接続か。Worker が付けた印で決まる。
 		const viewer = query.get("access") === "read";
+		// だれの接続か(メンバーのID)と、いつ権限を確かめたか。権限がなくなったあとで、接続を閉じるために使う。
+		const owner = viewer ? VIEWER_TAG : `${USER_TAG}${query.get("user") ?? ""}`;
+		// 時刻は、Worker が、権限を確かめ始めたときのもの(なければ、いま)。
+		const authorizedAt = Number(query.get("at") ?? "") || Date.now();
+		const tags = [client, `${ACCEPTED_TAG}${authorizedAt}`, owner];
+		// ログインの状態が切れる時刻(ログインしていない人の接続には、ない)。
+		const expires = Number(query.get("expires") ?? "");
+		if (expires > 0) tags.push(`${EXPIRES_TAG}${expires}`);
 		const { 0: clientSocket, 1: serverSocket } = new WebSocketPair();
 		if (this.#deleted()) {
 			// 削除されたページ。接続は受け付けて、削除されたことだけを伝えて閉じる
@@ -165,8 +188,7 @@ export class PageDO extends DurableObject {
 			if (owner !== client && cursor !== null) others.set(owner, cursor);
 		}
 		// 端末の識別子をタグにする。その端末のコミットを、本人の接続には配信しないため。
-		// 読むだけの人の接続には、もう1つタグを付ける。
-		this.ctx.acceptWebSocket(serverSocket, viewer ? [client, VIEWER_TAG] : [client]);
+		this.ctx.acceptWebSocket(serverSocket, tags);
 		this.#send(serverSocket, { type: "hello", version: this.#version() });
 		// 台帳に確かめてあるページの名前も送る。切れているあいだに名前が変わっていても、追いつける。
 		const named = this.#named();
@@ -182,12 +204,16 @@ export class PageDO extends DurableObject {
 	 * カーソルの位置は保存しない。接続に添えて覚えておき(休止しても残る)、他の端末に配る。
 	 * 決めていないメッセージを送る接続は閉じる。
 	 */
-	override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+	override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
 		const parsed = parseClientMessage(message);
 		if (!parsed.ok) {
 			socket.close(WS_POLICY_VIOLATION, "unexpected message");
 			return;
 		}
+		// 権限のなくなった人の接続には、他の人のカーソルも配らない(コミットがなくても、確かめ直す)。
+		await this.#dropRevoked();
+		// 送ってきた接続が、いま閉じられた。その人のカーソルは、配らない。
+		if (socket.readyState !== WebSocket.OPEN) return;
 		// 読むだけの人のカーソルは、配らない(書いている人の画面に、知らない人のカーソルを出さない)。
 		if (this.ctx.getTags(socket).includes(VIEWER_TAG)) return;
 		const { cursor } = parsed.value;
@@ -214,6 +240,73 @@ export class PageDO extends DurableObject {
 			.getWebSockets(client)
 			.some((other) => other !== socket && other.readyState === WebSocket.OPEN);
 		if (!remains) this.#broadcast({ type: "leave", client }, socket);
+	}
+
+	/**
+	 * 権限のなくなった人が、つないだままにしている接続を閉じる(ADR-0034)。配信の前に呼ぶ。
+	 * 権限を取り上げた相手は、台帳が覚えている。聞きに行くのは、つないでいる人がいるときだけで、
+	 * しばらくのあいだは、前に聞いた結果を使う。閉じられた端末は、つなぎ直すときに、権限を確かめ直される。
+	 * 台帳に聞けなかったときは、つないでいる接続を、すべて閉じる(確かめられないまま、配らない)。
+	 */
+	async #dropRevoked(): Promise<void> {
+		if (this.ctx.getWebSockets().length === 0) return;
+		const now = Date.now();
+		if (this.#revocations === null || now - this.#revocations.checked >= REVOCATION_CACHE_MS) {
+			// 聞いている途中なら、同じ答えを待つ(待った順に進むので、カーソルの順番が入れ替わらない)。
+			this.#asking ??= this.#askRevocations(now).finally(() => {
+				this.#asking = null;
+			});
+			await this.#asking;
+		}
+		if (this.#revocations === null) {
+			for (const socket of this.ctx.getWebSockets()) {
+				socket.close(WS_REAUTHORIZE, "access unknown");
+			}
+			return;
+		}
+		this.#closeRevoked();
+	}
+
+	/** 権限を取り上げた相手を、台帳に聞いて、覚える。聞けなかった結果は、覚えない(次の配信で、聞き直す)。 */
+	async #askRevocations(now: number): Promise<void> {
+		const [project = ""] = (this.ctx.id.name ?? "").split("/");
+		try {
+			const list = await exports.ProjectDO.getByName(project).revocations();
+			// 取り上げている途中の答えは、使い回さない(次の配信で、聞き直す)。
+			// 変更が断られたあとも、先の時刻のまま、つなぎ直した接続を閉じ続けないように。
+			const checked = list.some((item) => item.pending) ? Number.NEGATIVE_INFINITY : now;
+			this.#revocations = { checked, list };
+		} catch {
+			this.#revocations = null;
+		}
+	}
+
+	/**
+	 * いま分かっている範囲で、権限のなくなった人の接続を閉じる(台帳には、聞きに行かない)。
+	 * ログインの状態の期限が切れた接続と、前に聞いた「権限を取り上げた相手」の接続。
+	 */
+	#closeRevoked(): void {
+		const now = Date.now();
+		for (const socket of this.ctx.getWebSockets()) {
+			if (this.#tagged(socket, EXPIRES_TAG, Number.POSITIVE_INFINITY) <= now) {
+				socket.close(WS_REAUTHORIZE, "session expired");
+			}
+		}
+		for (const { subject, at } of this.#revocations?.list ?? []) {
+			const tag = subject === "*" ? VIEWER_TAG : `${USER_TAG}${subject}`;
+			for (const socket of this.ctx.getWebSockets(tag)) {
+				// 取り上げたのと同じ時刻(ミリ秒)に受け付けた接続も、閉じる(どちらが先か、分からない)。
+				if (this.#tagged(socket, ACCEPTED_TAG, 0) <= at) {
+					socket.close(WS_REAUTHORIZE, "access changed");
+				}
+			}
+		}
+	}
+
+	/** 接続を受け付けたときに付けたタグのうち、prefix で始まるものの、あとに続く数。なければ fallback。 */
+	#tagged(socket: WebSocket, prefix: string, fallback: number): number {
+		const tag = this.ctx.getTags(socket).find((item) => item.startsWith(prefix));
+		return tag === undefined ? fallback : Number(tag.slice(prefix.length));
 	}
 
 	/** 接続している端末の識別子(接続を受け付けたときに付けたタグ)。 */
@@ -272,6 +365,10 @@ export class PageDO extends DurableObject {
 	 */
 	async commit(commit: Commit, client?: ClientId): Promise<CommitResult | "deleted"> {
 		if (this.#deleted()) return "deleted";
+		// 配信する前に、権限のなくなった人の接続を閉じる。
+		await this.#dropRevoked();
+		// 確かめているあいだに、削除されていたら、書き込まない。
+		if (this.#deleted()) return "deleted";
 		// 同じコミットを送り直してきた(前の応答が届かなかった)。もう適用してあるので、何もしない(ADR-0021)。
 		if (this.#seen(commit.id)) {
 			// 前回、保存したあとで台帳への知らせの予約に失敗していたら、ここで予約し直す。
@@ -295,6 +392,8 @@ export class PageDO extends DurableObject {
 	 * (新しい名前がリンクとして書けないときなどは、残る)。
 	 */
 	async rewriteLinks(rewrites: readonly Rewrite[]): Promise<RewriteResult[]> {
+		// 書き換えも、開いている端末に配信する。その前に、権限のなくなった人の接続を閉じる(ADR-0034)。
+		await this.#dropRevoked();
 		if (this.#deleted()) return rewrites.map(() => ({ changed: false, remaining: false }));
 		const done = this.#doneRewrites();
 		/**
@@ -487,6 +586,8 @@ export class PageDO extends DurableObject {
 			"INSERT INTO notes (key, value) VALUES ('named', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
 			JSON.stringify(named),
 		);
+		// ページの名前も、権限のなくなった人には、知らせない。
+		await this.#dropRevoked();
 		for (const socket of this.ctx.getWebSockets()) this.#send(socket, { type: "page", ...named });
 	}
 

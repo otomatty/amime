@@ -132,7 +132,7 @@ export function Home({ navigate = (href) => window.location.assign(href) }: Home
 		<section className="project-home" aria-labelledby="project-home-title">
 			<h2 id="project-home-title">プロジェクト</h2>
 			{list.projects.length === 0 ? (
-				<p>参加しているプロジェクトは、まだありません。</p>
+				<p>参加しているプロジェクトは、まだありません。招待リンクを受け取ると、参加できます。</p>
 			) : (
 				<ul className="project-list">
 					{list.projects.map((project) => (

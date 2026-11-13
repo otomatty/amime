@@ -1,5 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createProject, listProjects, loadProject } from "./api.ts";
+import {
+	acceptInvite,
+	createInvite,
+	createProject,
+	listProjects,
+	loadInvite,
+	loadMembers,
+	loadProject,
+	removeMember,
+	revokeInvite,
+	setRole,
+	setVisibility,
+} from "./api.ts";
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -88,5 +100,119 @@ describe("createProject(プロジェクトを作る)", () => {
 		stubFetch(reply);
 
 		expect(await createProject("team", "public")).toEqual({ ok: false, error: "failed" });
+	});
+});
+
+describe("メンバーと招待リンク", () => {
+	const members = {
+		members: [{ id: "u1", name: "花子", picture: null, role: "admin", joined: 1 }],
+		invites: [],
+	};
+
+	it("loadMembers: メンバーと招待リンクの一覧を返す。読めなければ null", async () => {
+		const fetch = stubFetch(() => Response.json(members));
+		expect(await loadMembers("team")).toEqual(members);
+		expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/projects/team/members", undefined);
+
+		stubFetch(() => Response.json({ error: "not-member" }, { status: 403 }));
+		expect(await loadMembers("team")).toBeNull();
+		stubFetch(() => Response.json({ members: "x" }));
+		expect(await loadMembers("team")).toBeNull();
+	});
+
+	it.each([
+		[
+			"setVisibility",
+			() => setVisibility("team", "public"),
+			"/api/projects/team",
+			"PATCH",
+			{ visibility: "public" },
+		],
+		[
+			"setRole",
+			() => setRole("team", "u2" as never, "admin"),
+			"/api/projects/team/members/u2",
+			"PUT",
+			{ role: "admin" },
+		],
+		[
+			"removeMember",
+			() => removeMember("team", "u2" as never),
+			"/api/projects/team/members/u2",
+			"DELETE",
+			undefined,
+		],
+		[
+			"revokeInvite",
+			() => revokeInvite("team", "i1"),
+			"/api/projects/team/invites/i1",
+			"DELETE",
+			undefined,
+		],
+	] as const)("%s: 変える操作を送る。成功なら null", async (_name, run, url, method, body) => {
+		const fetch = stubFetch(() => new Response(null, { status: 204 }));
+
+		expect(await run()).toBeNull();
+		expect(fetch).toHaveBeenCalledExactlyOnceWith(
+			url,
+			body === undefined
+				? { method }
+				: { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+		);
+	});
+
+	it.each([
+		[
+			"サーバーが断った理由",
+			() => Response.json({ error: "last-admin" }, { status: 409 }),
+			"last-admin",
+		],
+		["理由のない失敗", () => new Response("x", { status: 500 }), "failed"],
+		["理由が文字列でない", () => Response.json({ error: 1 }, { status: 400 }), "failed"],
+		["通信できない", () => Promise.reject(new Error("network")), "failed"],
+	])("変える操作が失敗したら、理由を返す(%s)", async (_name, reply, reason) => {
+		stubFetch(reply);
+
+		expect(await removeMember("team", "u2" as never)).toBe(reason);
+	});
+
+	it("createInvite: 作った招待リンクを返す。作れなければ null", async () => {
+		const created = { id: "i1", created: 1, expires: 2, token: "tok" };
+		const fetch = stubFetch(() => Response.json(created, { status: 201 }));
+		expect(await createInvite("team")).toEqual(created);
+		expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/projects/team/invites", { method: "POST" });
+
+		stubFetch(() => Response.json({ error: "not-admin" }, { status: 403 }));
+		expect(await createInvite("team")).toBeNull();
+		stubFetch(() => Response.json({ id: "i1" }, { status: 201 }));
+		expect(await createInvite("team")).toBeNull();
+	});
+
+	it("loadInvite / acceptInvite: 招待先を返す", async () => {
+		const target = { project: "team", member: false };
+		const fetch = stubFetch(() => Response.json(target));
+
+		expect(await loadInvite("tok")).toEqual({ status: "ready", invite: target });
+		expect(await acceptInvite("tok")).toEqual({ status: "ready", invite: target });
+		expect(fetch.mock.calls).toEqual([
+			["/api/invites/tok", undefined],
+			["/api/invites/tok/accept", { method: "POST" }],
+		]);
+	});
+
+	it.each([
+		[
+			"使えないリンク",
+			() => Response.json({ error: "unknown-invite" }, { status: 404 }),
+			"missing",
+		],
+		["サーバーの失敗", () => new Response("x", { status: 500 }), "failed"],
+		["形の違う応答", () => Response.json({ project: 1 }), "failed"],
+		["通信できない", () => Promise.reject(new Error("network")), "failed"],
+	])("loadInvite / acceptInvite: %sは、%s", async (_name, reply, status) => {
+		stubFetch(reply);
+
+		expect(await loadInvite("tok")).toEqual({ status });
+		expect(await acceptInvite("tok")).toEqual({ status });
 	});
 });

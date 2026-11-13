@@ -43,6 +43,19 @@ const MIGRATIONS: readonly (readonly string[])[] = [
 		)`,
 		"CREATE INDEX IF NOT EXISTS members_user ON members (user)",
 	],
+	[
+		// 招待リンク(ADR-0034)。hash は、リンクに入れた値のハッシュ(値そのものは保存しない)。
+		`CREATE TABLE IF NOT EXISTS invites (
+			id TEXT PRIMARY KEY,
+			hash TEXT NOT NULL UNIQUE,
+			project TEXT NOT NULL REFERENCES projects (id),
+			created INTEGER NOT NULL,
+			created_by TEXT NOT NULL REFERENCES users (id),
+			expires INTEGER NOT NULL,
+			revoked INTEGER
+		)`,
+		"CREATE INDEX IF NOT EXISTS invites_project ON invites (project)",
+	],
 ];
 
 /** この実行環境(isolate)で、スキーマが最新だと確かめたデータベース。 */

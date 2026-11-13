@@ -1,6 +1,6 @@
 # ADR-0033: プロジェクトを単位に、読み書きできる人を決める
 
-- 状態: 採用(Cloudflare 上での動作は未確認。手元の Workers ランタイムで確認した)
+- 状態: 採用(Cloudflare 上での動作は未確認。手元の Workers ランタイムで確認した。招待、メンバーと公開範囲の変更、権限がなくなった人の接続の扱いは [ADR-0034](0034-invites-and-members.md) で追加)
 - 日付: 2026-11-13
 - 関連: [ADR-0009](0009-auth-and-access.md)(認証の方針)、[ADR-0032](0032-login-and-sessions.md)(ログイン)、[ADR-0017](0017-page-storage-and-api.md)(ページのAPI。公開環境で止めていた仕組みを、ここで置き換える)、[ADR-0024](0024-page-identity-and-project-index.md)(台帳)
 

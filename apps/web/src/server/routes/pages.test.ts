@@ -218,7 +218,7 @@ describe("ページのAPI", () => {
 		const response = await post("/api/pages/api-large/commits", "x".repeat(2 * 1024 * 1024 + 1));
 
 		expect(response.status).toBe(413);
-		expect(await response.json()).toEqual({ error: "commit-too-large" });
+		expect(await response.json()).toEqual({ error: "body-too-large" });
 	});
 
 	describe("ページの一覧(ADR-0025)", () => {

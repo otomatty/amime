@@ -80,8 +80,15 @@ describe("ログインの状態", () => {
 		const user = await signIn(env.DB, "dev", identity(unique("session-renew")), 0);
 		const token = await startSession(env.DB, user, 0);
 
-		expect((await findSession(env.DB, token, DAY - 1))?.renewed).toBe(false);
-		expect((await findSession(env.DB, token, 20 * DAY))?.renewed).toBe(true);
+		expect(await findSession(env.DB, token, DAY - 1)).toMatchObject({
+			renewed: false,
+			expires: SESSION_TTL,
+		});
+		// 延ばしたときは、延ばしたあとの期限を返す。
+		expect(await findSession(env.DB, token, 20 * DAY)).toMatchObject({
+			renewed: true,
+			expires: 20 * DAY + SESSION_TTL,
+		});
 
 		// 延ばしたので、最初の期限(30日)を過ぎても使える。
 		expect(await findSession(env.DB, token, 40 * DAY)).not.toBeNull();

@@ -53,13 +53,13 @@ export async function startSession(db: D1Database, user: UserId, now: number): P
 
 /**
  * Cookie の値から、ログインしている利用者を引く。期限が切れていれば null。
- * しばらく延ばしていなければ、期限を延ばす(renewed が true。Cookie も出し直す)。
+ * しばらく延ばしていなければ、期限を延ばす(renewed が true。Cookie も出し直す)。expires は、いまの期限。
  */
 export async function findSession(
 	db: D1Database,
 	token: string,
 	now: number,
-): Promise<{ account: Account; renewed: boolean } | null> {
+): Promise<{ account: Account; renewed: boolean; expires: number } | null> {
 	const id = await hashToken(token);
 	const row = await db
 		.prepare(
@@ -78,7 +78,7 @@ export async function findSession(
 			.bind(now + SESSION_TTL, id)
 			.run();
 	}
-	return { account, renewed };
+	return { account, renewed, expires: renewed ? now + SESSION_TTL : expires };
 }
 
 /** ログインの状態を消す(ログアウト)。 */
