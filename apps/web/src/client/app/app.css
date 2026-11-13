@@ -34,3 +34,8 @@ body {
 	border-radius: 0.5rem;
 	padding: 1.5rem 2rem;
 }
+
+.app-title a {
+	color: inherit;
+	text-decoration: none;
+}

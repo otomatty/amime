@@ -204,7 +204,98 @@ describe("ページのAPI", () => {
 		expect(await response.json()).toEqual({ error: "commit-too-large" });
 	});
 
+	describe("ページの一覧(ADR-0025)", () => {
+		/** ページを作り、台帳への知らせが済むのを待つ。 */
+		async function create(title: string, ...body: string[]) {
+			const info = (await (
+				await get(`/api/pages/by-title/${encodeURIComponent(title)}`)
+			).json()) as { id: string };
+			const texts = [title, ...body];
+			await post(`/api/pages/${info.id}/commits`, {
+				id: commitId(),
+				changes: texts.map((text, index) => ({
+					type: "insert",
+					line: { id: `l${index}`, text },
+					after: index === 0 ? null : `l${index - 1}`,
+					before: null,
+				})),
+			});
+			await runDurableObjectAlarm(exports.PageDO.getByName(`default/${info.id}`));
+			return info.id;
+		}
+		type Listed = { pages: { id: string; title: string; linked: number }[]; total: number };
+		const list = async (query = "") => {
+			const response = await get(`/api/pages${query}`);
+			return { response, body: (await response.json()) as Listed };
+		};
+
+		it("保存されたページを、冒頭の本文・画像・リンクされている数と一緒に返す", async () => {
+			const egg = await create("一覧 卵");
+			const shopping = await create(
+				"一覧 買い物",
+				"[一覧 卵] を買う",
+				"[https://example.com/a.png]",
+			);
+
+			const { response, body } = await list("?sort=title");
+
+			expect(response.status).toBe(200);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			expect(body.pages.find((page) => page.id === shopping)).toEqual({
+				id: shopping,
+				title: "一覧 買い物",
+				descriptions: ["一覧 卵 を買う"],
+				image: "https://example.com/a.png",
+				updated: expect.any(Number),
+				created: expect.any(Number),
+				linked: 0,
+			});
+			expect(body.pages.find((page) => page.id === egg)?.linked).toBe(1);
+			expect(body.total).toBeGreaterThanOrEqual(2);
+		});
+
+		it("並び順を省くと、更新が新しい順", async () => {
+			const first = await create("一覧 先に書いた");
+			const second = await create("一覧 あとで書いた");
+
+			const ids = (await list()).body.pages.map((page) => page.id);
+
+			expect(ids.indexOf(second)).toBeLessThan(ids.indexOf(first));
+		});
+
+		it("件数と始まりを指定できる", async () => {
+			await create("一覧 ページ1");
+			await create("一覧 ページ2");
+
+			const { body } = await list("?sort=title&limit=1&offset=1");
+
+			expect(body.pages).toHaveLength(1);
+		});
+
+		it.each([
+			["知らない並び順", "?sort=popular"],
+			["数でない件数", "?limit=many"],
+			["負の始まり", "?offset=-1"],
+			["小数の件数", "?limit=1.5"],
+		])("%sは 400 で断る", async (_name, query) => {
+			const { response, body } = await list(query);
+
+			expect(response.status).toBe(400);
+			expect(body).toEqual({ error: "invalid-query" });
+		});
+	});
+
 	describe("ページのAPIが無効な環境(認証が入るまでの公開環境)", () => {
+		it("一覧を 403 で断る", async () => {
+			const response = await app.request(
+				"/api/pages",
+				{},
+				{ ...env, PAGE_API: "disabled" as const },
+			);
+
+			expect(response.status).toBe(403);
+		});
+
 		const disabled = { ...env, PAGE_API: "disabled" as const };
 
 		it("読み込みを 403 で断る", async () => {

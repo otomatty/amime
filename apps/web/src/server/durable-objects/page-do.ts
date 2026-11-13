@@ -1,4 +1,5 @@
 import { DurableObject, exports } from "cloudflare:workers";
+import { summarizePage } from "@amime/parser";
 import {
 	applyChanges,
 	type Change,
@@ -225,10 +226,12 @@ export class PageDO extends DurableObject {
 		const [project, page] = (this.ctx.id.name ?? "").split("/");
 		if (project === undefined || page === undefined) return;
 		const version = this.#version();
-		const info = await exports.ProjectDO.getByName(project).retitle(page as PageId, {
-			title: this.#lines()[0]?.text ?? "",
+		const lines = this.#lines().map((line) => line.text);
+		const info = await exports.ProjectDO.getByName(project).index(page as PageId, {
+			title: lines[0] ?? "",
 			version,
 			updated: this.#meta("updated"),
+			summary: summarizePage(lines),
 		});
 		// 知らせているあいだに変更が入っていなければ、知らせ終えたことにする。
 		// 入っていたら、その変更が次の知らせを予約している。

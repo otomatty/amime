@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
+import type { PageSummary } from "@amime/parser";
 import { MAX_TITLE_LENGTH, titleFromName, titleOfLine, toTitleLc } from "@amime/shared";
-import type { PageId, PageInfo, TitleProblem } from "@amime/sync";
+import type { PageCard, PageId, PageInfo, PageList, PageSort, TitleProblem } from "@amime/sync";
 
 /** 開いただけで保存されていないページを、台帳に残しておく期間。 */
 export const PLACEHOLDER_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -24,7 +25,66 @@ type PageState = {
 	readonly version: number;
 	/** 最後に変更された時刻(ミリ秒)。 */
 	readonly updated: number;
+	/** 一覧やリンクのつながりのために、ページから取り出した情報。 */
+	readonly summary: PageSummary;
 };
+
+/** 一覧を取り出すときの指定。 */
+type ListOptions = {
+	readonly sort: PageSort;
+	/** 取り出す件数。省くと、上限まで。 */
+	readonly limit?: number;
+	/** 何件目から取り出すか。 */
+	readonly offset?: number;
+};
+
+/** 一覧で、1度に取り出せる件数の上限。 */
+export const MAX_LIST_LIMIT = 100;
+
+/** 並び順ごとの、SQL の並べ方。同じ値のページは、名前の順にする(順序が、取り出すたびに変わらないように)。 */
+const ORDER_BY: Readonly<Record<PageSort, string>> = {
+	updated: "updated DESC, title_lc",
+	created: "created DESC, title_lc",
+	title: "title_lc",
+	linked: "linked DESC, title_lc",
+};
+
+/**
+ * 台帳の保存の形。前から順に適用する。適用した数を schema_version に覚えておく。
+ * 形を変えるときは、末尾に足す(適用済みのものは書き換えない)。
+ */
+const MIGRATIONS: readonly string[] = [
+	// 1: 名前とIDの対応(ADR-0024)。
+	`CREATE TABLE IF NOT EXISTS pages (
+		id TEXT PRIMARY KEY,
+		title_lc TEXT NOT NULL UNIQUE,
+		title TEXT NOT NULL,
+		problem TEXT,
+		version INTEGER NOT NULL DEFAULT 0,
+		created INTEGER NOT NULL,
+		updated INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS pages_placeholder ON pages (version, created);`,
+	// 2: 一覧とリンクのつながりのための索引(ADR-0025)。
+	`ALTER TABLE pages ADD COLUMN descriptions TEXT NOT NULL DEFAULT '[]';
+	ALTER TABLE pages ADD COLUMN image TEXT;
+	CREATE TABLE links (
+		from_id TEXT NOT NULL,
+		to_lc TEXT NOT NULL,
+		PRIMARY KEY (from_id, to_lc)
+	);
+	CREATE INDEX links_to ON links (to_lc);`,
+];
+
+/** 台帳の保存の形を、いまの形にする。何度呼んでもよい。 */
+export function migrate(sql: SqlStorage): void {
+	sql.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)");
+	const applied = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM schema_version").one().n;
+	MIGRATIONS.slice(applied).forEach((migration, index) => {
+		sql.exec(migration);
+		sql.exec("INSERT INTO schema_version (version) VALUES (?)", applied + index + 1);
+	});
+}
 
 const PROBLEMS: ReadonlySet<string | null> = new Set(["taken", "empty", "too-long", "reserved"]);
 
@@ -57,18 +117,7 @@ const PAGE_ID_LENGTH = 32;
 export class ProjectDO extends DurableObject {
 	constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
 		super(ctx, env);
-		ctx.storage.sql.exec(`
-			CREATE TABLE IF NOT EXISTS pages (
-				id TEXT PRIMARY KEY,
-				title_lc TEXT NOT NULL UNIQUE,
-				title TEXT NOT NULL,
-				problem TEXT,
-				version INTEGER NOT NULL DEFAULT 0,
-				created INTEGER NOT NULL,
-				updated INTEGER NOT NULL
-			);
-			CREATE INDEX IF NOT EXISTS pages_placeholder ON pages (version, created);
-		`);
+		migrate(ctx.storage.sql);
 	}
 
 	/**
@@ -102,10 +151,66 @@ export class ProjectDO extends DurableObject {
 	}
 
 	/**
-	 * ページの名前を、1行目に合わせる。PageDO が、ページが変更されたあとで呼ぶ。
-	 * 合わせられないとき(同じ名前のページがある、1行目が空、長すぎる)は、名前を変えずに、理由を返す。
+	 * 保存されたページの一覧を返す(ADR-0025)。開いただけのページは含めない。
+	 * linked は、他のページからリンクされている数。
 	 */
-	retitle(id: PageId, state: PageState): PageInfo {
+	list({ sort, limit = MAX_LIST_LIMIT, offset = 0 }: ListOptions): PageList {
+		const { sql } = this.ctx.storage;
+		const rows = sql
+			.exec<CardRow>(
+				`SELECT id, title, descriptions, image, updated, created,
+					(SELECT COUNT(*) FROM links WHERE to_lc = pages.title_lc AND from_id != pages.id) AS linked
+				FROM pages WHERE version > 0 ORDER BY ${ORDER_BY[sort]} LIMIT ? OFFSET ?`,
+				Math.min(Math.max(limit, 0), MAX_LIST_LIMIT),
+				Math.max(offset, 0),
+			)
+			.toArray();
+		const total = sql
+			.exec<{ n: number }>("SELECT COUNT(*) AS n FROM pages WHERE version > 0")
+			.one().n;
+		return { pages: rows.map(toCard), total };
+	}
+
+	/**
+	 * ページのいまの状態を、台帳に反映する。PageDO が、ページが変更されたあとで呼ぶ。
+	 *
+	 * ページの名前を、1行目に合わせる(ADR-0024)。合わせられないとき(同じ名前のページがある、
+	 * 1行目が空、長すぎる)は、名前を変えずに、理由を返す。
+	 * 一覧とリンクのつながりのための情報(冒頭の本文、画像、リンク先)も、ここで入れ替える(ADR-0025)。
+	 */
+	index(id: PageId, state: PageState): PageInfo {
+		const info = this.#retitle(id, state);
+		this.#summarize(id, state.summary);
+		return info;
+	}
+
+	/** 冒頭の本文・画像・リンク先を入れ替える。リンク先は、変わった分だけを書き込む。 */
+	#summarize(id: PageId, { descriptions, image, links }: PageSummary): void {
+		const { sql } = this.ctx.storage;
+		sql.exec(
+			"UPDATE pages SET descriptions = ?, image = ? WHERE id = ?",
+			JSON.stringify(descriptions),
+			image,
+			id,
+		);
+		const wanted = new Set<string>(links.map((title) => toTitleLc(title)));
+		const current = new Set(
+			sql
+				.exec<{ to_lc: string }>("SELECT to_lc FROM links WHERE from_id = ?", id)
+				.toArray()
+				.map((row) => row.to_lc),
+		);
+		for (const target of current) {
+			if (!wanted.has(target))
+				sql.exec("DELETE FROM links WHERE from_id = ? AND to_lc = ?", id, target);
+		}
+		for (const target of wanted) {
+			if (!current.has(target))
+				sql.exec("INSERT INTO links (from_id, to_lc) VALUES (?, ?)", id, target);
+		}
+	}
+
+	#retitle(id: PageId, state: PageState): PageInfo {
 		const wanted = titleOfLine(state.title);
 		const row = this.#byId(id);
 		// 台帳にないページ(開いただけのあいだに、名前を他のページに取られた)。重ならない名前で載せる。
@@ -213,6 +318,23 @@ export class ProjectDO extends DurableObject {
 	#one(query: string, value: string): PageRow | null {
 		return this.ctx.storage.sql.exec<PageRow>(query, value).toArray()[0] ?? null;
 	}
+}
+
+type CardRow = {
+	id: string;
+	title: string;
+	descriptions: string;
+	image: string | null;
+	updated: number;
+	created: number;
+	linked: number;
+};
+
+/** 台帳の行を、一覧に出す情報にする。 */
+function toCard(row: CardRow): PageCard {
+	// 保存してあるIDと冒頭の本文は、書き込むときに決めたもの(冒頭の本文は、文字列の配列のJSON)。
+	const descriptions = JSON.parse(row.descriptions) as string[];
+	return { ...row, id: row.id as PageId, descriptions };
 }
 
 /** 台帳の行を、ページの情報にする。 */

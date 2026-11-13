@@ -13,7 +13,7 @@ async function clickLineEnd(page: Page, index: number) {
 
 test.describe("エディタ", () => {
 	test.beforeEach(async ({ page }) => {
-		await page.goto("/");
+		await page.goto("/?playground");
 	});
 
 	test("行を押して文字を打つと、その行の末尾に入る", async ({ page }) => {
@@ -116,7 +116,7 @@ test.describe("エディタ", () => {
 
 test.describe("エディタ(画面の操作)", () => {
 	test.beforeEach(async ({ page }) => {
-		await page.goto("/");
+		await page.goto("/?playground");
 	});
 
 	test("折り返した行の1段目の右の余白を押すと、1段目の末尾にカーソルが入る", async ({ page }) => {
@@ -155,18 +155,13 @@ test.describe("エディタ(画面の操作)", () => {
 	});
 
 	test("Esc で編集欄から抜け、Shift+Tab で前の要素へフォーカスを移せる", async ({ page }) => {
-		// いまの画面には編集欄の前にフォーカスできる要素がないため、確認用のボタンを置く。
-		await page.evaluate(() => {
-			const button = document.createElement("button");
-			button.textContent = "前の要素";
-			document.querySelector("main")?.prepend(button);
-		});
 		await clickLineEnd(page, 0);
 
 		await page.keyboard.press("Escape");
 		await page.keyboard.press("Shift+Tab");
 
-		await expect(page.getByRole("button", { name: "前の要素" })).toBeFocused();
+		// 編集欄の前にある、フォーカスできる要素は、見出しのリンク(トップへ戻る)。
+		await expect(page.getByRole("link", { name: "Amime" })).toBeFocused();
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
 	});
 
@@ -186,7 +181,7 @@ test.describe("記法の表示", () => {
 	const DECORATION_LINE = 7; // 「[* 太字] [/ 斜体] …」
 
 	test.beforeEach(async ({ page }) => {
-		await page.goto("/");
+		await page.goto("/?playground");
 	});
 
 	test("カーソルのない行は記法を隠して装飾し、行を押すと記法がそのまま見える", async ({ page }) => {
@@ -280,7 +275,7 @@ test.describe("日本語入力(IME)", () => {
 	// CDP は Chromium でしか使えない。他のブラウザを対象に加えるときは、このブロックを Chromium 限定にすること。
 
 	test.beforeEach(async ({ page }) => {
-		await page.goto("/");
+		await page.goto("/?playground");
 	});
 
 	test("変換中の文字列はカーソル位置に下線付きで表示され、確定すると1回だけ入る", async ({
@@ -353,7 +348,7 @@ test.describe("コードブロックとテーブル", () => {
 	const TABLE_ROW_2 = 16; // 「 [定例会議]	`deploy`	お休み」
 
 	test.beforeEach(async ({ page }) => {
-		await page.goto("/");
+		await page.goto("/?playground");
 	});
 
 	test("コードブロックの始まりの行は名前だけを表示し、押すと code: も見える", async ({ page }) => {
@@ -476,7 +471,7 @@ test.describe("テーブルの端の扱い", () => {
 	const TABLE_ROW_2 = 16; // 「 [定例会議]	`deploy`	お休み」
 
 	test.beforeEach(async ({ page }) => {
-		await page.goto("/");
+		await page.goto("/?playground");
 	});
 
 	test("記法で始まるセルの左の余白を押すと、記法の前にカーソルが入る", async ({ page }) => {
@@ -554,7 +549,7 @@ test.describe("範囲選択・コピー・取り消し", () => {
 
 	test.beforeEach(async ({ page, context }) => {
 		await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-		await page.goto("/");
+		await page.goto("/?playground");
 	});
 
 	test("Shift+矢印で選択した範囲に色が付き、文字を打つと置き換わる", async ({ page }) => {
@@ -697,7 +692,7 @@ test.describe("範囲選択・コピー・取り消し", () => {
 
 test.describe("行とかたまりを動かす", () => {
 	test.beforeEach(async ({ page }) => {
-		await page.goto("/");
+		await page.goto("/?playground");
 	});
 
 	test("Alt+下で、行を子の行ごと次の行の下へ動かせる。カーソルは行についていく", async ({

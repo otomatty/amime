@@ -4,8 +4,11 @@ import {
 	type Commit,
 	type PageId,
 	type PageInfo,
+	type PageList,
+	type PageSort,
 	parseCommitResult,
 	parsePageInfo,
+	parsePageList,
 	parseSnapshot,
 } from "@amime/sync";
 import { PageApiError } from "./page-api-error.ts";
@@ -40,6 +43,17 @@ const pagePath = (id: PageId): string => `/api/pages/${id}`;
  */
 export function openPage(name: string): Promise<PageInfo> {
 	return request(`/api/pages/by-title/${encodeURIComponent(name)}`, undefined, parsePageInfo);
+}
+
+/** ページの一覧を取り出す(ADR-0025)。offset は、何件目から取り出すか。 */
+export function listPages({
+	sort,
+	offset,
+}: {
+	readonly sort: PageSort;
+	readonly offset: number;
+}): Promise<PageList> {
+	return request(`/api/pages?sort=${sort}&offset=${offset}`, undefined, parsePageList);
 }
 
 /** ページの WebSocket のURL。いま開いているページ(location)と同じ接続先にする。 */

@@ -1,0 +1,109 @@
+.page-list-tools {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem 1.5rem;
+	align-items: end;
+	justify-content: space-between;
+	margin-bottom: 1.25rem;
+	font-size: 0.85rem;
+}
+
+.new-page {
+	display: flex;
+	gap: 0.5rem;
+	align-items: end;
+}
+
+.new-page label,
+.page-sort {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	color: var(--color-muted);
+}
+
+.new-page input,
+.new-page button,
+.page-sort select,
+.page-list-more {
+	padding: 0.35rem 0.6rem;
+	border: 1px solid var(--color-border);
+	border-radius: 0.3rem;
+	background: var(--color-paper);
+	color: var(--color-text);
+	font: inherit;
+}
+
+.new-page input {
+	width: 14rem;
+	max-width: 100%;
+}
+
+.cards {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+	gap: 0.75rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.card {
+	min-width: 0;
+}
+
+.card-link {
+	display: flex;
+	flex-direction: column;
+	gap: 0.3rem;
+	height: 11rem;
+	padding: 0.75rem 0.85rem;
+	overflow: hidden;
+	border: 1px solid var(--color-border);
+	border-radius: 0.4rem;
+	background: var(--color-paper);
+	color: var(--color-text);
+	text-decoration: none;
+	box-sizing: border-box;
+}
+
+.card-link:hover,
+.card-link:focus-visible {
+	border-color: var(--color-link);
+}
+
+.card-title {
+	margin: 0;
+	font-size: 0.95rem;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.card-image {
+	width: 100%;
+	max-height: 5rem;
+	object-fit: cover;
+	border-radius: 0.2rem;
+}
+
+.card-text {
+	margin: 0;
+	overflow: hidden;
+	color: var(--color-muted);
+	font-size: 0.78rem;
+	line-height: 1.5;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.card-time {
+	margin-top: auto;
+	color: var(--color-muted);
+	font-size: 0.7rem;
+}
+
+.page-list-more {
+	display: block;
+	margin: 1rem auto 0;
+	cursor: pointer;
+}

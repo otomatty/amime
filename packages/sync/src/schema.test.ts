@@ -9,6 +9,8 @@ import {
 	parseCursorPosition,
 	parsePageId,
 	parsePageInfo,
+	parsePageList,
+	parsePageSort,
 	parsePendingRecord,
 	parseServerMessage,
 	parseSnapshot,
@@ -88,6 +90,46 @@ describe("parsePageInfo", () => {
 		["知らない理由", { id: "p1", title: "a", problem: "other" }],
 	])("%s入力は受け付けない", (_name, input) => {
 		expect(parsePageInfo(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parsePageList", () => {
+	const card = {
+		id: "p1",
+		title: "買い物",
+		descriptions: ["牛乳", "卵"],
+		image: null,
+		updated: 2000,
+		created: 1000,
+		linked: 3,
+	};
+
+	it("ページの一覧を受け付ける", () => {
+		const list = {
+			pages: [card, { ...card, id: "p2", image: "https://example.com/a.png" }],
+			total: 9,
+		};
+
+		expect(parsePageList(list)).toEqual({ ok: true, value: list });
+	});
+
+	it.each([
+		["pages がない", { total: 0 }],
+		["総数がない", { pages: [] }],
+		["冒頭の本文が配列でない", { pages: [{ ...card, descriptions: "牛乳" }], total: 1 }],
+		["リンクされている数が負", { pages: [{ ...card, linked: -1 }], total: 1 }],
+	])("%s入力は受け付けない", (_name, input) => {
+		expect(parsePageList(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parsePageSort", () => {
+	it.each([["updated"], ["created"], ["title"], ["linked"]])("%j を受け付ける", (sort) => {
+		expect(parsePageSort(sort)).toEqual({ ok: true, value: sort });
+	});
+
+	it.each([["popular"], [""], [undefined]])("%j は受け付けない", (sort) => {
+		expect(parsePageSort(sort)).toEqual({ ok: false, error: "invalid" });
 	});
 });
 

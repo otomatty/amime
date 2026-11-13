@@ -1,0 +1,190 @@
+import { titleOfLine } from "@amime/shared";
+import type { PageCard, PageSort } from "@amime/sync";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
+import { pageHref } from "../editor/links.ts";
+import { listPages } from "../page/api.ts";
+import { PageApiError } from "../page/page-api-error.ts";
+import "./page-list.css";
+
+const SORT_LABELS: Readonly<Record<PageSort, string>> = {
+	updated: "更新が新しい順",
+	created: "作成が新しい順",
+	title: "名前の順",
+	linked: "リンクされている数が多い順",
+};
+
+const isSort = (value: string | null): value is PageSort => value !== null && value in SORT_LABELS;
+
+/** URLに残してある並び順。なければ(知らない値でも)、更新が新しい順。 */
+function sortFromUrl(): PageSort {
+	const value = new URLSearchParams(window.location.search).get("sort");
+	return isSort(value) ? value : "updated";
+}
+
+/** URLの中で、別の場所を指す書き方になる名前。ページの名前にできない(ADR-0024)。 */
+const DOT_SEGMENTS: ReadonlySet<string> = new Set([".", ".."]);
+
+const timeFormat = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" });
+
+type Loaded =
+	| { readonly status: "loading" }
+	| { readonly status: "ready"; readonly pages: readonly PageCard[]; readonly total: number }
+	| { readonly status: "error"; readonly kind: PageApiError["kind"] };
+
+type PageListProps = {
+	/** 別のページへ移る。テストで差し替える。 */
+	readonly navigate?: (href: string) => void;
+	/** ページのAPIが無効な環境で、一覧の代わりに表示する内容。 */
+	readonly whenDisabled?: ReactNode;
+};
+
+/** ページのカード。名前・冒頭の本文・画像・更新した時刻を見せる。 */
+function Card({ page }: { readonly page: PageCard }) {
+	const updated = new Date(page.updated);
+	return (
+		<li className="card">
+			<a className="card-link" href={pageHref(page.title)}>
+				<h2 className="card-title">{page.title}</h2>
+				{page.image !== null && (
+					<img
+						className="card-image"
+						src={page.image}
+						// 画像の内容は分からない。名前は見出しにあるので、代替テキストは空にする。
+						alt=""
+						loading="lazy"
+						// 画像の置き場所に、見ているページのURLを伝えない。
+						referrerPolicy="no-referrer"
+					/>
+				)}
+				{page.descriptions.map((text, index) => (
+					// 冒頭の本文は、並びが変わらない。同じ本文の行もあるので、位置で識別する。
+					// biome-ignore lint/suspicious/noArrayIndexKey: 上のとおり。
+					<p className="card-text" key={index}>
+						{text}
+					</p>
+				))}
+				<time className="card-time" dateTime={updated.toISOString()}>
+					{timeFormat.format(updated)}
+				</time>
+			</a>
+		</li>
+	);
+}
+
+/**
+ * ページの一覧(ADR-0025)。保存されたページをカードとして並べ、並び順を選べる。
+ * 名前を入れて、新しいページを書き始められる。
+ */
+export function PageList({
+	navigate = (href) => window.location.assign(href),
+	whenDisabled = null,
+}: PageListProps) {
+	const [sort, setSort] = useState<PageSort>(sortFromUrl);
+	const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
+	const [attempt, setAttempt] = useState(0);
+	const [name, setName] = useState("");
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt は、読み込みをやり直すためのきっかけとして使う。
+	useEffect(() => {
+		let cancelled = false;
+		setLoaded({ status: "loading" });
+		listPages({ sort, offset: 0 }).then(
+			(list) => {
+				if (!cancelled) setLoaded({ status: "ready", ...list });
+			},
+			(error: unknown) => {
+				const kind = error instanceof PageApiError ? error.kind : "failed";
+				if (!cancelled) setLoaded({ status: "error", kind });
+			},
+		);
+		return () => {
+			cancelled = true;
+		};
+	}, [sort, attempt]);
+
+	const changeSort = (next: PageSort) => {
+		setSort(next);
+		// 選んだ並び順をURLに残す。再読み込みしても、共有しても、同じ並びになる。
+		const url = new URL(window.location.href);
+		url.searchParams.set("sort", next);
+		window.history.replaceState(window.history.state, "", url);
+	};
+
+	const loadMore = useCallback(async () => {
+		if (loaded.status !== "ready") return;
+		const more = await listPages({ sort, offset: loaded.pages.length }).catch(() => null);
+		if (more === null) return;
+		setLoaded((current) => {
+			if (current.status !== "ready") return current;
+			// 取り出しているあいだにページが増えると、続きが前の分と重なることがある。同じページは1度だけ並べる。
+			const known = new Set(current.pages.map((page) => page.id));
+			const added = more.pages.filter((page) => !known.has(page.id));
+			return { status: "ready", pages: [...current.pages, ...added], total: more.total };
+		});
+	}, [loaded, sort]);
+
+	const create = (event: FormEvent) => {
+		event.preventDefault();
+		const title = titleOfLine(name);
+		if (title === "" || DOT_SEGMENTS.has(title)) return;
+		navigate(pageHref(title));
+	};
+
+	if (loaded.status === "error" && loaded.kind === "disabled") return whenDisabled;
+	return (
+		<section className="page-list" aria-label="ページの一覧">
+			<div className="page-list-tools">
+				<form className="new-page" onSubmit={create}>
+					<label>
+						新しいページの名前
+						<input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} />
+					</label>
+					<button type="submit">作る</button>
+				</form>
+				<label className="page-sort">
+					並び順
+					<select
+						value={sort}
+						onChange={(event) => changeSort(isSort(event.target.value) ? event.target.value : sort)}
+					>
+						{Object.entries(SORT_LABELS).map(([value, label]) => (
+							<option key={value} value={value}>
+								{label}
+							</option>
+						))}
+					</select>
+				</label>
+			</div>
+			{loaded.status === "loading" && (
+				<p className="page-status" role="status">
+					読み込んでいます…
+				</p>
+			)}
+			{loaded.status === "error" && (
+				<p className="page-message">
+					一覧を読み込めませんでした。
+					<button type="button" onClick={() => setAttempt((count) => count + 1)}>
+						もう一度読み込む
+					</button>
+				</p>
+			)}
+			{loaded.status === "ready" && loaded.pages.length === 0 && (
+				<p className="page-message">
+					まだページがありません。上の欄に名前を入れて、最初のページを作りましょう。
+				</p>
+			)}
+			{loaded.status === "ready" && loaded.pages.length > 0 && (
+				<ul className="cards">
+					{loaded.pages.map((page) => (
+						<Card key={page.id} page={page} />
+					))}
+				</ul>
+			)}
+			{loaded.status === "ready" && loaded.pages.length < loaded.total && (
+				<button className="page-list-more" type="button" onClick={loadMore}>
+					もっと見る
+				</button>
+			)}
+		</section>
+	);
+}
