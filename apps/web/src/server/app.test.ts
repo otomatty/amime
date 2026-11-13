@@ -395,6 +395,65 @@ describe("ページのAPI", () => {
 		});
 	});
 
+	describe("GET /api/pages/search(本文を探す。ADR-0031)", () => {
+		/** 本文のあるページを作り、台帳への知らせが済むのを待つ。 */
+		async function write(title: string, ...body: string[]) {
+			const info = (await (
+				await get(`/api/pages/by-title/${encodeURIComponent(title)}`)
+			).json()) as { id: string };
+			const lines = [title, ...body].map((text, index) => ({ id: `l${index}`, text }));
+			await post(`/api/pages/${info.id}/commits`, {
+				id: commitId(),
+				changes: lines.map((line, index) => ({
+					type: "insert",
+					line,
+					after: lines[index - 1]?.id ?? null,
+					before: null,
+				})),
+			});
+			await runDurableObjectAlarm(exports.PageDO.getByName(`default/${info.id}`));
+			return info.id;
+		}
+		const search = async (query: string) => {
+			const response = await get(`/api/pages/search${query}`);
+			return { response, body: await response.json() };
+		};
+
+		it("本文に語を含むページを返す。語を含む行を添える", async () => {
+			const id = await write("全文 買い物", "[全文牛乳] を買う", "関係ない行");
+			await write("全文 旅行", "京都へ行く");
+
+			const { response, body } = await search(`?q=${encodeURIComponent("全文牛乳")}`);
+
+			expect(response.status).toBe(200);
+			expect(body).toEqual({
+				hits: [
+					{ id, title: "全文 買い物", updated: expect.any(Number), lines: ["全文牛乳 を買う"] },
+				],
+				more: false,
+			});
+		});
+
+		it("件数を指定できる", async () => {
+			await write("全文 件数 1", "全文件数のことば");
+			await write("全文 件数 2", "全文件数のことば");
+
+			const { body } = await search(`?q=${encodeURIComponent("全文件数のことば")}&limit=1`);
+
+			expect(body).toMatchObject({ hits: [{ title: "全文 件数 2" }], more: true });
+		});
+
+		it.each([
+			["数でない件数", "?q=a&limit=many"],
+			["長すぎる入力", `?q=${"a".repeat(201)}`],
+		])("%sは 400 で断る", async (_name, query) => {
+			const { response, body } = await search(query);
+
+			expect(response.status).toBe(400);
+			expect(body).toEqual({ error: "invalid-query" });
+		});
+	});
+
 	describe("名前を変えたときの、リンクの書き換え(ADR-0028)", () => {
 		it("ページの名前を変えると、リンクしているページの本文が書き換わり、開いている端末に配信される", async () => {
 			const open = async (title: string) =>

@@ -9,6 +9,7 @@ import {
 	MAX_LINE_LENGTH,
 } from "@amime/sync";
 import { describe, expect, it, vi } from "vitest";
+import { MAX_INDEXED_TEXT } from "./project-do.ts";
 
 const id = (value: string): LineId => value as LineId;
 const line = (lineId: string, text: string): Line => ({ id: id(lineId), text });
@@ -497,6 +498,49 @@ describe("PageDO", () => {
 				problem: null,
 				pinned: false,
 			});
+		});
+
+		it("本文も知らせる(本文を探すため。ADR-0031)。非常に長い本文は、上限までを渡す", async () => {
+			const info = await directory.open("本文を知らせる");
+			const stub = page(info.id);
+			const texts: string[] = [];
+			await runInDurableObject(directory, (instance) => {
+				const prototype = Object.getPrototypeOf(instance) as typeof instance;
+				const original = prototype.index;
+				vi.spyOn(prototype, "index").mockImplementation(function (
+					this: typeof instance,
+					id,
+					state,
+				) {
+					texts.push(state.text);
+					return original.call(this, id, state);
+				});
+			});
+			const long = "あ".repeat(MAX_LINE_LENGTH);
+			const body = Array.from({ length: 12 }, (_value, index) => line(`l${index}`, long));
+
+			await commitTo(stub, [
+				insertAfter(null, "a", "本文を知らせる"),
+				insertAfter("a", "b", "2行目"),
+			]);
+			await runDurableObjectAlarm(stub);
+			await commitTo(
+				stub,
+				body.map(
+					(inserted, index): Change => ({
+						type: "insert",
+						line: inserted,
+						after: index === 0 ? id("b") : (body[index - 1]?.id ?? null),
+						before: null,
+					}),
+				),
+			);
+			await runDurableObjectAlarm(stub);
+			vi.restoreAllMocks();
+
+			expect(texts[0]).toBe("本文を知らせる\n2行目");
+			expect(texts[1]?.length).toBe(MAX_INDEXED_TEXT);
+			expect(texts[1]?.startsWith("本文を知らせる\n2行目\nあ")).toBe(true);
 		});
 
 		it("何も効かなかったコミットでは、知らせない", async () => {

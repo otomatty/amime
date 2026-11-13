@@ -15,7 +15,16 @@ function stubTitles(respond: (query: string) => Response | Promise<Response>) {
 }
 
 const input = () => screen.getByRole("combobox", { name: "ページを探す" });
-const options = () => screen.queryAllByRole("option").map((option) => option.textContent);
+/** 名前の候補(「本文から探す」の項目は除く)。 */
+const options = () =>
+	screen
+		.queryAllByRole("option")
+		.filter((option) => option.getAttribute("data-kind") === "title")
+		.map((option) => option.textContent);
+/** 「本文から探す」の項目。出ていなければ null。 */
+const fullText = () =>
+	screen.queryAllByRole("option").find((option) => option.getAttribute("data-kind") === "text") ??
+	null;
 const active = () =>
 	screen.queryAllByRole("option").find((option) => option.getAttribute("aria-selected") === "true")
 		?.textContent ?? null;
@@ -31,6 +40,7 @@ async function renderSearch(navigate = vi.fn()) {
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
+	window.history.replaceState(null, "", "/");
 });
 
 describe("TitleSearch(名前でページを探す)", () => {
@@ -79,7 +89,11 @@ describe("TitleSearch(名前でページを探す)", () => {
 		expect(active()).toBe("二");
 		fireEvent.keyDown(input(), { key: "ArrowUp" });
 		fireEvent.keyDown(input(), { key: "ArrowUp" });
+		// 名前の候補のあとに、「本文から探す」の項目がある。
+		expect(active()).toBe("「x」を本文から探す");
+		fireEvent.keyDown(input(), { key: "ArrowUp" });
 		expect(active()).toBe("三");
+		fireEvent.keyDown(input(), { key: "ArrowDown" });
 		fireEvent.keyDown(input(), { key: "ArrowDown" });
 		expect(active()).toBe("一");
 		fireEvent.keyDown(input(), { key: "ArrowDown" });
@@ -151,18 +165,47 @@ describe("TitleSearch(名前でページを探す)", () => {
 		await waitFor(() => expect(options()).toEqual(["最近のページ"]));
 	});
 
-	it("合う名前がなければ、そのことを伝える。Enter では、どこにも移らない", async () => {
+	it("合う名前がなければ、そのことを伝える。Enter で、本文から探す", async () => {
 		stubTitles((query) => json({ titles: query === "" ? ["最近のページ"] : [] }));
 		const navigate = await renderSearch();
 
-		typeQuery("ない名前");
+		typeQuery("ない 名前");
 
 		await waitFor(() =>
 			expect(screen.getByRole("status").textContent).toBe("合う名前のページはありません"),
 		);
 		expect(options()).toEqual([]);
+		expect(active()).toBe("「ない 名前」を本文から探す");
 		fireEvent.keyDown(input(), { key: "Enter" });
-		expect(navigate).not.toHaveBeenCalled();
+		expect(navigate).toHaveBeenCalledExactlyOnceWith(`/?q=${encodeURIComponent("ない 名前")}`);
+	});
+
+	it("入力があるあいだは、候補の最後に「本文から探す」の項目を出す。選ぶと、本文を探した結果へ移る", async () => {
+		stubTitles(() => json({ titles: ["買い物"] }));
+		const navigate = await renderSearch();
+		fireEvent.focus(input());
+		await waitFor(() => expect(options()).toEqual(["買い物"]));
+		// 何も入力していないときは、出さない。
+		expect(fullText()).toBeNull();
+
+		typeQuery(" 牛乳 ");
+		await waitFor(() => expect(fullText()?.textContent).toBe("「牛乳」を本文から探す"));
+		// 名前の候補が届く前でも、本文から探せる。届いたら、いちばん合う名前を選んだ状態にする。
+		await waitFor(() => expect(active()).toBe("買い物"));
+		const item = fullText();
+		if (item === null) throw new Error("no full-text option");
+		fireEvent.mouseDown(item);
+
+		expect(navigate).toHaveBeenCalledExactlyOnceWith(`/?q=${encodeURIComponent("牛乳")}`);
+	});
+
+	it("本文を探した結果を開いているときは、探した語を欄に入れておく", async () => {
+		stubTitles(() => json({ titles: [] }));
+		window.history.replaceState(null, "", `/?q=${encodeURIComponent("牛乳 卵")}`);
+
+		await renderSearch();
+
+		expect((input() as HTMLInputElement).value).toBe("牛乳 卵");
 	});
 
 	it("あとから届いた、前の入力への応答で、いまの候補を上書きしない", async () => {

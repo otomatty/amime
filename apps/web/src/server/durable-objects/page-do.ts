@@ -21,8 +21,24 @@ import {
 	type ServerMessage,
 } from "@amime/sync";
 import { generateKeyBetween } from "fractional-indexing";
+import { MAX_INDEXED_TEXT } from "./project-do.ts";
 
 type LineRow = { id: string; text: string };
+
+/**
+ * 本文を探すために、台帳へ渡す本文(すべての行を、改行でつないだもの)。台帳が持つ長さの上限までにする
+ * (非常に長いページで、台帳への呼び出しが大きくなりすぎないように)。
+ */
+function indexedText(lines: readonly string[]): string {
+	const head: string[] = [];
+	let length = 0;
+	for (const line of lines) {
+		if (length >= MAX_INDEXED_TEXT) break;
+		head.push(line);
+		length += line.length + 1;
+	}
+	return head.join("\n").slice(0, MAX_INDEXED_TEXT);
+}
 
 /** リンクの書き換え(ADR-0028)。id は、台帳での書き換えの番号。同じ書き換えのやり直しは、同じ番号で届く。 */
 type Rewrite = Rename & { readonly id: number };
@@ -446,6 +462,8 @@ export class PageDO extends DurableObject {
 			version,
 			updated: this.#meta("updated"),
 			summary: summarizePage(lines),
+			// 本文を探すために、台帳に写す(ADR-0031)。
+			text: indexedText(lines),
 		});
 		// 知らせているあいだに削除されていたら、何も残さない。
 		if (this.#deleted()) return;

@@ -2,6 +2,7 @@ import { Editor } from "../features/editor/editor.tsx";
 import { Page } from "../features/page/page.tsx";
 import { pageNameFromPath } from "../features/page/route.ts";
 import { PageList } from "../features/pages/page-list.tsx";
+import { SearchResults } from "../features/search/search-results.tsx";
 import { TitleSearch } from "../features/search/title-search.tsx";
 
 /** 試し書きのページの初期内容。 */
@@ -38,6 +39,7 @@ function Playground() {
 
 /**
  * トップ。ページの一覧を表示する(ADR-0025)。
+ * URLに ?q= で語が付いていれば、本文を探した結果を表示する(ADR-0031)。
  * ページのAPIが無効な環境と、URLに ?playground を付けたときは、試し書きのページを表示する。
  */
 function Home() {
@@ -46,7 +48,10 @@ function Home() {
 			<Playground />
 		</article>
 	);
-	if (new URLSearchParams(window.location.search).has("playground")) return playground;
+	const params = new URLSearchParams(window.location.search);
+	if (params.has("playground")) return playground;
+	const query = params.get("q")?.trim() ?? "";
+	if (query !== "") return <SearchResults query={query} />;
 	return <PageList whenDisabled={playground} />;
 }
 

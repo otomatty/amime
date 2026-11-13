@@ -1,10 +1,13 @@
 import { DurableObject, exports } from "cloudflare:workers";
-import type { PageSummary } from "@amime/parser";
+import { type PageSummary, plainLines } from "@amime/parser";
 import {
+	foldText,
 	likePatterns,
 	MAX_TITLE_LENGTH,
+	matchingLines,
 	rankTitles,
 	searchTerms,
+	textTerms,
 	titleFromName,
 	titleOfLine,
 	toTitleLc,
@@ -17,6 +20,7 @@ import type {
 	PageLinks,
 	PageList,
 	PageSort,
+	SearchResults,
 	TitleProblem,
 } from "@amime/sync";
 
@@ -47,6 +51,8 @@ type PageState = {
 	readonly updated: number;
 	/** 一覧やリンクのつながりのために、ページから取り出した情報。 */
 	readonly summary: PageSummary;
+	/** ページの本文(すべての行を、改行でつないだもの)。本文を探すために持つ(ADR-0031)。 */
+	readonly text: string;
 };
 
 /** 一覧を取り出すときの指定。 */
@@ -81,6 +87,18 @@ export const MAX_TITLES = 50;
 const MAX_TITLE_PATTERNS = 40;
 /** 名前で探すときに、合う順を決めるために読み出す件数の上限。更新が新しいものから読む。 */
 const MAX_TITLE_CANDIDATES = 1000;
+
+/** 本文を探すときに返す件数の、既定の値と上限(ADR-0031)。 */
+export const DEFAULT_HITS = 20;
+const MAX_HITS = 50;
+/** 本文を探すときに、SQL の条件にする語の数の上限(1つの問い合わせに書ける条件の数に、限りがある)。 */
+const MAX_SQL_TERMS = 40;
+/** 探した結果の1ページに添える、語を含む行の数の上限。 */
+const MAX_HIT_LINES = 3;
+/** 探す対象にする本文の長さの上限(UTF-16 の符号単位)。1行に保存できる大きさ(2MB)に収める。 */
+export const MAX_INDEXED_TEXT = 200_000;
+/** 照らし合わせるための形にした本文の、1行目(ページの名前)。 */
+const FOLDED_TITLE = "substr(t.folded, 1, instr(t.folded || char(10), char(10)))";
 
 /** 1度のアラームで、リンクを書き換えるページの数の上限(ADR-0028)。 */
 export const REWRITE_BATCH = 20;
@@ -162,6 +180,12 @@ export const MIGRATIONS: readonly string[] = [
 		new_lc TEXT NOT NULL,
 		new_title TEXT NOT NULL,
 		at INTEGER NOT NULL
+	);`,
+	// 6: 本文を探すための、ページの本文(ADR-0031)。folded は、照らし合わせるための形にしたもの。
+	`CREATE TABLE texts (
+		id TEXT PRIMARY KEY,
+		body TEXT NOT NULL,
+		folded TEXT NOT NULL
 	);`,
 ];
 
@@ -282,6 +306,7 @@ export class ProjectDO extends DurableObject {
 		const info = this.ctx.storage.transactionSync(() => {
 			const info = this.#retitle(id, state);
 			this.#summarize(id, state.summary);
+			this.#keepText(id, state.text);
 			return info;
 		});
 		// 名前が変わって、リンクの書き換えが増えた。応答を待たせないように、アラームで行う(ADR-0028)。
@@ -291,6 +316,61 @@ export class ProjectDO extends DurableObject {
 			await this.ctx.storage.setAlarm(Date.now());
 		}
 		return info;
+	}
+
+	/** 本文を探すために、ページの本文を持っておく(ADR-0031)。非常に長い本文は、上限までにする。 */
+	#keepText(id: PageId, text: string): void {
+		const body = text.slice(0, MAX_INDEXED_TEXT);
+		this.ctx.storage.sql.exec(
+			`INSERT INTO texts (id, body, folded) VALUES (?, ?, ?)
+			ON CONFLICT (id) DO UPDATE SET body = excluded.body, folded = excluded.folded`,
+			id,
+			body,
+			// 照らし合わせるための形にすると、長くなる文字がある。こちらも上限までにする。
+			foldText(body).slice(0, MAX_INDEXED_TEXT),
+		);
+	}
+
+	/**
+	 * 本文を探す(ADR-0031)。すべての語を本文(1行目の名前を含む)に含む、保存されたページを返す。
+	 * 名前にすべての語があるページを先に、あとは更新が新しい順に並べる。
+	 * 大文字と小文字、全角と半角の違いは区別しない。
+	 */
+	search(query: string, limit = DEFAULT_HITS): SearchResults {
+		const terms = textTerms(query);
+		const count = Math.min(Math.max(limit, 0), MAX_HITS);
+		if (terms.length === 0) return { hits: [], more: false };
+		// 1つの問い合わせに書ける条件の数には、限りがある。語がとても多いときは、残りの語を、取り出したあとで確かめる。
+		const inSql = terms.slice(0, MAX_SQL_TERMS);
+		const rest = terms.slice(MAX_SQL_TERMS);
+		const inText = inSql.map(() => "instr(t.folded, ?) > 0").join(" AND ");
+		const inTitle = inSql.map(() => `instr(${FOLDED_TITLE}, ?) > 0`).join(" AND ");
+		// ほかにも合うページがあるかを知るために、1件多く取り出す。
+		const rows = this.ctx.storage.sql
+			.exec<{ id: string; title: string; updated: number; body: string }>(
+				`SELECT p.id, p.title, p.updated, t.body FROM texts t JOIN pages p ON p.id = t.id
+				WHERE p.version > 0 AND ${inText}
+				ORDER BY (${inTitle}) DESC, p.updated DESC, p.title_lc LIMIT ?`,
+				...inSql,
+				...inSql,
+				count + 1,
+			)
+			.toArray();
+		const matched =
+			rest.length === 0
+				? rows
+				: rows.filter(({ body }) => {
+						const folded = foldText(body);
+						return rest.every((term) => folded.includes(term));
+					});
+		const hits = matched.slice(0, count).map(({ id, title, updated, body }) => ({
+			id: id as PageId,
+			title,
+			updated,
+			// 1行目は名前なので、添える行には含めない。
+			lines: matchingLines(plainLines(body.split("\n")).slice(1), terms, MAX_HIT_LINES),
+		}));
+		return { hits, more: rows.length > count };
 	}
 
 	/** いちばん新しい、リンクの書き換えの番号。まだ1つもなければ 0。 */
@@ -592,6 +672,7 @@ export class ProjectDO extends DurableObject {
 			);
 			sql.exec("DELETE FROM links WHERE from_id = ?", id);
 			sql.exec("DELETE FROM rewrites WHERE page_id = ?", id);
+			sql.exec("DELETE FROM texts WHERE id = ?", id);
 			sql.exec("DELETE FROM pages WHERE id = ?", id);
 		});
 	}

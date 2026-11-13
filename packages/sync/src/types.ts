@@ -128,6 +128,23 @@ export type PageLinks = {
 	readonly hops: readonly LinkGroup[];
 };
 
+/** 本文を探した結果の、1ページ分(ADR-0031)。 */
+export type SearchHit = {
+	readonly id: PageId;
+	readonly title: string;
+	/** 最後に変更された時刻(ミリ秒)。 */
+	readonly updated: number;
+	/** 語を含む行(記法の記号を除いた文字列)。長い行は、語のまわりだけ。 */
+	readonly lines: readonly string[];
+};
+
+/** 本文を探した結果。 */
+export type SearchResults = {
+	readonly hits: readonly SearchHit[];
+	/** 返した分のほかにも、合うページがあるか。 */
+	readonly more: boolean;
+};
+
 /** コミットを識別するID。送る側が作る。同じコミットを送り直しても、サーバーは1度しか適用しない(ADR-0021)。 */
 export type CommitId = string & { readonly __brand: "CommitId" };
 

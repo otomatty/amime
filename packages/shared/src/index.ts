@@ -1,6 +1,7 @@
 export { InvariantError, invariant } from "./invariant.ts";
 export { itemAt } from "./item-at.ts";
 export { err, ok, type Result } from "./result.ts";
+export { foldText, highlight, matchingLines, textTerms } from "./text-search.ts";
 export {
 	MAX_TITLE_LENGTH,
 	type TitleLc,
