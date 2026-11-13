@@ -49,6 +49,29 @@ describe("IconImage([名前.icon] の表示)", () => {
 		expect(source).toHaveBeenCalledExactlyOnceWith("花子");
 	});
 
+	it("名前が変わったら、新しい名前の画像を引けるまで、前の名前の画像を出さない(名前の文字を出す)", async () => {
+		const source = vi.fn((name: string) =>
+			name === "花子"
+				? Promise.resolve("https://images.example/hanako.png")
+				: new Promise<string | null>(() => {}),
+		);
+		const { rerender } = render(
+			<IconSourceProvider source={source}>
+				<IconImage name="花子" />
+			</IconSourceProvider>,
+		);
+		await screen.findByRole("img", { name: "花子" });
+
+		rerender(
+			<IconSourceProvider source={source}>
+				<IconImage name="太郎" />
+			</IconSourceProvider>,
+		);
+
+		expect(screen.queryByRole("img")).toBeNull();
+		expect(screen.getByText("太郎")).toBeDefined();
+	});
+
 	it("引けなければ、名前の文字のまま", async () => {
 		const source = vi.fn(async () => null);
 

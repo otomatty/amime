@@ -10,7 +10,10 @@ afterEach(() => {
 
 const hanako = { id: "u1", name: "花子", email: "hanako@example.com", picture: null };
 
-function stubServer(user: unknown = hanako, save: () => Response = () => Response.json({})) {
+function stubServer(
+	user: unknown = hanako,
+	save: () => Response | Promise<Response> = () => Response.json({}),
+) {
 	const server = { user, saved: [] as unknown[] };
 	vi.stubGlobal(
 		"fetch",
@@ -68,7 +71,7 @@ describe("Profile(表示名とアイコンを変える)", () => {
 		server.user = { ...hanako, name: "山田 花子", picture: "https://images.example/b.png" };
 		fireEvent.click(screen.getByRole("button", { name: "保存する" }));
 
-		expect((await screen.findByRole("status")).textContent).toBe("保存しました");
+		await waitFor(() => expect(screen.getByRole("status").textContent).toBe("保存しました"));
 		expect(server.saved).toEqual([{ name: "山田 花子", picture: "https://images.example/b.png" }]);
 		expect(screen.getByText("[山田 花子.icon]")).toBeDefined();
 	});
@@ -105,6 +108,30 @@ describe("Profile(表示名とアイコンを変える)", () => {
 
 		expect(screen.queryByText("[山田[花子].icon]")).toBeNull();
 		expect(screen.getByText(/この表示名では、本文にアイコンを置けません/)).toBeDefined();
+	});
+
+	it("保存しているあいだは、そのことを示し、重ねて保存させない(前の保存が、あとから届いて上書きしない)", async () => {
+		let finish: (response: Response) => void = () => {};
+		const server = stubServer(
+			hanako,
+			() =>
+				new Promise<Response>((resolve) => {
+					finish = resolve;
+				}),
+		);
+		renderProfile();
+		fireEvent.change(await nameInput(), { target: { value: "山田 花子" } });
+		const save = screen.getByRole("button", { name: "保存する" }) as HTMLButtonElement;
+
+		fireEvent.click(save);
+		expect((await screen.findByRole("status")).textContent).toBe("保存しています…");
+		expect(save.disabled).toBe(true);
+		fireEvent.submit(save.closest("form") as HTMLFormElement);
+		finish(Response.json({}));
+
+		await waitFor(() => expect(screen.getByRole("status").textContent).toBe("保存しました"));
+		expect(save.disabled).toBe(false);
+		expect(server.saved).toHaveLength(1);
 	});
 
 	it("アイコンの欄を空にして保存すると、アイコンをなくす", async () => {

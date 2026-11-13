@@ -28,17 +28,26 @@ function ProfileForm({
 	const [name, setName] = useState(user.name);
 	const [picture, setPicture] = useState(user.picture ?? "");
 	const [result, setResult] = useState<ProfileError | "saved" | null>(null);
+	// 保存している途中か。途中は、重ねて保存させない(前の保存が、あとから届いて、新しい名前を上書きしないように)。
+	const [saving, setSaving] = useState(false);
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
+		if (saving) return;
 		const url = picture.trim();
 		// 長さは、サーバーと同じ決まりで数える(絵文字も1文字)。入力欄では、切り詰めない。
 		if (parseDisplayName(name) === null) {
 			setResult("invalid-name");
 			return;
 		}
-		const error = await updateProfile({ name, picture: url === "" ? null : url });
-		setResult(error ?? "saved");
-		if (error === null) await onSaved();
+		setSaving(true);
+		setResult(null);
+		try {
+			const error = await updateProfile({ name, picture: url === "" ? null : url });
+			if (error === null) await onSaved();
+			setResult(error ?? "saved");
+		} finally {
+			setSaving(false);
+		}
 	};
 	// 案内に出す名前。空のあいだは、仮の名前を出す。
 	const shown = name.trim() || "表示名";
@@ -82,7 +91,14 @@ function ProfileForm({
 					<code>[名前.icon]</code> と書けません)。
 				</p>
 			)}
-			<button type="submit">保存する</button>
+			<button type="submit" disabled={saving}>
+				保存する
+			</button>
+			{saving && (
+				<p className="page-status" role="status">
+					保存しています…
+				</p>
+			)}
 			{result === "saved" && (
 				<p className="page-status" role="status">
 					保存しました

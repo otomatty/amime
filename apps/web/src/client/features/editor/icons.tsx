@@ -42,17 +42,23 @@ export function IconSourceProvider({
  */
 export function IconImage({ name }: { readonly name: string }) {
 	const source = useContext(IconSourceContext);
-	const [url, setUrl] = useState<string | null>(null);
+	// 引けた画像と、それを引いたときの名前と引き先。名前や引き先が変わったら、引き直せるまで、前の画像は出さない。
+	const [found, setFound] = useState<{
+		name: string;
+		source: IconSource;
+		url: string | null;
+	} | null>(null);
 	useEffect(() => {
 		if (source === null) return;
 		let cancelled = false;
-		void source(name).then((found) => {
-			if (!cancelled) setUrl(found);
+		void source(name).then((url) => {
+			if (!cancelled) setFound({ name, source, url });
 		});
 		return () => {
 			cancelled = true;
 		};
 	}, [source, name]);
+	const url = found !== null && found.name === name && found.source === source ? found.url : null;
 	if (url === null) return name;
 	return (
 		<img
@@ -61,7 +67,7 @@ export function IconImage({ name }: { readonly name: string }) {
 			alt={name}
 			referrerPolicy="no-referrer"
 			// 読み込めなかった画像は、名前の文字に戻す。
-			onError={() => setUrl(null)}
+			onError={() => setFound(null)}
 		/>
 	);
 }
