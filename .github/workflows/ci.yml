@@ -70,13 +70,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: pnpm build
-      # 認証が入るまで、本番用のビルドではページのAPIを無効にする(ADR-0009、ADR-0017)。
-      # 設定の誤りで有効になっていないことを、ビルド成果物で確かめる。
-      - name: 本番用のビルドでページのAPIが無効であることを確認
-        run: grep -q '"PAGE_API":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
       # 開発用のログイン(名前を入れるだけでログインできる)は、公開環境では無効にする(ADR-0032)。
       - name: 本番用のビルドで開発用のログインが無効であることを確認
         run: grep -q '"DEV_LOGIN":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
+      # プロジェクトを作れる人は、公開環境では、シークレットで渡す(誰でも作れる設定を、埋め込まない。ADR-0033)。
+      - name: 本番用のビルドでプロジェクトを作れる人が埋め込まれていないことを確認
+        run: grep -q '"PROJECT_CREATORS":{"type":"secret"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
       - name: アップロードせずにデプロイ内容を検証
         run: pnpm --filter @amime/web exec cf deploy --prebuilt --mode production --dry-run
 
@@ -91,7 +90,7 @@ jobs:
       # ブラウザの実行に必要なライブラリは、ランナーのイメージに入っている。
       - name: ブラウザをインストール
         run: pnpm --filter @amime/e2e exec playwright install chromium
-      # ページのAPIを有効にしたE2E用のビルド(--mode e2e)を作ってから実行する。
+      # 開発用のログインを使えるE2E用のビルド(--mode e2e)を作ってから実行する。
       - run: pnpm test:e2e
 
   # 以下の2つは、リポジトリ変数 DEPLOY_ENABLED が "true" のときだけ動く。
@@ -130,7 +129,19 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: pnpm build
-      - run: pnpm --filter @amime/web exec cf deploy --prebuilt --mode production
+      # ログインとプロジェクトの設定を、シークレットのファイルにする(docs/deploy.md の 3)。
+      # 登録していない値は、空になる(その機能は、使えないままになる)。
+      - name: シークレットのファイルを用意
+        run: |
+          jq -n --arg id "$GOOGLE_CLIENT_ID" --arg secret "$GOOGLE_CLIENT_SECRET" --arg creators "$PROJECT_CREATORS" \
+            '{ GOOGLE_CLIENT_ID: $id, GOOGLE_CLIENT_SECRET: $secret, PROJECT_CREATORS: $creators }' > "$SECRETS_FILE"
         env:
+          SECRETS_FILE: ${{ runner.temp }}/secrets.json
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          PROJECT_CREATORS: ${{ secrets.PROJECT_CREATORS }}
+      - run: pnpm --filter @amime/web exec cf deploy --prebuilt --mode production --secrets-file "$SECRETS_FILE"
+        env:
+          SECRETS_FILE: ${{ runner.temp }}/secrets.json
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

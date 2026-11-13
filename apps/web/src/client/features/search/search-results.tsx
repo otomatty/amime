@@ -17,7 +17,7 @@ type Loaded =
 type SearchResultsProps = {
 	/** 探す語(空ではない)。 */
 	readonly query: string;
-	/** ページのAPIが無効な環境(公開環境)で、代わりに表示するもの。 */
+	/** 探す権限がないときに、代わりに表示するもの。 */
 	readonly whenDisabled?: ReactNode;
 };
 

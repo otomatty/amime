@@ -38,7 +38,7 @@ test.describe("ページの保存", () => {
 		page,
 	}) => {
 		const name = newPageName();
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await expect(lines(page)).toHaveText([name]);
 		await expect(status(page)).toHaveText("新しいページです。書き始めると保存されます");
 
@@ -55,7 +55,7 @@ test.describe("ページの保存", () => {
 
 	test("日本語と空白を含む名前のページも保存できる", async ({ page }) => {
 		const name = `E2E メモ ${randomUUID()}`;
-		await page.goto(`/${encodeURIComponent(name.replaceAll(" ", "_"))}`);
+		await page.goto(`/e2e/${encodeURIComponent(name.replaceAll(" ", "_"))}`);
 		await expect(lines(page).first()).toHaveAttribute("data-text", name);
 
 		await clickLineEnd(page, 0);
@@ -67,7 +67,7 @@ test.describe("ページの保存", () => {
 	});
 
 	test("行を動かしたり消したりした結果も、そのまま保存される", async ({ page }) => {
-		await page.goto(`/${newPageName()}`);
+		await page.goto(`/e2e/${newPageName()}`);
 		await clickLineEnd(page, 0);
 		for (const text of ["A", " a1", "B"]) {
 			await page.keyboard.press("Enter");
@@ -86,7 +86,7 @@ test.describe("ページの保存", () => {
 
 	test("保存に失敗しても書き続けられ、通信が戻ると自動で保存される", async ({ page }) => {
 		const name = newPageName();
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await page.route("**/commits", (route) => route.abort());
 
 		await clickLineEnd(page, 0);
@@ -116,7 +116,7 @@ test.describe("ページの保存", () => {
 test.describe("ページの名前", () => {
 	/** 保存された2行のページを作る。 */
 	async function createPage(page: Page, name: string) {
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await clickLineEnd(page, 0);
 		await page.keyboard.press("Enter");
 		await page.keyboard.type("本文");
@@ -145,7 +145,7 @@ test.describe("ページの名前", () => {
 
 		// 前の名前は空く。開くと、まだないページになる。
 		const other = await context.newPage();
-		await other.goto(`/${name}`);
+		await other.goto(`/e2e/${name}`);
 		await expectLines(other, [name]);
 		await expect(status(other)).toHaveText("新しいページです。書き始めると保存されます");
 	});
@@ -181,14 +181,14 @@ test.describe("同時編集", () => {
 	/** 1行の本文があるページを作り、もう1つのタブでも開く。 */
 	async function openInTwoTabs(page: Page, context: BrowserContext) {
 		const name = newPageName();
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await clickLineEnd(page, 0);
 		await page.keyboard.press("Enter");
 		await page.keyboard.type("最初の行");
 		await expect(status(page)).toHaveText("保存済み");
 
 		const other = await context.newPage();
-		await other.goto(`/${name}`);
+		await other.goto(`/e2e/${name}`);
 		await expectLines(other, [name, "最初の行"]);
 		return { name, other };
 	}
@@ -318,7 +318,7 @@ test.describe("同時編集", () => {
 			socket.connectToServer();
 			connections.push({ close: () => socket.close() });
 		});
-		await page.goto(`/${newPageName()}`);
+		await page.goto(`/e2e/${newPageName()}`);
 		const connection = page.getByTestId("connection");
 		await expect(connection).toHaveText("オンライン");
 
@@ -392,10 +392,10 @@ test.describe("同時編集", () => {
 		context,
 	}) => {
 		const name = newPageName();
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await expect(status(page)).toHaveText("新しいページです。書き始めると保存されます");
 		const other = await context.newPage();
-		await other.goto(`/${name}`);
+		await other.goto(`/e2e/${name}`);
 
 		await clickLineEnd(other, 0);
 		await other.keyboard.type(" を先に書いた");
@@ -411,7 +411,7 @@ test.describe("未送信の変更の復元", () => {
 		context,
 	}) => {
 		const name = newPageName();
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await clickLineEnd(page, 0);
 		await page.keyboard.press("Enter");
 		await page.keyboard.type("保存済みの行");
@@ -425,7 +425,7 @@ test.describe("未送信の変更の復元", () => {
 		await page.close();
 
 		const reopened = await context.newPage();
-		await reopened.goto(`/${name}`);
+		await reopened.goto(`/e2e/${name}`);
 
 		await expectLines(reopened, [name, "保存済みの行", "送れなかった行"]);
 		await expect(reopened.getByRole("note")).toContainText("送信できなかった変更を復元しました");
@@ -443,14 +443,14 @@ test.describe("未送信の変更の復元", () => {
 	}) => {
 		const name = newPageName();
 		await page.route("**/commits", (route) => route.abort());
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await clickLineEnd(page, 0);
 		await page.keyboard.type(" の下書き");
 		await expect(status(page)).toHaveText("保存できませんでした。自動で再試行します");
 		await page.close();
 
 		const reopened = await context.newPage();
-		await reopened.goto(`/${name}`);
+		await reopened.goto(`/e2e/${name}`);
 
 		await expectLines(reopened, [`${name} の下書き`]);
 		await expect(status(reopened)).toHaveText("保存済み");
@@ -461,7 +461,7 @@ test.describe("未送信の変更の復元", () => {
 		context,
 	}) => {
 		const name = newPageName();
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await clickLineEnd(page, 0);
 		await page.keyboard.press("Enter");
 		await page.keyboard.type("最初の行");
@@ -472,13 +472,13 @@ test.describe("未送信の変更の復元", () => {
 
 		// 最初のタブは、まだ開いている。別のタブは、その未送信の変更に手を出さない。
 		const second = await context.newPage();
-		await second.goto(`/${name}`);
+		await second.goto(`/e2e/${name}`);
 		await expectLines(second, [name, "最初の行"]);
 		await expect(second.getByRole("note")).toHaveCount(0);
 
 		await page.close();
 		const third = await context.newPage();
-		await third.goto(`/${name}`);
+		await third.goto(`/e2e/${name}`);
 
 		const expected = [name, "最初の行(送れない追記)"];
 		await expectLines(third, expected);
@@ -492,7 +492,7 @@ test.describe("未送信の変更の復元", () => {
 		browser,
 	}) => {
 		const name = newPageName();
-		await page.goto(`/${name}`);
+		await page.goto(`/e2e/${name}`);
 		await clickLineEnd(page, 0);
 		await page.keyboard.press("Enter");
 		await page.keyboard.type("最初の行");
@@ -505,7 +505,7 @@ test.describe("未送信の変更の復元", () => {
 		// 別の人(別のブラウザ)が、そのあいだに行を足す。
 		const otherContext = await browser.newContext();
 		const other = await otherContext.newPage();
-		await other.goto(`/${name}`);
+		await other.goto(`/e2e/${name}`);
 		await expectLines(other, [name, "最初の行"]);
 		await clickLineEnd(other, 0);
 		await other.keyboard.press("Enter");
@@ -513,7 +513,7 @@ test.describe("未送信の変更の復元", () => {
 		await expect(status(other)).toHaveText("保存済み");
 
 		const reopened = await context.newPage();
-		await reopened.goto(`/${name}`);
+		await reopened.goto(`/e2e/${name}`);
 
 		const expected = [name, "他の人の行", "最初の行(送れなかった追記)"];
 		await expectLines(reopened, expected);

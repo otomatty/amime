@@ -9,7 +9,7 @@ type Handler = (url: string, init?: RequestInit) => Response | Promise<Response>
 
 /** テストで開くページのID。 */
 const PAGE_ID = "p1";
-const BY_TITLE = "/api/pages/by-title/";
+const BY_TITLE = "/api/projects/team/pages/by-title/";
 
 /**
  * fetch を差し替える。名前からページを引く要求には、決まったIDと、URLの名前から作った名前を返す。
@@ -33,7 +33,8 @@ function stubFetch(
 	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
 		// ページのつながりにも、ここで答える。
 		if (url.endsWith("/links")) return info.links?.() ?? json(NO_LINKS);
-		if (url.startsWith("/api/pages/titles")) return json({ titles: info.titles ?? [] });
+		if (url.startsWith("/api/projects/team/pages/titles"))
+			return json({ titles: info.titles ?? [] });
 		if (!url.startsWith(BY_TITLE)) return fetchMock(url, init);
 		const name = decodeURIComponent(url.slice(BY_TITLE.length));
 		const title = info.title ?? name.replaceAll("_", " ");
@@ -80,7 +81,7 @@ const pendingRecords = () =>
 const SAVED = { version: 1, lines: [{ id: "a", text: "買い物" }] };
 
 /** WebSocket の代わりを置いて、ページを開く。届けるメッセージと、送られたメッセージを扱える。 */
-async function openWithSocket(info: Parameters<typeof stubFetch>[1] = {}) {
+async function openWithSocket(info: Parameters<typeof stubFetch>[1] = {}, readOnly = false) {
 	const sockets: (EventTarget & { sent: string[] })[] = [];
 	class CapturedSocket extends EventTarget {
 		static readonly OPEN = 1;
@@ -97,7 +98,7 @@ async function openWithSocket(info: Parameters<typeof stubFetch>[1] = {}) {
 	}
 	vi.stubGlobal("WebSocket", CapturedSocket);
 	stubFetch(() => json(SAVED), info);
-	render(<Page name="買い物" />);
+	render(<Page name="買い物" readOnly={readOnly} />);
 	await waitFor(() => expect(lines()).toEqual(["買い物"]));
 	await waitFor(() => expect(sockets).toHaveLength(1));
 	const socket = sockets[0];
@@ -240,6 +241,74 @@ describe("Page", () => {
 			await waitFor(() => expect(status()).toBe("保存しています…"));
 			respond();
 			await waitFor(() => expect(status()).toBe("保存済み"));
+			expect(pendingRecords()).toEqual([]);
+		});
+
+		it("読むだけの表示では、端末内に残っている未送信の変更を、復元も送信もしない(残したままにする)", async () => {
+			const left = [{ type: "update", id: "a", text: "買い物 前回の入力" }];
+			leavePending(left);
+			// 書き込みは、断られる。
+			const fetchMock = stubFetch((_url, init) =>
+				init?.method === "POST" ? json({ error: "read-only" }, 403) : json(saved),
+			);
+
+			render(<Page name="買い物" readOnly />);
+
+			// サーバーにある内容を、そのまま表示する。
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			expect(screen.queryByRole("note")).toBeNull();
+			expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toEqual([]);
+			// メンバーとして開き直せば、送れる。
+			expect(pendingRecords()).toEqual([left]);
+		});
+
+		it("書いている途中で、読むだけの表示に変わっても(ログアウトした)、端末内に残した未送信の変更を消さない", async () => {
+			// 保存は、終わらない(送信中のまま)。
+			stubFetch((_url, init) => (init?.method === "POST" ? new Promise(() => {}) : json(saved)));
+			const { rerender } = render(<Page name="買い物" />);
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			fireEvent.mouseDown(screen.getByTestId("line"));
+			type("牛乳");
+			const left = [{ type: "update", id: "a", text: "買い物牛乳", base: "買い物" }];
+			await waitFor(() => expect(status()).toBe("保存しています…"));
+			expect(pendingRecords()).toEqual([left]);
+
+			rerender(<Page name="買い物" readOnly />);
+
+			// サーバーにある内容に戻る。書いていた分は、端末内に残っている(メンバーとして開き直せば、送れる)。
+			await waitFor(() => expect(status()).toMatch(/読むだけの表示です/));
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			expect(pendingRecords()).toEqual([left]);
+		});
+
+		it("読むだけの表示から、書ける表示に戻ったら(ログインし直した)、残しておいた未送信の変更を復元して、送る", async () => {
+			let writable = false;
+			// サーバーにある内容。保存できたら、変わる。
+			let stored = saved;
+			const fetchMock = stubFetch((url, init) => {
+				if (init?.method !== "POST") return json(stored);
+				// ログアウトするまでは、保存が終わらない。ログインし直したあとは、保存できる。
+				if (!writable) return new Promise(() => {});
+				stored = { version: 2, lines: [{ id: "a", text: "買い物牛乳" }] };
+				return echo(url, init);
+			});
+			const { rerender } = render(<Page name="買い物" />);
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			fireEvent.mouseDown(screen.getByTestId("line"));
+			type("牛乳");
+			await waitFor(() => expect(status()).toBe("保存しています…"));
+			rerender(<Page name="買い物" readOnly />);
+			await waitFor(() => expect(status()).toMatch(/読むだけの表示です/));
+
+			writable = true;
+			rerender(<Page name="買い物" />);
+
+			await waitFor(() => expect(lines()).toEqual(["買い物牛乳"]));
+			await waitFor(() => expect(status()).toBe("保存済み"));
+			const sent = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST").at(-1);
+			expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({
+				changes: [{ type: "update", id: "a", text: "買い物牛乳" }],
+			});
 			expect(pendingRecords()).toEqual([]);
 		});
 
@@ -522,7 +591,8 @@ describe("Page", () => {
 			render(<Page name="買い物" />);
 
 			await waitFor(() => expect(screen.getByText(/このページは削除されました/)).toBeDefined());
-			expect(screen.getByRole("link", { name: "ページの一覧" }).getAttribute("href")).toBe("/");
+			// プロジェクトのトップ(同じ階層)へ戻る。
+			expect(screen.getByRole("link", { name: "ページの一覧" }).getAttribute("href")).toBe("./");
 		});
 	});
 
@@ -546,12 +616,21 @@ describe("Page", () => {
 			await waitFor(() => expect(lines()).toEqual(["買い物"]));
 		});
 
-		it("ページのAPIが無効な環境では、名前を引く時点で、そのことを表示する", async () => {
-			vi.stubGlobal("fetch", async () => json({ error: "page-api-disabled" }, 403));
+		it("見る権限がなければ、名前を引く時点で、そのことを表示する", async () => {
+			vi.stubGlobal("fetch", async () => json({ error: "read-only" }, 403));
 
 			render(<Page name="買い物" />);
 
-			await waitFor(() => expect(screen.getByText(/まだ使えません/)).toBeDefined());
+			await waitFor(() => expect(screen.getByText(/見る権限がありません/)).toBeDefined());
+		});
+
+		it("まだないページを、読むだけの人が開いたら、ないことを伝え、一覧へ戻れるようにする", async () => {
+			vi.stubGlobal("fetch", async () => json({ error: "unknown-page" }, 404));
+
+			render(<Page name="買い物" readOnly />);
+
+			await waitFor(() => expect(screen.getByText(/このページは、まだありません/)).toBeDefined());
+			expect(screen.getByRole("link", { name: "ページの一覧" }).getAttribute("href")).toBe("./");
 		});
 
 		it("引いたIDのページを読み込む。未送信の変更も、IDごとに残す", async () => {
@@ -560,27 +639,27 @@ describe("Page", () => {
 			render(<Page name="買い物" />);
 
 			await waitFor(() => expect(lines()).toEqual(["買い物"]));
-			expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${PAGE_ID}`, undefined);
+			expect(fetchMock).toHaveBeenCalledWith(`/api/projects/team/pages/${PAGE_ID}`, undefined);
 		});
 
 		it("URLの名前が、ページの名前と表記だけ違うときは、URLをページの名前に合わせる", async () => {
-			window.history.replaceState(null, "", "/notes/kaimono_MEMO");
+			window.history.replaceState(null, "", "/team/kaimono_MEMO");
 			stubFetch(() => json(saved), { title: "Kaimono Memo" });
 
 			render(<Page name="kaimono_MEMO" />);
 
 			// URLは、編集欄を表示したあとで合わせる。
-			await waitFor(() => expect(path()).toBe("/notes/Kaimono_Memo"));
+			await waitFor(() => expect(path()).toBe("/team/Kaimono_Memo"));
 			expect(lines()).toEqual(["買い物"]);
 		});
 
 		it("ページの名前が変わったと知らされたら、URLを新しい名前に合わせる(再読み込みしても同じページが開く)", async () => {
-			window.history.replaceState(null, "", `/${encodeURIComponent("買い物")}`);
+			window.history.replaceState(null, "", `/team/${encodeURIComponent("買い物")}`);
 			const { receive } = await openWithSocket();
 
 			receive({ type: "page", title: "買い物 メモ", problem: null });
 
-			expect(path()).toBe("/買い物_メモ");
+			expect(path()).toBe("/team/買い物_メモ");
 			expect(screen.queryByRole("note")).toBeNull();
 		});
 
@@ -707,14 +786,29 @@ describe("Page", () => {
 		expect(leave()).toBe(false);
 	});
 
-	it("ページのAPIが無効な環境では、使えないことを伝える", async () => {
-		stubFetch(() => json({ error: "page-api-disabled" }, 403));
+	it("読むだけの表示でも、ページが削除されたら、そのことを伝える", async () => {
+		const { receive } = await openWithSocket({}, true);
+		expect(status()).toMatch(/読むだけの表示です/);
 
-		render(<Page name="買い物" />);
+		receive({ type: "deleted" });
 
-		expect(
-			await screen.findByText(/この環境では、ページの保存と読み込みはまだ使えません/),
-		).toBeDefined();
+		expect(status()).toMatch(/このページは削除されました/);
+	});
+
+	it("読むだけの表示では、そのことを伝え、ページの操作(固定、削除)を出さない。本文は見える", async () => {
+		stubFetch(() => json(saved));
+
+		render(<Page name="買い物" readOnly />);
+
+		await waitFor(() =>
+			expect(screen.getByRole("status").textContent).toMatch(/読むだけの表示です/),
+		);
+		await waitFor(() => expect(screen.getAllByTestId("line").length).toBeGreaterThan(0));
+		expect(screen.getByTestId("editor").getAttribute("data-readonly")).toBe("true");
+		// 入力を受け取る欄がない。
+		expect(screen.queryByRole("textbox", { name: "ページの本文" })).toBeNull();
+		expect(screen.queryByRole("button", { name: /固定/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /削除/ })).toBeNull();
 	});
 
 	it("読み込みに失敗したら、やり直せる", async () => {

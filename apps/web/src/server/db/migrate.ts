@@ -24,6 +24,25 @@ const MIGRATIONS: readonly (readonly string[])[] = [
 		)`,
 		"CREATE INDEX IF NOT EXISTS sessions_expires ON sessions (expires)",
 	],
+	[
+		// プロジェクト(ADR-0033)。id は変わらない(Durable Object の名前に使う)。name は、URLの最初の部分。
+		`CREATE TABLE IF NOT EXISTS projects (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			visibility TEXT NOT NULL,
+			created INTEGER NOT NULL,
+			created_by TEXT NOT NULL REFERENCES users (id)
+		)`,
+		// プロジェクトのメンバーと、その役割(admin か member)。
+		`CREATE TABLE IF NOT EXISTS members (
+			project TEXT NOT NULL REFERENCES projects (id),
+			user TEXT NOT NULL REFERENCES users (id),
+			role TEXT NOT NULL,
+			joined INTEGER NOT NULL,
+			PRIMARY KEY (project, user)
+		)`,
+		"CREATE INDEX IF NOT EXISTS members_user ON members (user)",
+	],
 ];
 
 /** この実行環境(isolate)で、スキーマが最新だと確かめたデータベース。 */

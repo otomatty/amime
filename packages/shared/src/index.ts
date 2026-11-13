@@ -1,3 +1,10 @@
+export {
+	allows,
+	canCreateProject,
+	parseProjectName,
+	type Role,
+	type Visibility,
+} from "./access.ts";
 export { type Identity, readIdentity } from "./identity.ts";
 export { InvariantError, invariant } from "./invariant.ts";
 export { itemAt } from "./item-at.ts";

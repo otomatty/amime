@@ -16,11 +16,15 @@ import {
 	parseSnapshot,
 	type SearchResults,
 } from "@amime/sync";
+import { currentProject } from "../project/route.ts";
 import { PageApiError } from "./page-api-error.ts";
 import { connectPageSocket } from "./page-socket.ts";
 import type { PageApi } from "./page-sync.ts";
 
-const STATUS_FORBIDDEN = 403;
+/** 権限がないときの応答(ログインしていない、メンバーでない)。 */
+const STATUS_DENIED: ReadonlySet<number | undefined> = new Set([401, 403]);
+/** プロジェクトかページが、ない(見られない)ときの応答。 */
+const STATUS_MISSING = 404;
 /** 削除されたページへの要求への応答。 */
 const STATUS_GONE = 410;
 /** 送った内容に問題があるときの応答(形が正しくない、大きすぎる)。 */
@@ -29,7 +33,8 @@ const STATUS_REJECTED: ReadonlySet<number | undefined> = new Set([400, 413]);
 /** APIを呼ぶ。失敗はすべて PageApiError にする。 */
 async function send(url: string, init: RequestInit | undefined): Promise<Response> {
 	const response = await fetch(url, init).catch(() => null);
-	if (response?.status === STATUS_FORBIDDEN) throw new PageApiError("disabled");
+	if (STATUS_DENIED.has(response?.status)) throw new PageApiError("disabled");
+	if (response?.status === STATUS_MISSING) throw new PageApiError("missing");
 	if (response?.status === STATUS_GONE) throw new PageApiError("gone");
 	if (STATUS_REJECTED.has(response?.status)) throw new PageApiError("rejected");
 	if (!response?.ok) throw new PageApiError("failed");
@@ -51,14 +56,20 @@ async function request<T>(
 
 const JSON_HEADERS = { "content-type": "application/json" };
 
-const pagePath = (id: PageId): string => `/api/pages/${id}`;
+/**
+ * いま開いているプロジェクトの、ページのAPIのパス(ADR-0033)。
+ * プロジェクトは、URLの最初の部分から決まる。
+ */
+const pagesPath = (): string => `/api/projects/${encodeURIComponent(currentProject() ?? "")}/pages`;
+
+const pagePath = (id: PageId): string => `${pagesPath()}/${id}`;
 
 /**
  * 名前(URLの中の名前)から、ページを引く(ADR-0024)。
  * まだないページには、サーバーがIDを決める。ページの本文は、書き込むまで作られない。
  */
 export function openPage(name: string): Promise<PageInfo> {
-	return request(`/api/pages/by-title/${encodeURIComponent(name)}`, undefined, parsePageInfo);
+	return request(`${pagesPath()}/by-title/${encodeURIComponent(name)}`, undefined, parsePageInfo);
 }
 
 /** ページの一覧を取り出す(ADR-0025)。offset は、何件目から取り出すか。 */
@@ -69,17 +80,25 @@ export function listPages({
 	readonly sort: PageSort;
 	readonly offset: number;
 }): Promise<PageList> {
-	return request(`/api/pages?sort=${sort}&offset=${offset}`, undefined, parsePageList);
+	return request(`${pagesPath()}?sort=${sort}&offset=${offset}`, undefined, parsePageList);
 }
 
 /** 名前でページを探す(ADR-0029)。入力に合う名前を、合う順に返す。入力が空なら、更新が新しい順。 */
 export function searchTitles(query: string): Promise<readonly string[]> {
-	return request(`/api/pages/titles?q=${encodeURIComponent(query)}`, undefined, parsePageTitles);
+	return request(
+		`${pagesPath()}/titles?q=${encodeURIComponent(query)}`,
+		undefined,
+		parsePageTitles,
+	);
 }
 
 /** 本文を探す(ADR-0031)。すべての語を本文に含むページを、語を含む行と一緒に返す。 */
 export function searchPages(query: string): Promise<SearchResults> {
-	return request(`/api/pages/search?q=${encodeURIComponent(query)}`, undefined, parseSearchResults);
+	return request(
+		`${pagesPath()}/search?q=${encodeURIComponent(query)}`,
+		undefined,
+		parseSearchResults,
+	);
 }
 
 /** ページのつながり(関連するページ、同じリンクを持つページ、まだないページへのリンク)を取り出す。ADR-0027。 */
@@ -114,14 +133,13 @@ export function pageSocketUrl(location: URL | Location, id: PageId, client: Clie
  * client は、この端末(タブ)の識別子。自分のコミットが、自分の WebSocket に配信されないようにするために送る。
  */
 export function createPageApi(id: PageId, client: ClientId): PageApi {
-	const url = pagePath(id);
 	return {
 		subscribe: (handlers) =>
 			connectPageSocket({ url: pageSocketUrl(window.location, id, client), handlers }),
-		load: () => request(url, undefined, parseSnapshot),
+		load: () => request(pagePath(id), undefined, parseSnapshot),
 		commit: (commit: Commit) =>
 			request(
-				`${url}/commits`,
+				`${pagePath(id)}/commits`,
 				{
 					method: "POST",
 					headers: JSON_HEADERS,

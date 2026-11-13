@@ -1,6 +1,6 @@
 # ADR-0029: 名前でページを探す
 
-- 状態: 採用(Cloudflare 上での動作は未確認。手元の Workers ランタイムで確認した)
+- 状態: 採用(Cloudflare 上での動作は未確認。手元の Workers ランタイムで確認した。公開環境での扱いとURLは [ADR-0033](0033-projects-and-access.md) で変更)
 - 日付: 2026-11-13
 - 関連: [ADR-0024](0024-page-identity-and-project-index.md)(台帳)、[ADR-0025](0025-page-index-and-list.md)(一覧)
 

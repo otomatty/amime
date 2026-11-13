@@ -13,6 +13,7 @@
 			"project": ["src/**/*.ts"]
 		},
 		"e2e": {
+			"entry": ["tests/**/*.setup.ts"],
 			"project": ["**/*.ts"]
 		}
 	}

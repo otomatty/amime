@@ -32,7 +32,7 @@ describe("PageTools(ページの操作)", () => {
 
 			await waitFor(() => expect(onPinned).toHaveBeenCalledExactlyOnceWith(true));
 			const [url, init] = fetchMock.mock.calls[0] ?? [];
-			expect(url).toBe("/api/pages/p-1/pin");
+			expect(url).toBe("/api/projects/team/pages/p-1/pin");
 			expect(JSON.parse(String(init?.body))).toEqual({ pinned: true });
 		});
 
@@ -83,9 +83,9 @@ describe("PageTools(ページの操作)", () => {
 
 			fireEvent.click(screen.getByRole("button", { name: "削除する" }));
 
-			await waitFor(() => expect(navigate).toHaveBeenCalledExactlyOnceWith("/"));
+			await waitFor(() => expect(navigate).toHaveBeenCalledExactlyOnceWith("./"));
 			const [url, init] = fetchMock.mock.calls[0] ?? [];
-			expect(url).toBe("/api/pages/p-1");
+			expect(url).toBe("/api/projects/team/pages/p-1");
 			expect(init?.method).toBe("DELETE");
 		});
 

@@ -15,10 +15,14 @@ type TitleSearchProps = {
 };
 
 /** いま開いているURLが、本文を探した結果なら、その語。 */
+/** 探す欄を出さない失敗。権限がない、プロジェクトがない(見る権限がない)。 */
+const UNSEARCHABLE: ReadonlySet<PageApiError["kind"]> = new Set(["disabled", "missing"]);
+
 const queryFromUrl = (): string => new URLSearchParams(window.location.search).get("q") ?? "";
 
 /** 本文を探した結果のURL(ADR-0031)。 */
-const searchHref = (query: string): string => `/?q=${encodeURIComponent(query)}`;
+/** 本文を探した結果のURL。いまのプロジェクトのトップ(同じ階層)に、語を付ける。 */
+const searchHref = (query: string): string => `./?q=${encodeURIComponent(query)}`;
 
 type Found = {
 	/** 何を入力したときの候補か。 */
@@ -29,7 +33,7 @@ type Found = {
 /**
  * 名前でページを探す欄(ADR-0029)。入力するたびに、合う名前の候補を出す。
  * 候補は、上下の矢印キーで選び、Enter で開く。何も入力していないときは、最近更新したページを候補にする。
- * ページのAPIが無効な環境では、何も出さない。
+ * 探す権限がないときは、何も出さない。
  */
 export function TitleSearch({
 	navigate = (href) => window.location.assign(href),
@@ -56,8 +60,9 @@ export function TitleSearch({
 					setActive(0);
 				},
 				(error: unknown) => {
-					// 無効な環境でなければ、欄は出す。探すのに失敗しただけなら、次の入力でまた探す。
-					if (!(error instanceof PageApiError && error.kind === "disabled")) setAvailable(true);
+					// 探せないプロジェクト(権限がない、ない)でなければ、欄は出す。
+					// 探すのに失敗しただけなら、次の入力でまた探す。
+					if (!(error instanceof PageApiError && UNSEARCHABLE.has(error.kind))) setAvailable(true);
 				},
 			);
 		// 最初(何も入力していないとき)は、待たずに探す。ページのAPIが使えるかも、ここで分かる。

@@ -46,7 +46,8 @@ export function PageTools({
 	const remove = () =>
 		run(async () => {
 			await deletePage(id);
-			navigate("/");
+			// プロジェクトのトップ(ページの一覧)へ戻る。
+			navigate("./");
 		});
 
 	return (

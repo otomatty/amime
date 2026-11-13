@@ -40,13 +40,13 @@ describe("openPage(名前からページを引く)", () => {
 
 		expect(await openPage("買い物/メモ")).toEqual(info);
 		expect(fetchMock).toHaveBeenCalledWith(
-			`/api/pages/by-title/${encodeURIComponent("買い物/メモ")}`,
+			`/api/projects/team/pages/by-title/${encodeURIComponent("買い物/メモ")}`,
 			undefined,
 		);
 	});
 
-	it("ページのAPIが無効な環境では、そのことが分かる失敗になる", async () => {
-		stubFetch(json({ error: "page-api-disabled" }, 403));
+	it("権限がないときは、そのことが分かる失敗になる", async () => {
+		stubFetch(json({ error: "read-only" }, 403));
 
 		await expect(openPage("a")).rejects.toMatchObject({ kind: "disabled" });
 	});
@@ -65,7 +65,10 @@ describe("listPages(ページの一覧)", () => {
 		const fetchMock = stubFetch(json(list));
 
 		expect(await listPages({ sort: "linked", offset: 100 })).toEqual(list);
-		expect(fetchMock).toHaveBeenCalledWith("/api/pages?sort=linked&offset=100", undefined);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/api/projects/team/pages?sort=linked&offset=100",
+			undefined,
+		);
 	});
 
 	it("形の違う応答は、読み込みの失敗になる", async () => {
@@ -83,13 +86,13 @@ describe("searchTitles(名前でページを探す)", () => {
 
 		expect(await searchTitles("買い物 &メモ")).toEqual(["買い物 メモ"]);
 		expect(fetchMock).toHaveBeenCalledWith(
-			`/api/pages/titles?q=${encodeURIComponent("買い物 &メモ")}`,
+			`/api/projects/team/pages/titles?q=${encodeURIComponent("買い物 &メモ")}`,
 			undefined,
 		);
 	});
 
 	it("失敗は、PageApiError になる", async () => {
-		stubFetch(json({ error: "page-api-disabled" }, 403));
+		stubFetch(json({ error: "read-only" }, 403));
 
 		await expect(searchTitles("a")).rejects.toMatchObject({ kind: "disabled" });
 	});
@@ -105,7 +108,7 @@ describe("searchPages(本文を探す)", () => {
 
 		expect(await searchPages("牛乳 &卵")).toEqual(results);
 		expect(fetchMock).toHaveBeenCalledWith(
-			`/api/pages/search?q=${encodeURIComponent("牛乳 &卵")}`,
+			`/api/projects/team/pages/search?q=${encodeURIComponent("牛乳 &卵")}`,
 			undefined,
 		);
 	});
@@ -123,7 +126,7 @@ describe("loadLinks(ページのつながり)", () => {
 		const fetchMock = stubFetch(json(links));
 
 		expect(await loadLinks(pageId)).toEqual(links);
-		expect(fetchMock).toHaveBeenCalledWith("/api/pages/p-1/links", undefined);
+		expect(fetchMock).toHaveBeenCalledWith("/api/projects/team/pages/p-1/links", undefined);
 	});
 
 	it("形の違う応答は、失敗として扱う", async () => {
@@ -141,15 +144,21 @@ describe("pinPage(一覧の先頭に固定する)", () => {
 
 		expect(await pinPage(pageId, true)).toEqual(info);
 		const [url, init] = fetchMock.mock.calls[0] ?? [];
-		expect(url).toBe("/api/pages/p-1/pin");
+		expect(url).toBe("/api/projects/team/pages/p-1/pin");
 		expect(init?.method).toBe("PUT");
 		expect(JSON.parse(String(init?.body))).toEqual({ pinned: true });
 	});
 
 	it("失敗は、PageApiError になる", async () => {
-		stubFetch(json({ error: "unknown-page" }, 404));
+		stubFetch(json({ error: "x" }, 500));
 
 		await expect(pinPage(pageId, false)).rejects.toMatchObject({ kind: "failed" });
+	});
+
+	it("台帳にないページは、ないことが分かる失敗になる", async () => {
+		stubFetch(json({ error: "unknown-page" }, 404));
+
+		await expect(pinPage(pageId, false)).rejects.toMatchObject({ kind: "missing" });
 	});
 });
 
@@ -160,14 +169,14 @@ describe("deletePage(ページを削除する)", () => {
 		await deletePage(pageId);
 
 		const [url, init] = fetchMock.mock.calls[0] ?? [];
-		expect(url).toBe("/api/pages/p-1");
+		expect(url).toBe("/api/projects/team/pages/p-1");
 		expect(init?.method).toBe("DELETE");
 	});
 
 	it.each([
 		["サーバーの失敗", json({ error: "x" }, 500), "failed"],
 		["通信の失敗", new TypeError("network"), "failed"],
-		["ページのAPIが無効", json({ error: "page-api-disabled" }, 403), "disabled"],
+		["権限がない", json({ error: "read-only" }, 403), "disabled"],
 	])("%sは、PageApiError になる", async (_name, response, kind) => {
 		stubFetch(response);
 
@@ -180,7 +189,7 @@ describe("pageSocketUrl", () => {
 		const page = new URL("https://amime.example/notes/x");
 
 		expect(pageSocketUrl(page, pageId, client)).toBe(
-			"wss://amime.example/api/pages/p-1/socket?client=tab-1",
+			"wss://amime.example/api/projects/team/pages/p-1/socket?client=tab-1",
 		);
 	});
 
@@ -188,7 +197,7 @@ describe("pageSocketUrl", () => {
 		const page = new URL("http://localhost:5173/");
 
 		expect(pageSocketUrl(page, pageId, client)).toBe(
-			"ws://localhost:5173/api/pages/p-1/socket?client=tab-1",
+			"ws://localhost:5173/api/projects/team/pages/p-1/socket?client=tab-1",
 		);
 	});
 });
@@ -202,11 +211,11 @@ describe("createPageApi", () => {
 			const fetchMock = stubFetch(json(snapshot));
 
 			expect(await api.load()).toEqual(snapshot);
-			expect(fetchMock).toHaveBeenCalledWith("/api/pages/p-1", undefined);
+			expect(fetchMock).toHaveBeenCalledWith("/api/projects/team/pages/p-1", undefined);
 		});
 
-		it("ページのAPIが無効な環境では、そのことが分かる失敗になる", async () => {
-			stubFetch(json({ error: "page-api-disabled" }, 403));
+		it("権限がないときは、そのことが分かる失敗になる", async () => {
+			stubFetch(json({ error: "read-only" }, 403));
 
 			await expect(api.load()).rejects.toMatchObject({ kind: "disabled" });
 		});
@@ -240,7 +249,7 @@ describe("createPageApi", () => {
 			const fetchMock = stubFetch(json({ version: 3, applied: changes }));
 
 			expect(await api.commit(commit)).toEqual({ version: 3, applied: changes });
-			expect(fetchMock).toHaveBeenCalledWith("/api/pages/p-1/commits", {
+			expect(fetchMock).toHaveBeenCalledWith("/api/projects/team/pages/p-1/commits", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ id: "c1", changes, client: "tab-1" }),

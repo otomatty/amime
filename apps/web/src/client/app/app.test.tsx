@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./app.tsx";
 
@@ -8,21 +8,47 @@ afterEach(() => {
 	window.history.replaceState(null, "", "/");
 });
 
+const hanako = { id: "u1", name: "花子", email: "hanako@example.com", picture: null };
+const team = { name: "team", visibility: "private", role: "member" };
+
+type Replies = Record<string, () => Response>;
+
+/** URLごとに応答を決める、サーバーの代わり。決めていないURLには、404 を返す。呼ばれたURLを覚えておく。 */
+function stubServer(replies: Replies = {}) {
+	const defaults: Replies = {
+		"/api/me": () => Response.json({ user: hanako, login: ["google"] }),
+		"/api/projects": () => Response.json({ projects: [team], canCreate: false }),
+		"/api/projects/team": () => Response.json(team),
+		"/api/projects/team/pages/titles?q=": () => Response.json({ titles: [] }),
+	};
+	const urls: string[] = [];
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (url: string) => {
+			urls.push(url);
+			const reply = { ...defaults, ...replies }[url];
+			return reply ? reply() : Response.json({ error: "not-found" }, { status: 404 });
+		}),
+	);
+	return urls;
+}
+
+const open = (path: string) => window.history.replaceState(null, "", path);
+
 describe("App", () => {
-	it("プロダクト名を見出しとして表示する", () => {
+	it("プロダクト名を見出しとして表示し、そこからトップへ移れる", () => {
+		stubServer();
+		open("/");
+
 		render(<App />);
 
-		expect(screen.getByRole("heading", { level: 1, name: "Amime" })).toBeDefined();
+		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Amime");
+		expect(screen.getByRole("link", { name: "Amime" }).getAttribute("href")).toBe("/");
 	});
 
 	it("ヘッダーに、ログインの状態を表示する", async () => {
-		const state = {
-			user: { id: "u1", name: "花子", email: "hanako@example.com", picture: null },
-			login: ["google"],
-		};
-		vi.stubGlobal("fetch", async (url: string) =>
-			url === "/api/me" ? Response.json(state) : new Response(null, { status: 403 }),
-		);
+		stubServer();
+		open("/");
 
 		const { container } = render(<App />);
 
@@ -31,117 +57,173 @@ describe("App", () => {
 		expect(screen.getByRole("button", { name: "ログアウト" })).toBeDefined();
 	});
 
-	it("見出しから、トップ(ページの一覧)へ移れる", () => {
-		render(<App />);
+	describe("トップ(/)", () => {
+		it("ログインしていれば、参加しているプロジェクトを並べる", async () => {
+			stubServer();
+			open("/");
 
-		expect(screen.getByRole("link", { name: "Amime" }).getAttribute("href")).toBe("/");
+			render(<App />);
+
+			const link = await screen.findByRole("link", { name: "team" });
+			expect(link.getAttribute("href")).toBe("/team/");
+			// プロジェクトの中ではないので、ページを探す欄は出さない。
+			expect(screen.queryByRole("combobox", { name: "ページを探す" })).toBeNull();
+		});
+
+		it("ログインしていなければ、案内と、試し書きのページへのリンクを出す(プロジェクトの一覧は、読み込まない)", async () => {
+			const urls = stubServer({
+				"/api/me": () => Response.json({ user: null, login: ["google"] }),
+			});
+			open("/");
+
+			render(<App />);
+
+			const link = await screen.findByRole("link", { name: "試し書きのページ" });
+			expect(link.getAttribute("href")).toBe("/?playground");
+			expect(urls).toEqual(["/api/me"]);
+		});
+
+		it("URLに ?playground を付けると、保存されない試し書きのページを表示する", async () => {
+			const urls = stubServer();
+			open("/?playground");
+
+			render(<App />);
+
+			expect(screen.getByText(/この画面は試し書き用です/)).toBeDefined();
+			expect(screen.getAllByTestId("line").length).toBeGreaterThan(1);
+			await waitFor(() => expect(urls).toEqual(["/api/me"]));
+		});
 	});
 
-	it("トップでは、ページの一覧を表示する", async () => {
-		const list = { pages: [], total: 0 };
-		vi.stubGlobal("fetch", async () => new Response(JSON.stringify(list)));
+	describe("プロジェクトのトップ(/プロジェクト/)", () => {
+		it("ページの一覧を表示する。ヘッダーに、プロジェクトの名前と、ページを探す欄を出す", async () => {
+			stubServer({
+				"/api/projects/team/pages?sort=updated&offset=0": () =>
+					Response.json({ pages: [], total: 0 }),
+			});
+			open("/team/");
 
-		render(<App />);
+			render(<App />);
 
-		await waitFor(() => expect(screen.getByText(/まだページがありません/)).toBeDefined());
-		expect(screen.getByRole("region", { name: "ページの一覧" })).toBeDefined();
+			await waitFor(() => expect(screen.getByText(/まだページがありません/)).toBeDefined());
+			expect(screen.getByRole("region", { name: "ページの一覧" })).toBeDefined();
+			expect(screen.getByRole("link", { name: "team" }).getAttribute("href")).toBe("/team/");
+			expect(screen.getByRole("textbox", { name: "新しいページの名前" })).toBeDefined();
+			await waitFor(() =>
+				expect(screen.getByRole("combobox", { name: "ページを探す" })).toBeDefined(),
+			);
+		});
+
+		it("ログアウトしたら、ページを探す欄を作り直す(前に読み込んだ名前の候補を、残さない)", async () => {
+			let user: unknown = hanako;
+			let project = () => Response.json(team);
+			let titles = () => Response.json({ titles: ["秘密の計画"] });
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (url: string) => {
+					if (url === "/api/me") return Response.json({ user, login: ["google"] });
+					if (url === "/api/projects/team") return project();
+					if (url.startsWith("/api/projects/team/pages/titles")) return titles();
+					return Response.json({ pages: [], total: 0 });
+				}),
+			);
+			open("/team/");
+			render(<App />);
+			const search = await screen.findByRole("combobox", { name: "ページを探す" });
+			fireEvent.focus(search);
+			expect(await screen.findByRole("option", { name: "秘密の計画" })).toBeDefined();
+
+			// ログアウトした。非公開のプロジェクトなので、もう見られない。
+			user = null;
+			project = () => Response.json({ error: "unknown-project" }, { status: 404 });
+			titles = () => Response.json({ error: "unknown-project" }, { status: 404 });
+			fireEvent.click(screen.getByRole("button", { name: "ログアウト" }));
+
+			expect(await screen.findByText(/ないか、見る権限がありません/)).toBeDefined();
+			await waitFor(() =>
+				expect(screen.queryByRole("combobox", { name: "ページを探す" })).toBeNull(),
+			);
+			expect(screen.queryByText("秘密の計画")).toBeNull();
+		});
+
+		it("末尾に / のないURLは、/ を付けたURLにそろえる(ページへのリンクが、同じ階層を指すように)", () => {
+			stubServer();
+			open("/team?sort=title#x");
+
+			render(<App />);
+
+			const { pathname, search, hash } = window.location;
+			expect(`${pathname}${search}${hash}`).toBe("/team/?sort=title#x");
+		});
+
+		it("URLに ?q= で語が付いていれば、本文を探した結果を表示する(一覧は読み込まない)", async () => {
+			const search = `/api/projects/team/pages/search?q=${encodeURIComponent("牛乳")}`;
+			const urls = stubServer({ [search]: () => Response.json({ hits: [], more: false }) });
+			open(`/team/?q=${encodeURIComponent("牛乳")}`);
+
+			render(<App />);
+
+			await waitFor(() => expect(screen.getByText(/を含むページはありません/)).toBeDefined());
+			expect(urls).not.toContain("/api/projects/team/pages?sort=updated&offset=0");
+		});
+
+		it("メンバーでない人(公開のプロジェクトを見ている人)には、新しいページを作る欄を出さない", async () => {
+			stubServer({
+				"/api/projects/team": () => Response.json({ ...team, visibility: "public", role: null }),
+				"/api/projects/team/pages?sort=updated&offset=0": () =>
+					Response.json({ pages: [], total: 0 }),
+			});
+			open("/team/");
+
+			render(<App />);
+
+			await screen.findByRole("region", { name: "ページの一覧" });
+			expect(screen.queryByRole("textbox", { name: "新しいページの名前" })).toBeNull();
+		});
+
+		it("ないプロジェクト(見る権限のないプロジェクトも同じ)では、そのことを伝える。中身は読み込まない", async () => {
+			const urls = stubServer({
+				"/api/projects/team": () => Response.json({ error: "unknown-project" }, { status: 404 }),
+			});
+			open("/team/");
+
+			render(<App />);
+
+			expect(await screen.findByText(/ないか、見る権限がありません/)).toBeDefined();
+			expect(urls.filter((url) => url.includes("/pages?"))).toEqual([]);
+		});
 	});
 
-	it("ページのAPIが無効な環境では、トップに、保存されない試し書きのページを表示する", async () => {
-		const body = JSON.stringify({ error: "page-api-disabled" });
-		vi.stubGlobal("fetch", async () => new Response(body, { status: 403 }));
+	describe("ページ(/プロジェクト/ページ)", () => {
+		it("そのプロジェクトの、その名前のページを読み込む", async () => {
+			const urls = stubServer();
+			open(`/team/${encodeURIComponent("買い物")}`);
 
-		render(<App />);
+			render(<App />);
 
-		await waitFor(() => expect(screen.getByText(/この画面は試し書き用です/)).toBeDefined());
-		expect(screen.getAllByTestId("line").length).toBeGreaterThan(1);
-		// 探せるページがないので、探す欄も出さない。
-		expect(screen.queryByRole("combobox", { name: "ページを探す" })).toBeNull();
-	});
+			await waitFor(() =>
+				expect(urls).toContain(`/api/projects/team/pages/by-title/${encodeURIComponent("買い物")}`),
+			);
+		});
 
-	it("名前でページを探す欄を出す(どのページからでも探せる)", async () => {
-		vi.stubGlobal("fetch", async (url: string) =>
-			url.startsWith("/api/pages/titles")
-				? new Response(JSON.stringify({ titles: ["買い物"] }))
-				: new Promise<Response>(() => {}),
-		);
-		window.history.replaceState(null, "", `/${encodeURIComponent("メモ")}`);
+		it("メンバーでない人には、読むだけの表示にする", async () => {
+			const info = { id: "p1", title: "買い物", problem: null, pinned: false };
+			stubServer({
+				"/api/projects/team": () => Response.json({ ...team, visibility: "public", role: null }),
+				[`/api/projects/team/pages/by-title/${encodeURIComponent("買い物")}`]: () =>
+					Response.json(info),
+				"/api/projects/team/pages/p1": () =>
+					Response.json({ version: 1, lines: [{ id: "a", text: "買い物" }] }),
+				"/api/projects/team/pages/p1/links": () =>
+					Response.json({ missing: [], related: [], hops: [] }),
+			});
+			open(`/team/${encodeURIComponent("買い物")}`);
 
-		render(<App />);
+			render(<App />);
 
-		await waitFor(() =>
-			expect(screen.getByRole("combobox", { name: "ページを探す" })).toBeDefined(),
-		);
-	});
-
-	it("URLに ?q= で語が付いていれば、本文を探した結果を表示する(一覧は読み込まない)", async () => {
-		const fetchMock = vi.fn(async (url: string) =>
-			url.startsWith("/api/pages/search")
-				? new Response(
-						JSON.stringify({
-							hits: [{ id: "p1", title: "買い物", updated: 1000, lines: ["牛乳を買う"] }],
-							more: false,
-						}),
-					)
-				: new Response(JSON.stringify({ titles: [] })),
-		);
-		vi.stubGlobal("fetch", fetchMock);
-		window.history.replaceState(null, "", `/?q=${encodeURIComponent(" 牛乳 ")}`);
-
-		render(<App />);
-
-		await waitFor(() => expect(screen.getByRole("link", { name: "買い物" })).toBeDefined());
-		expect(screen.getByRole("heading", { level: 2 }).textContent).toBe(
-			"「牛乳」を本文から探した結果",
-		);
-		expect(screen.queryByRole("region", { name: "ページの一覧" })).toBeNull();
-		expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain(
-			"/api/pages?sort=updated&offset=0",
-		);
-	});
-
-	it("ページのAPIが無効な環境で ?q= の付いたURLを開いたら、トップと同じに、試し書きのページを表示する", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(
-				async () => new Response(JSON.stringify({ error: "page-api-disabled" }), { status: 403 }),
-			),
-		);
-		window.history.replaceState(null, "", `/?q=${encodeURIComponent("牛乳")}`);
-
-		render(<App />);
-
-		await waitFor(() => expect(screen.getByText(/この画面は試し書き用です/)).toBeDefined());
-		expect(screen.queryByText(/探せませんでした/)).toBeNull();
-	});
-
-	it("URLに ?playground を付けると、試し書きのページを表示する(一覧は読み込まない)", async () => {
-		const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify({ titles: [] })));
-		vi.stubGlobal("fetch", fetchMock);
-		window.history.replaceState(null, "", "/?playground");
-
-		render(<App />);
-
-		expect(screen.getByText(/この画面は試し書き用です/)).toBeDefined();
-		// 名前で探す欄のための問い合わせだけを行う。
-		await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-		// ログインの状態と、探す欄が使えるかの確認だけ。一覧は読み込まない。
-		expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/me", "/api/pages/titles?q="]);
-	});
-
-	it("トップ以外のパスでは、その名前のページを読み込む", async () => {
-		const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
-		vi.stubGlobal("fetch", fetchMock);
-		window.history.replaceState(null, "", `/${encodeURIComponent("メモ")}`);
-
-		render(<App />);
-
-		await waitFor(() =>
-			expect(fetchMock).toHaveBeenCalledWith(
-				`/api/pages/by-title/${encodeURIComponent("メモ")}`,
-				undefined,
-			),
-		);
-		expect(screen.getByRole("status").textContent).toBe("読み込んでいます…");
+			await waitFor(() =>
+				expect(screen.getByTestId("editor").getAttribute("data-readonly")).toBe("true"),
+			);
+		});
 	});
 });

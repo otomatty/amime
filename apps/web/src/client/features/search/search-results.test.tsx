@@ -51,7 +51,7 @@ describe("SearchResults(本文を探した結果)", () => {
 
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
 		expect(fetchMock).toHaveBeenCalledWith(
-			`/api/pages/search?q=${encodeURIComponent("牛乳")}`,
+			`/api/projects/team/pages/search?q=${encodeURIComponent("牛乳")}`,
 			undefined,
 		);
 		const [first, second] = screen.getAllByRole("listitem");
@@ -102,8 +102,8 @@ describe("SearchResults(本文を探した結果)", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
 	});
 
-	it("ページのAPIが無効な環境では、代わりの内容を表示する(探せなかった、とは言わない)", async () => {
-		stubSearch(() => json({ error: "page-api-disabled" }, 403));
+	it("権限がないときは、代わりの内容を表示する(探せなかった、とは言わない)", async () => {
+		stubSearch(() => json({ error: "read-only" }, 403));
 
 		render(<SearchResults query="牛乳" whenDisabled={<p>代わりの内容</p>} />);
 

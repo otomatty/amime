@@ -262,6 +262,17 @@ export class ProjectDO extends DurableObject {
 		return raced === null ? this.#insert(id, titleFromName(name), null, 0) : toInfo(raced);
 	}
 
+	/** 台帳に、そのIDのページがあるか(開いただけのページも含む)。 */
+	has(id: PageId): boolean {
+		return this.#byId(id) !== null;
+	}
+
+	/** 名前からページを引く。open と違って、まだないページのIDは決めない(台帳を変えない)。 */
+	find(name: string): PageInfo | null {
+		const existing = this.#byTitle(toTitleLc(name));
+		return existing === null ? null : toInfo(existing);
+	}
+
 	/**
 	 * まだないページのIDを決める。IDは、名前から決まる(プロジェクト、名前、0 から数えた番号のハッシュ)。
 	 *

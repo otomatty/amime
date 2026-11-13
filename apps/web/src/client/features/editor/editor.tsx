@@ -64,6 +64,11 @@ type EditorProps = {
 	 * 渡さなければ、補完しない。
 	 */
 	readonly completeTitles?: (query: string) => Promise<readonly string[]>;
+	/**
+	 * 読むだけにする(公開のプロジェクトを、メンバーでない人が見るとき)。
+	 * 入力を受け取る欄を置かず、カーソルも出さない。リンクは押せて、文字は選んでコピーできる。
+	 */
+	readonly readOnly?: boolean;
 };
 
 const NO_OTHERS: readonly RemoteCursor[] = [];
@@ -108,6 +113,7 @@ export function Editor({
 	onCursor,
 	missingLinks,
 	completeTitles,
+	readOnly = false,
 }: EditorProps) {
 	// 状態は、描画の外で、操作を受け取ったその場で進める(editor-store.ts を参照)。
 	const [store] = useState(() =>
@@ -393,36 +399,42 @@ export function Editor({
 			className="editor"
 			data-testid="editor"
 			data-focused={focused}
-			onMouseDown={handleMouseDown}
+			data-readonly={readOnly || undefined}
+			// 読むだけのときは、ブラウザの既定の動作(文字を選ぶ)に任せる。
+			onMouseDown={readOnly ? undefined : handleMouseDown}
 		>
 			{/* 行より前に置く。Tab の順序が「編集欄 → 本文中のリンク」になり、Shift+Tab では編集欄の前へ抜けられる。 */}
-			<textarea
-				ref={inputRef}
-				className="editor-input"
-				aria-label="ページの本文"
-				autoCapitalize="off"
-				autoComplete="off"
-				autoCorrect="off"
-				spellCheck={false}
-				rows={1}
-				aria-autocomplete={completeTitles ? "list" : undefined}
-				aria-controls={completion ? completionId : undefined}
-				aria-activedescendant={
-					completion && completion.active >= 0 ? `${completionId}-${completion.active}` : undefined
-				}
-				onInput={handleInput}
-				onKeyDown={handleKeyDown}
-				onCopy={copySelection}
-				onCut={handleCut}
-				onCompositionStart={handleCompositionStart}
-				onCompositionUpdate={handleCompositionUpdate}
-				onCompositionEnd={handleCompositionEnd}
-				onFocus={() => {
-					revealCaret.current = true;
-					setFocused(true);
-				}}
-				onBlur={() => setFocused(false)}
-			/>
+			{!readOnly && (
+				<textarea
+					ref={inputRef}
+					className="editor-input"
+					aria-label="ページの本文"
+					autoCapitalize="off"
+					autoComplete="off"
+					autoCorrect="off"
+					spellCheck={false}
+					rows={1}
+					aria-autocomplete={completeTitles ? "list" : undefined}
+					aria-controls={completion ? completionId : undefined}
+					aria-activedescendant={
+						completion && completion.active >= 0
+							? `${completionId}-${completion.active}`
+							: undefined
+					}
+					onInput={handleInput}
+					onKeyDown={handleKeyDown}
+					onCopy={copySelection}
+					onCut={handleCut}
+					onCompositionStart={handleCompositionStart}
+					onCompositionUpdate={handleCompositionUpdate}
+					onCompositionEnd={handleCompositionEnd}
+					onFocus={() => {
+						revealCaret.current = true;
+						setFocused(true);
+					}}
+					onBlur={() => setFocused(false)}
+				/>
+			)}
 			{groups.map((group) => {
 				const lines = state.lines.slice(group.start, group.end).map((text, offset) => {
 					const index = group.start + offset;

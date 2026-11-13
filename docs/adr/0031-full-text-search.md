@@ -1,6 +1,6 @@
 # ADR-0031: 本文からページを探す
 
-- 状態: 採用(Cloudflare 上での動作は未確認。手元の Workers ランタイムで確認した)
+- 状態: 採用(Cloudflare 上での動作は未確認。手元の Workers ランタイムで確認した。公開環境での扱いとURLは [ADR-0033](0033-projects-and-access.md) で変更)
 - 日付: 2026-11-13
 - 関連: [ADR-0029](0029-search-pages-by-title.md)(名前で探す。探す欄に、本文から探す項目を足す)、[ADR-0025](0025-page-index-and-list.md)(台帳への反映)、[ADR-0003](0003-platform-cloudflare.md)
 

@@ -1,0 +1,54 @@
+.project-home {
+	padding: 1rem 1.25rem;
+	background: var(--color-paper);
+	border: 1px solid var(--color-border);
+	border-radius: 0.5rem;
+}
+
+.project-home h2,
+.project-create h3 {
+	margin: 0 0 0.5rem;
+	font-size: 1.1rem;
+}
+
+.project-list {
+	display: grid;
+	gap: 0.4rem;
+	padding: 0;
+	margin: 0 0 1rem;
+	list-style: none;
+}
+
+.project-list li {
+	display: flex;
+	gap: 0.75rem;
+	align-items: baseline;
+}
+
+.project-visibility {
+	color: var(--color-muted);
+	font-size: 0.85rem;
+}
+
+.project-create {
+	display: grid;
+	gap: 0.6rem;
+	max-width: 28rem;
+	padding-top: 1rem;
+	border-top: 1px solid var(--color-border);
+}
+
+.project-create label {
+	display: grid;
+	gap: 0.2rem;
+	font-size: 0.9rem;
+}
+
+.project-create button {
+	justify-self: start;
+}
+
+.project-error {
+	margin: 0;
+	color: var(--color-warning);
+}

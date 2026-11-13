@@ -12,3 +12,5 @@ coverage/
 playwright-report/
 test-results/
 *.tsbuildinfo
+.auth/
+secrets*.json
