@@ -156,6 +156,34 @@ describe("restorePage", () => {
 			]);
 		});
 
+		it("古い記録が戻した行への書き換えは、もう一度載せる(サーバーには行がなく、効いていない)", async () => {
+			// 古い記録: 消した行 x を、取り消しで戻した(まだ送っていない)。
+			// 新しい記録: その行 x を書き換えた。送り直しても、サーバーには行がないので効かない。
+			const { snapshot, api, pending } = setup([
+				{
+					inflight: null,
+					changes: [
+						{ type: "insert", line: line("x", "元の本文"), after: "b" as LineId, before: null },
+					],
+				},
+				{
+					inflight: commit("c2", {
+						type: "update",
+						id: "x" as LineId,
+						text: "新しい本文",
+						base: "元の本文",
+					}),
+					changes: [],
+				},
+			]);
+			api.commit.mockResolvedValueOnce({ version: 3, applied: [] });
+
+			expect((await restorePage(api, pending)).restored).toEqual([
+				...snapshot.lines,
+				line("x", "新しい本文"),
+			]);
+		});
+
 		it("同じ行の本文の書き換えは、どちらも残る。新しい記録の変更を2重に載せない(ADR-0022)", async () => {
 			const typed = (text: string): Change => ({
 				type: "update",
