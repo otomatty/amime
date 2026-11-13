@@ -385,8 +385,9 @@ describe("Page", () => {
 
 			render(<Page name="kaimono_MEMO" />);
 
-			await waitFor(() => expect(lines()).toEqual(["買い物"]));
-			expect(path()).toBe("/notes/Kaimono_Memo");
+			// URLは、編集欄を表示したあとで合わせる。
+			await waitFor(() => expect(path()).toBe("/notes/Kaimono_Memo"));
+			expect(lines()).toEqual(["買い物"]);
 		});
 
 		it("ページの名前が変わったと知らされたら、URLを新しい名前に合わせる(再読み込みしても同じページが開く)", async () => {
