@@ -53,9 +53,11 @@ export function hasUnsaved(session: Session): boolean {
 	return session.inflight !== null || !sameLines(session.confirmed, session.local);
 }
 
+/** 変更を送るときの、本文の長さ。本文を置き換える変更は、元にした本文も一緒に送る。 */
 function textLength(change: Change): number {
 	if (change.type === "insert") return change.line.text.length;
-	return change.type === "update" ? change.text.length : 0;
+	// join は、ない要素(元にした本文を持たない変更)を空文字として扱う。
+	return change.type === "update" ? [change.text, change.base].join("").length : 0;
 }
 
 /**

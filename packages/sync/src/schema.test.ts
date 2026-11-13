@@ -84,6 +84,15 @@ describe("変更の検査", () => {
 		expect(parseChanges(changes)).toEqual({ ok: true, value: changes });
 	});
 
+	it("本文を置き換える変更は、元にした本文(base)を持てる", () => {
+		const changes = [
+			{ ...update, base: "題" },
+			{ ...update, base: "" },
+		];
+
+		expect(parseChanges(changes)).toEqual({ ok: true, value: changes });
+	});
+
 	it("定義にない項目は取り除く", () => {
 		expect(parseChanges([{ ...remove, extra: 1 }])).toEqual({ ok: true, value: [remove] });
 	});
@@ -97,6 +106,9 @@ describe("変更の検査", () => {
 		["本文が文字列でない", [{ type: "update", id: "a", text: 1 }]],
 		["本文に改行がある", [{ type: "update", id: "a", text: "a\nb" }]],
 		["本文が長すぎる", [{ type: "update", id: "a", text: "a".repeat(MAX_LINE_LENGTH + 1) }]],
+		["元にした本文が文字列でない", [{ ...update, base: 1 }]],
+		["元にした本文に改行がある", [{ ...update, base: "a\nb" }]],
+		["元にした本文が長すぎる", [{ ...update, base: "a".repeat(MAX_LINE_LENGTH + 1) }]],
 		["位置がない", [{ type: "move", id: "a" }]],
 		["変更が多すぎる", Array.from({ length: MAX_CHANGES + 1 }, () => remove)],
 	])("%s入力は受け付けない", (_name, input) => {
@@ -157,7 +169,8 @@ describe("parsePendingRecord", () => {
 	});
 
 	it("送れない長さの本文も受け付ける(復元して、直してもらうため)", () => {
-		const changes = [{ type: "update", id: "a", text: "a".repeat(MAX_LINE_LENGTH + 1) }];
+		const long = "a".repeat(MAX_LINE_LENGTH + 1);
+		const changes = [{ type: "update", id: "a", text: long, base: `${long}b` }];
 		const record = { savedAt: 1, entries: [{ inflight: { id: "c1", changes }, changes }] };
 
 		expect(parsePendingRecord(JSON.stringify(record)).ok).toBe(true);

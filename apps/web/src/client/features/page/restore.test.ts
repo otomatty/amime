@@ -84,47 +84,82 @@ describe("restorePage", () => {
 		expect(result.restored).toEqual([line("a", "2"), line("b", "2")]);
 	});
 
-	it("古い記録のまだ送っていなかった変更が、新しい記録の送信中だったコミットを上書きしない", async () => {
+	describe("記録が複数あるとき、古い記録のまだ送っていなかった変更と、新しい記録の送信中だったコミット", () => {
 		// 古い記録の変更はまだ画面の上にしかないのに、新しい記録のコミットは先にサーバーに入る。
 		// そのまま載せると、古い変更が新しい変更に勝ってしまう。
-		const { api, pending } = setup([
-			{ inflight: null, changes: [update("a", "古い"), update("b", "B2")] },
-			{ inflight: commit("c2", update("a", "新しい")), changes: [] },
-		]);
-		api.load.mockResolvedValueOnce({ version: 4, lines: [line("a", "新しい"), line("b", "B")] });
+		const three = [line("a", "A"), line("b", "B"), line("c", "C")];
+		const cToTop: Change = { type: "move", id: "c" as LineId, after: null, before: "a" as LineId };
+		const cAfterA: Change = {
+			type: "move",
+			id: "c" as LineId,
+			after: "a" as LineId,
+			before: "b" as LineId,
+		};
 
-		expect(await restorePage(api, pending)).toMatchObject({
-			restored: [line("a", "新しい"), line("b", "B2")],
-			noticed: true,
+		it("行の並べ替えは、新しい記録のものが勝つ", async () => {
+			const { api, pending } = setup([
+				{ inflight: null, changes: [cToTop, update("b", "B2")] },
+				{ inflight: commit("c2", cAfterA), changes: [] },
+			]);
+			api.load.mockResolvedValueOnce({
+				version: 4,
+				lines: [line("a", "A"), line("c", "C"), line("b", "B")],
+			});
+
+			expect(await restorePage(api, pending)).toMatchObject({
+				restored: [line("a", "A"), line("c", "C"), line("b", "B2")],
+				noticed: true,
+			});
 		});
-	});
 
-	it("新しい記録のコミットが以前にサーバーに入っていたものなら、古い記録のまだ送っていなかった変更が後になる", async () => {
-		// 以前に入っていたコミットを画面に載せ直すと、そのあとに他の人がした変更を上書きしてしまう。
-		const { api, pending } = setup([
-			{ inflight: null, changes: [update("a", "古い")] },
-			{ inflight: commit("c2", update("a", "新しい"), update("b", "B2")), changes: [] },
-		]);
-		api.commit.mockResolvedValueOnce({ version: 9, applied: [], duplicate: true });
-		api.load.mockResolvedValueOnce({
-			version: 9,
-			lines: [line("a", "新しい"), line("b", "他の人")],
+		it("載せた結果が読み込んだページと同じなら、載せ直す変更はない", async () => {
+			const { api, pending } = setup([
+				{ inflight: null, changes: [cToTop] },
+				{ inflight: commit("c2", cAfterA), changes: [] },
+			]);
+			api.load.mockResolvedValueOnce({
+				version: 4,
+				lines: [line("a", "A"), line("c", "C"), line("b", "B")],
+			});
+
+			expect(await restorePage(api, pending)).toMatchObject({ restored: null, noticed: true });
 		});
 
-		expect((await restorePage(api, pending)).restored).toEqual([
-			line("a", "古い"),
-			line("b", "他の人"),
-		]);
-	});
+		it("新しい記録のコミットが以前にサーバーに入っていたものなら、古い記録の変更が後になる", async () => {
+			// 以前に入っていたコミットを画面に載せ直すと、そのあとに他の人がした変更を上書きしてしまう。
+			const { api, pending } = setup([
+				{ inflight: null, changes: [update("b", "B2")] },
+				{ inflight: commit("c2", cAfterA), changes: [] },
+			]);
+			api.commit.mockResolvedValueOnce({ version: 9, applied: [], duplicate: true });
+			// コミットが入ったあとで、他の人が c を末尾に戻した。
+			api.load.mockResolvedValueOnce({ version: 9, lines: three });
 
-	it("載せた結果が読み込んだページと同じなら、載せ直す変更はない", async () => {
-		const { api, pending } = setup([
-			{ inflight: null, changes: [update("a", "古い")] },
-			{ inflight: commit("c2", update("a", "新しい")), changes: [] },
-		]);
-		api.load.mockResolvedValueOnce({ version: 4, lines: [line("a", "新しい"), line("b", "B")] });
+			expect((await restorePage(api, pending)).restored).toEqual([
+				line("a", "A"),
+				line("b", "B2"),
+				line("c", "C"),
+			]);
+		});
 
-		expect(await restorePage(api, pending)).toMatchObject({ restored: null, noticed: true });
+		it("同じ行の本文の書き換えは、どちらも残る。新しい記録の変更を2重に載せない(ADR-0022)", async () => {
+			const typed = (text: string): Change => ({
+				type: "update",
+				id: "a" as LineId,
+				text,
+				base: "晴れ",
+			});
+			const { api, pending } = setup([
+				{ inflight: null, changes: [typed("晴れです")] },
+				{ inflight: commit("c2", typed("晴れだ")), changes: [] },
+			]);
+			api.load.mockResolvedValueOnce({ version: 4, lines: [line("a", "晴れだ"), line("b", "B")] });
+
+			expect((await restorePage(api, pending)).restored).toEqual([
+				line("a", "晴れだです"),
+				line("b", "B"),
+			]);
+		});
 	});
 
 	it("サーバーに断られたコミットは、まだ送っていなかった変更として載せる", async () => {

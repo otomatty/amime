@@ -11,6 +11,10 @@ describe("itemAt", () => {
 		expect(itemAt([null], 0)).toBeNull();
 	});
 
+	it("型付き配列にも使える", () => {
+		expect(itemAt(new Uint16Array([7, 8]), 1)).toBe(8);
+	});
+
 	it("範囲外なら InvariantError を投げる", () => {
 		expect(() => itemAt(["a"], 1)).toThrow(InvariantError);
 		expect(() => itemAt(["a"], -1)).toThrow("index -1 is out of range");

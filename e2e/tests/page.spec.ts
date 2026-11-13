@@ -160,6 +160,61 @@ test.describe("同時編集", () => {
 		await expectLines(page, expected);
 	});
 
+	test("2つのタブで同じ行を同時に書き換えても、どちらの入力も残り、カーソルは打っていた場所に残る", async ({
+		page,
+		context,
+	}) => {
+		const { name, other } = await openInTwoTabs(page, context);
+		// 最初のタブの保存を、サーバーに届く前で止めておく(2つのタブが、同じ本文を元に書き換えた状態を作る)。
+		let release = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await page.route("**/commits", async (route) => {
+			await held;
+			await route.continue();
+		});
+		await clickLineEnd(page, 1);
+		await page.keyboard.type("です");
+		await expect(status(page)).toHaveText("保存しています…");
+
+		// 別のタブが、同じ行の先頭に書き足す。
+		await clickLineEnd(other, 1);
+		await other.keyboard.press("Home");
+		await andWaitForSave(other, () => other.keyboard.type("たぶん"));
+
+		// 最初のタブに届く。自分の入力は残り、カーソルは「です」のあとに残る。
+		await expectLines(page, [name, "たぶん最初の行です"]);
+		await page.keyboard.type("。");
+		release();
+
+		const expected = [name, "たぶん最初の行です。"];
+		await expectLines(page, expected);
+		await expectLines(other, expected);
+		await expect(status(page)).toHaveText("保存済み");
+		await page.reload();
+		await expectLines(page, expected);
+	});
+
+	test("自分が書き換えた行を他の人も書き換えていても、自分の入力だけを取り消せる", async ({
+		page,
+		context,
+	}) => {
+		const { name, other } = await openInTwoTabs(page, context);
+		await clickLineEnd(page, 1);
+		await andWaitForSave(page, () => page.keyboard.type("です"));
+
+		await clickLineEnd(other, 1);
+		await other.keyboard.press("Home");
+		await other.keyboard.type("たぶん");
+		await expectLines(page, [name, "たぶん最初の行です"]);
+
+		await page.keyboard.press("ControlOrMeta+z");
+
+		await expectLines(page, [name, "たぶん最初の行"]);
+		await expectLines(other, [name, "たぶん最初の行"]);
+	});
+
 	test("他の人の変更が届いても、自分のカーソルは同じ行に残り、続けて書ける", async ({
 		page,
 		context,

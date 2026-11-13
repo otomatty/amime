@@ -3,6 +3,7 @@ import {
 	type Line,
 	type LineId,
 	type LineTracker,
+	mapColumn,
 	type OwnEdit,
 	reapplyEdit,
 	recordEdit,
@@ -220,13 +221,29 @@ export function redo(history: History): History {
 }
 
 /**
+ * 行の本文が書き換えられていたら、位置を、同じ文字のそばに移す(ADR-0022)。
+ * 他の人がカーソルより前に文字を足したり消したりしても、カーソルが打っている場所からずれないようにする。
+ */
+function followText(before: readonly Line[], after: readonly Line[], anchor: Anchor): Anchor {
+	const previous = before.find((line) => line.id === anchor.id);
+	const next = after.find((line) => line.id === anchor.id);
+	if (previous === undefined || next === undefined || previous.text === next.text) return anchor;
+	return { id: anchor.id, column: mapColumn(previous.text, next.text, anchor.column) };
+}
+
+/**
  * 画面の文書を、外から届いた文書(他の人の変更を取り込んだもの)に置き換える。
- * カーソルと選択は、同じ行についていく。履歴はそのまま残る。
+ * カーソルと選択は、同じ行の、同じ文字のそばについていく。履歴はそのまま残る。
  * 続けて打っていた入力のまとまりは、ここで区切る(他の人の変更を、自分の編集に含めないため)。
  */
 export function replaceLines(history: History, lines: readonly Line[]): History {
 	const tracker = withLine({ ...history.tracker, lines });
-	const position = capture(history.present, history.tracker.lines);
+	const captured = capture(history.present, history.tracker.lines);
+	const follow = (anchor: Anchor): Anchor => followText(history.tracker.lines, lines, anchor);
+	const position = {
+		cursor: follow(captured.cursor),
+		anchor: captured.anchor && follow(captured.anchor),
+	};
 	return {
 		...history,
 		present: restore(tracker.lines, position, history.present.cursor),

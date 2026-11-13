@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { applyChanges, diffLines } from "./changes.ts";
+import { MAX_LINE_LENGTH } from "./schema.ts";
 import type { Change, Line, LineId } from "./types.ts";
 
 const id = (value: string): LineId => value as LineId;
@@ -87,6 +88,69 @@ describe("applyChanges", () => {
 
 			expect(result).toEqual({ lines: base, applied: [] });
 		});
+
+		describe("元にした本文(base)つき", () => {
+			const lines = [line("a", "今日は晴れ")];
+			const update = (text: string, from: string): Change => ({
+				type: "update",
+				id: id("a"),
+				text,
+				base: from,
+			});
+
+			it("元にした本文のままなら、置き換える", () => {
+				const result = applyChanges(lines, [update("今日は雨", "今日は晴れ")]);
+
+				expect(result.lines).toEqual([line("a", "今日は雨")]);
+			});
+
+			it("元にした本文から他の人が書き換えていたら、文字単位で統合する", () => {
+				const current = [line("a", "今日は晴れです")];
+
+				const result = applyChanges(current, [update("たぶん今日は晴れ", "今日は晴れ")]);
+
+				expect(result.lines).toEqual([line("a", "たぶん今日は晴れです")]);
+			});
+
+			it("効いた変更は、統合した結果への置き換えになる(元にした本文は持たない)", () => {
+				const current = [line("a", "今日は晴れです")];
+
+				const { applied } = applyChanges(current, [update("たぶん今日は晴れ", "今日は晴れ")]);
+
+				expect(applied).toEqual([{ type: "update", id: id("a"), text: "たぶん今日は晴れです" }]);
+				expect(applyChanges(current, applied).lines).toEqual([line("a", "たぶん今日は晴れです")]);
+			});
+
+			it("統合しても本文が変わらなければ、何もしない", () => {
+				// 消そうとした文字は、他の人がもう消している。
+				const current = [line("a", "今日晴れ!")];
+
+				expect(applyChanges(current, [update("今日晴れ", "今日は晴れ")])).toEqual({
+					lines: current,
+					applied: [],
+				});
+			});
+
+			it("統合した本文が長さの上限を超えるなら、あとから届いた本文にする", () => {
+				const half = MAX_LINE_LENGTH / 2;
+				const current = [line("a", `${"あ".repeat(half)}元`)];
+				const incoming = `元${"い".repeat(half + 1)}`;
+
+				const result = applyChanges(current, [update(incoming, "元")]);
+
+				expect(result.lines).toEqual([line("a", incoming)]);
+			});
+
+			it("元にした本文がない変更は、あとから届いた本文に置き換える", () => {
+				const current = [line("a", "今日は晴れです")];
+
+				const result = applyChanges(current, [
+					{ type: "update", id: id("a"), text: "たぶん今日は晴れ" },
+				]);
+
+				expect(result.lines).toEqual([line("a", "たぶん今日は晴れ")]);
+			});
+		});
 	});
 
 	describe("delete", () => {
@@ -171,7 +235,7 @@ describe("diffLines", () => {
 
 	it("本文だけが変わった行は update になる", () => {
 		expect(diffLines([line("a")], [line("a", "A2")])).toEqual([
-			{ type: "update", id: id("a"), text: "A2" },
+			{ type: "update", id: id("a"), text: "A2", base: "A" },
 		]);
 	});
 
@@ -210,7 +274,7 @@ describe("diffLines", () => {
 
 		expect(diffLines(before, [line("b"), line("c"), line("a", "A2")])).toEqual([
 			move("a", "c", null),
-			{ type: "update", id: id("a"), text: "A2" },
+			{ type: "update", id: id("a"), text: "A2", base: "A" },
 		]);
 	});
 });
@@ -306,7 +370,13 @@ describe("applyChanges の性質", () => {
 		fc.record({
 			type: fc.constant("update" as const),
 			id: lineId,
-			text: fc.constantFrom("1", "2"),
+			text: fc.constantFrom("1", "2", "A1"),
+		}),
+		fc.record({
+			type: fc.constant("update" as const),
+			id: lineId,
+			text: fc.constantFrom("1", "A2", "2B"),
+			base: fc.constantFrom("A", "B", "1"),
 		}),
 		fc.record({ type: fc.constant("delete" as const), id: lineId }),
 		fc.record({ type: fc.constant("move" as const), id: lineId, after: anchor, before: anchor }),

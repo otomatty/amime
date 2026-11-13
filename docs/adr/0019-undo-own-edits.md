@@ -1,6 +1,6 @@
 # ADR-0019: 取り消しは、自分の編集だけを打ち消す
 
-- 状態: 採用
+- 状態: 採用(他の人も書き換えた行の取り消しは [ADR-0022](0022-merge-within-a-line.md) で置き換え)
 - 日付: 2026-11-12
 - 関連: [ADR-0014](0014-selection-clipboard-undo.md)(取り消しの方式を、このADRで置き換える)、[ADR-0016](0016-changes-and-line-ids.md)、[ADR-0018](0018-realtime-delivery.md)
 

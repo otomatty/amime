@@ -1,6 +1,6 @@
 # ADR-0021: コミットに識別子を付け、同じコミットを二重に適用しない
 
-- 状態: 採用
+- 状態: 採用(復元でもう一度載せる変更の範囲は [ADR-0022](0022-merge-within-a-line.md) で置き換え)
 - 日付: 2026-11-13
 - 関連: [ADR-0016](0016-changes-and-line-ids.md)、[ADR-0017](0017-page-storage-and-api.md)(送信に失敗したときの扱いを、このADRで置き換える)、[ADR-0020](0020-pending-changes-on-device.md)(端末内に残す記録の形を、このADRで置き換える)
 

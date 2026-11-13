@@ -29,37 +29,42 @@ function writtenTexts(changes: readonly Change[]): Map<LineId, string> {
 }
 
 /**
- * 変更を適用する。ただし、行の本文を置き換える変更と、行を消す変更は、
+ * 変更を適用する。ただし、行を消す変更は、
  * その行の本文が expected(自分が最後に書き込んだ本文)のままのときにだけ適用する。
- * 他の人がその行を書き換えていたら、その人の変更を残す。
+ * 他の人がその行を書き換えていたら、その人の書いたものごと消してしまうので、行を残す。
+ *
+ * 行の本文を置き換える変更は、いつも適用する。他の人がその行を書き換えていたら、
+ * 変更が元にした本文(自分が最後に書き込んだ本文)との違いから、自分の変更だけを文字単位で適用する(ADR-0022)。
  */
-function applyToUntouched(
+function applyKeepingOthers(
 	document: readonly Line[],
 	changes: readonly Change[],
 	expected: ReadonlyMap<LineId, string>,
 ): readonly Line[] {
 	const current = new Map(document.map((line) => [line.id, line.text]));
-	const untouched = changes.filter(
-		(change) =>
-			(change.type !== "update" && change.type !== "delete") ||
-			current.get(change.id) === expected.get(change.id),
+	const applicable = changes.filter(
+		(change) => change.type !== "delete" || current.get(change.id) === expected.get(change.id),
 	);
-	return applyChanges(document, untouched).lines;
+	return applyChanges(document, applicable).lines;
 }
 
 /**
  * 自分の編集を打ち消す(取り消し)。他の人の変更は巻き戻さない。
- * - 自分が書き換えた行: 本文が自分の書いたままなら、書き換える前に戻す
+ * - 自分が書き換えた行: 書き換える前に戻す。他の人も書き換えていたら、自分の変更だけを打ち消す
  * - 自分が足した行: 本文が自分の書いたままなら、消す
  * - 自分が消した行: 同じ行IDで、元の位置(前後の行がなければ近い位置)に戻す
  * - 自分が動かした行: 元の位置に戻す
  * 対象の行がなくなっている変更は、何もしない。打ち消せる変更が1つもなければ、同じ文書を返す。
  */
 export function revertEdit(document: readonly Line[], edit: OwnEdit): readonly Line[] {
-	return applyToUntouched(document, edit.backward, writtenTexts(edit.forward));
+	return applyKeepingOthers(document, edit.backward, writtenTexts(edit.forward));
 }
 
-/** 打ち消した編集を、もう一度行う(やり直し)。打ち消したあとに他の人が書き換えた行には、行わない。 */
+/**
+ * 打ち消した編集を、もう一度行う(やり直し)。
+ * 打ち消したあとに他の人が書き換えた行には、その人の変更を残して行う。
+ * 打ち消して戻した行を他の人が書き換えていたら、その行は消さない。
+ */
 export function reapplyEdit(document: readonly Line[], edit: OwnEdit): readonly Line[] {
-	return applyToUntouched(document, edit.forward, writtenTexts(edit.backward));
+	return applyKeepingOthers(document, edit.forward, writtenTexts(edit.backward));
 }
