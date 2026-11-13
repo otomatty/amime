@@ -103,6 +103,16 @@ function hitRanges(text: string, terms: readonly string[]): Range[] {
 }
 
 /**
+ * text の中で、最初に語に合う位置(元の文字列での位置)。どこにも合わなければ、先頭(0)。
+ * 合う場所のすべては求めない(長い行に、語がとても多くの場所で合うことがある)。
+ */
+function firstHit(text: string, terms: readonly string[]): number {
+	const { folded, origins } = foldWithOrigins(text);
+	const found = terms.map((term) => folded.indexOf(term)).filter((at) => at !== -1);
+	return found.length === 0 ? 0 : itemAt(origins, Math.min(...found)).start;
+}
+
+/**
  * 文字列の両端に、組の片方だけになった文字(サロゲート)があれば、取り除く。
  * 2つの符号単位で表す文字の途中で切ると、先頭に後ろ半分が、末尾に前半分が残る。
  */
@@ -114,10 +124,7 @@ function wellFormed(text: string): string {
 /** 長い行を、最初に語に合うところのまわりだけにする。切ったところには「…」を付ける。 */
 function clip(line: string, terms: readonly string[]): string {
 	if (line.length <= SNIPPET_LENGTH) return line;
-	// 最初に語に合うところ。なければ、先頭から切り出す。
-	const hit = hitRanges(line, terms)
-		.slice(0, 1)
-		.reduce((_head, range) => range.start, 0);
+	const hit = firstHit(line, terms);
 	const start = Math.max(Math.min(hit - SNIPPET_LEAD, line.length - SNIPPET_LENGTH), 0);
 	const end = start + SNIPPET_LENGTH;
 	const body = wellFormed(line.slice(start, end));

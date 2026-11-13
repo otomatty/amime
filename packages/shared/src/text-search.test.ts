@@ -114,6 +114,30 @@ describe("matchingLines(語を含む行を取り出す)", () => {
 		expect(work).toBeLessThan(line.length * 200);
 		expect(snippet.endsWith("needle")).toBe(true);
 	});
+	it("長い行に、語がとても多くの場所で合っても、最初に合う位置だけを求める", () => {
+		const line = "a".repeat(20_000);
+		const terms = textTerms(
+			Array.from({ length: 18 }, (_value, index) => "a".repeat(index + 1)).join(" "),
+		);
+		const indexOf = vi.spyOn(String.prototype, "indexOf");
+
+		const [snippet = ""] = matchingLines([line], terms, 3);
+
+		const calls = indexOf.mock.calls.length;
+		indexOf.mockRestore();
+		// 合う場所のすべて(約36万)を、数え上げない。
+		expect(calls).toBeLessThan(1000);
+		expect(snippet).toBe(`${"a".repeat(SNIPPET_LENGTH)}…`);
+	});
+
+	it("語が行のどこにあるか分からないとき(合わさる文字が、まとまりの上限を超えて続く)は、先頭から切り出す", () => {
+		// シグマは、語の終わりかどうかで形が変わる。70続く形は、64ごとに区切ったまとまりの中には現れない。
+		const line = `${"Σ".repeat(200)}${"後".repeat(200)}`;
+
+		const [snippet = ""] = matchingLines([line], textTerms("σ".repeat(70)), 3);
+
+		expect(snippet).toBe(`${line.slice(0, SNIPPET_LENGTH)}…`);
+	});
 });
 
 describe("highlight(語に合うところに印を付けるために、文字列を分ける)", () => {
