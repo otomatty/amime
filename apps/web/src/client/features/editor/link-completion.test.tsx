@@ -147,6 +147,20 @@ describe("useLinkCompletion(リンクを書いている途中の、名前の候�
 		expect(state()).toBe(opened("買", ["一", "二"], -1));
 	});
 
+	it("候補の並びが変わっても(書ける候補が増えた)、選んでいた名前を選んだままにする", async () => {
+		// 行の後ろにバッククォートがあるあいだは、「buy` stuff」は書けない(コードになってしまう)。
+		const search: Search = async () => ["buy` stuff", "buy"];
+		const { rerender } = render(<Harness text="[bu`" column={3} search={search} />);
+		await waitFor(() => expect(state()).toBe(opened("bu", ["buy"], -1)));
+		press("down");
+		expect(state()).toBe(opened("bu", ["buy"], 0));
+
+		// 後ろのバッククォートを消した。入力した名前の一部は、変わっていない。
+		rerender(<Harness text="[bu" column={3} search={search} />);
+
+		expect(state()).toBe(opened("bu", ["buy` stuff", "buy"], 1));
+	});
+
 	it("あとから届いた、前の入力への応答は使わない", async () => {
 		let releaseOld: (titles: readonly string[]) => void = () => {};
 		const search: Search = (query) =>

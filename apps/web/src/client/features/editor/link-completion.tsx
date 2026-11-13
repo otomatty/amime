@@ -48,11 +48,12 @@ export function useLinkCompletion({ text, column, line, role, search }: Completi
 		readonly query: string;
 		readonly titles: readonly string[];
 	} | null>(null);
-	const [active, setActive] = useState(-1);
+	// 選んでいる候補の名前。番号ではなく名前で覚える(候補の並びが変わっても、別の名前を選んだことにならない)。
+	const [picked, setPicked] = useState<string | null>(null);
 	// リンクから離れたり、入力が変わったりしたら、選んでいた候補を外す。
 	// 戻ってきたときに、前の選択が残っていると、Enter で意図しない補完をしてしまう。
 	// biome-ignore lint/correctness/useExhaustiveDependencies: anchor と query は、外すきっかけとして使う。
-	useEffect(() => setActive(-1), [anchor, query]);
+	useEffect(() => setPicked(null), [anchor, query]);
 	// 候補を閉じたリンク。同じリンクを書いているあいだは、候補を出さない。
 	const [dismissed, setDismissed] = useState<string | null>(null);
 	// そのリンクから離れたら(消した、別のリンクへ移った)、閉じたことを忘れる。
@@ -70,7 +71,7 @@ export function useLinkCompletion({ text, column, line, role, search }: Completi
 					// 入力が進んだあとに届いた、前の入力への候補は使わない。
 					if (cancelled) return;
 					setFound({ anchor, query, titles });
-					setActive(-1);
+					setPicked(null);
 				},
 				// 探せなくても、入力は続けられる。
 				() => {},
@@ -92,6 +93,7 @@ export function useLinkCompletion({ text, column, line, role, search }: Completi
 				: [],
 		[current, found, link, text, role],
 	);
+	const active = picked === null ? -1 : titles.indexOf(picked);
 	const completion: Completion | null =
 		link === null || titles.length === 0 ? null : { link, titles, active };
 
@@ -103,7 +105,8 @@ export function useLinkCompletion({ text, column, line, role, search }: Completi
 			const count = titles.length;
 			if (count === 0) return;
 			// どれも選んでいないときは、下へ動かすと最初、上へ動かすと最後を選ぶ。
-			setActive((selected) => (Math.max(selected, step === 1 ? -1 : 0) + step + count) % count);
+			const next = (Math.max(active, step === 1 ? -1 : 0) + step + count) % count;
+			setPicked(titles[next] ?? null);
 		},
 		/** 候補を閉じる。同じリンクを書いているあいだは、もう出さない。 */
 		dismiss(): void {

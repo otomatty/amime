@@ -40,6 +40,22 @@ function linkAt(text: string, column: number, role: LineRole): LinkNode | null {
 }
 
 /**
+ * カーソルが、ページへのリンクでもタグでもない記法(アイコン、外部リンク、数式、コードなど)の中にあるか。
+ * 中に他の記法を書ける記法(装飾、強調、引用)は、数えない。
+ */
+function insideOtherNotation(text: string, column: number, role: LineRole): boolean {
+	return inlineNodes(parseLine(text, role)).some(
+		(node) =>
+			node.type !== "text" &&
+			node.type !== "page-link" &&
+			node.type !== "hashtag" &&
+			!("children" in node) &&
+			node.start < column &&
+			column < node.end,
+	);
+}
+
+/**
  * 行の中のカーソルの位置で、ページへのリンクを書いている途中なら、その範囲と、入力した名前の一部を返す。
  * 括弧のリンク([名前)と、タグ(#名前)を対象にする。装飾や外部リンクなど、他の記法は対象にしない。
  * role は、ページの中でのその行の役割。コードブロックの中などの、リンクを書けない行では null。
@@ -52,8 +68,10 @@ export function linkQueryAt(
 	// もう書けているリンク(閉じた括弧か、タグ)の中にいるか。
 	const written = linkAt(text, column, role);
 	// 閉じていない括弧は、カーソルの位置で閉じたものとして読む。そこで閉じて、ページへのリンクになるなら、書いている途中。
+	// もう書けている別の記法(アイコン、外部リンクなど)の中では、そう読まない(閉じると、その記法を壊してしまう)。
 	const closing = `${text.slice(0, column)}]${text.slice(column)}`;
-	const unclosed = written?.type === "page-link" ? null : linkAt(closing, column, role);
+	const tryClosing = written?.type !== "page-link" && !insideOtherNotation(text, column, role);
+	const unclosed = tryClosing ? linkAt(closing, column, role) : null;
 	const bracket = unclosed?.type === "page-link" && unclosed.content.end === column;
 	const node = bracket ? unclosed : written;
 	if (node === null) return null;
