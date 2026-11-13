@@ -2,9 +2,11 @@ import { err, ok, type Result } from "@amime/shared";
 import * as v from "valibot";
 import type {
 	ClientId,
+	ClientMessage,
 	CommitId,
 	CommitRequest,
 	CommitResult,
+	CursorPosition,
 	LineId,
 	PageSnapshot,
 	PendingRecord,
@@ -90,9 +92,18 @@ const PendingRecordSchema = v.object({
 		}),
 	),
 });
+const CursorSchema = v.nullable(
+	v.object({
+		line: LineIdSchema,
+		column: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(MAX_LINE_LENGTH)),
+	}),
+);
+const ClientMessageSchema = v.object({ type: v.literal("cursor"), cursor: CursorSchema });
 const ServerMessageSchema = v.variant("type", [
 	v.object({ type: v.literal("hello"), version: VersionSchema }),
 	v.object({ type: v.literal("commit"), ...commitResult }),
+	v.object({ type: v.literal("cursor"), client: ClientIdSchema, cursor: CursorSchema }),
+	v.object({ type: v.literal("leave"), client: ClientIdSchema }),
 ]);
 
 function parse<T>(schema: v.GenericSchema<unknown, T>, input: unknown): Result<T, "invalid"> {
@@ -117,6 +128,14 @@ function parseJson<T>(schema: v.GenericSchema<unknown, T>, input: unknown): Resu
 		return err("invalid");
 	}
 }
+
+/** クライアントから WebSocket で届いたメッセージを検査する。 */
+export const parseClientMessage = (input: unknown): Result<ClientMessage, "invalid"> =>
+	parseJson(ClientMessageSchema, input);
+
+/** カーソルの位置(出していなければ null)を検査する。 */
+export const parseCursorPosition = (input: unknown): Result<CursorPosition | null, "invalid"> =>
+	parse(CursorSchema, input);
 
 /** サーバーから WebSocket で届いたメッセージを検査する。 */
 export const parseServerMessage = (input: unknown): Result<ServerMessage, "invalid"> =>

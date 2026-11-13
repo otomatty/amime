@@ -1,5 +1,6 @@
+import type { LineId } from "@amime/sync";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectPageSocket, HEARTBEAT_MS } from "./page-socket.ts";
+import { CURSOR_INTERVAL_MS, connectPageSocket, HEARTBEAT_MS } from "./page-socket.ts";
 
 /** WebSocket の代わり。テストから、開く・受け取る・閉じるを起こせる。 */
 class FakeSocket extends EventTarget {
@@ -29,8 +30,14 @@ class FakeSocket extends EventTarget {
 
 function connect() {
 	const sockets: FakeSocket[] = [];
-	const handlers = { onHello: vi.fn(), onCommit: vi.fn() };
-	const close = connectPageSocket({
+	const handlers = {
+		onHello: vi.fn(),
+		onCommit: vi.fn(),
+		onCursor: vi.fn(),
+		onLeave: vi.fn(),
+		onConnection: vi.fn(),
+	};
+	const { close, sendCursor } = connectPageSocket({
 		url: "ws://amime.test/socket",
 		handlers,
 		createSocket: (url) => {
@@ -44,8 +51,14 @@ function connect() {
 		if (!socket) throw new Error("no socket");
 		return socket;
 	};
-	return { sockets, handlers, close, latest };
+	/** 送ったメッセージのうち、カーソルの位置。 */
+	const cursors = (socket = latest()) =>
+		socket.sent.filter((data) => data !== "ping").map((data) => JSON.parse(data).cursor);
+	return { sockets, handlers, close, sendCursor, latest, cursors };
 }
+
+const HELLO = '{"type":"hello","version":0}';
+const at = (line: string, column: number) => ({ line: line as LineId, column });
 
 describe("connectPageSocket", () => {
 	beforeEach(() => {
@@ -141,5 +154,132 @@ describe("connectPageSocket", () => {
 		expect(socket?.readyState).toBe(WebSocket.CLOSED);
 		expect(sockets).toHaveLength(1);
 		expect(handlers.onHello).not.toHaveBeenCalled();
+	});
+
+	describe("他の人のカーソル(ADR-0023)", () => {
+		it("他の端末のカーソルの位置と、接続を閉じた知らせを受け取る", () => {
+			const { latest, handlers } = connect();
+
+			latest().receive('{"type":"cursor","client":"bob","cursor":{"line":"a","column":2}}');
+			latest().receive('{"type":"cursor","client":"bob","cursor":null}');
+			latest().receive('{"type":"leave","client":"bob"}');
+
+			expect(handlers.onCursor.mock.calls).toEqual([
+				["bob", at("a", 2)],
+				["bob", null],
+			]);
+			expect(handlers.onLeave).toHaveBeenCalledExactlyOnceWith("bob");
+		});
+
+		it("自分のカーソルの位置を送る", () => {
+			const { latest, sendCursor, cursors } = connect();
+			latest().receive(HELLO);
+
+			sendCursor(at("a", 1));
+
+			expect(cursors()).toEqual([at("a", 1)]);
+		});
+
+		it("続けて動かしたときは、間隔をあけて、最後の位置だけを送る", () => {
+			const { latest, sendCursor, cursors } = connect();
+			latest().receive(HELLO);
+
+			sendCursor(at("a", 1));
+			sendCursor(at("a", 2));
+			sendCursor(at("a", 3));
+			expect(cursors()).toEqual([at("a", 1)]);
+
+			vi.advanceTimersByTime(CURSOR_INTERVAL_MS);
+			expect(cursors()).toEqual([at("a", 1), at("a", 3)]);
+
+			// 間隔があいたあとは、またすぐに送る。
+			vi.advanceTimersByTime(CURSOR_INTERVAL_MS);
+			sendCursor(null);
+			expect(cursors()).toEqual([at("a", 1), at("a", 3), null]);
+		});
+
+		it("同じ位置は、続けて送らない", () => {
+			const { latest, sendCursor, cursors } = connect();
+			latest().receive(HELLO);
+
+			sendCursor(at("a", 1));
+			vi.advanceTimersByTime(CURSOR_INTERVAL_MS);
+			sendCursor(at("a", 1));
+
+			expect(cursors()).toEqual([at("a", 1)]);
+		});
+
+		it("つながる前に動かした位置は、つながったときに送る", () => {
+			const { latest, sendCursor, cursors } = connect();
+
+			sendCursor(at("a", 1));
+			expect(cursors()).toEqual([]);
+			latest().receive(HELLO);
+
+			expect(cursors()).toEqual([at("a", 1)]);
+		});
+
+		it("つなぎ直したら、いまの位置を送り直す(サーバーは、前の接続の位置を覚えていない)", () => {
+			const { sockets, latest, sendCursor, cursors } = connect();
+			latest().receive(HELLO);
+			sendCursor(at("a", 1));
+
+			latest().close();
+			sendCursor(at("a", 2));
+			vi.advanceTimersByTime(1000);
+			expect(sockets).toHaveLength(2);
+			expect(cursors()).toEqual([]);
+			latest().receive(HELLO);
+
+			expect(cursors()).toEqual([at("a", 2)]);
+		});
+
+		it("カーソルを1度も知らせていなければ、つながっても何も送らない", () => {
+			const { latest, cursors } = connect();
+
+			latest().receive(HELLO);
+
+			expect(cursors()).toEqual([]);
+		});
+
+		it("閉じたあとは、送らない", () => {
+			const { sockets, latest, sendCursor, close, cursors } = connect();
+			latest().receive(HELLO);
+			sendCursor(at("a", 1));
+			sendCursor(at("a", 2));
+
+			close();
+			vi.advanceTimersByTime(CURSOR_INTERVAL_MS * 2);
+			sendCursor(at("a", 3));
+
+			expect(cursors(sockets[0])).toEqual([at("a", 1)]);
+		});
+	});
+
+	describe("接続の状態", () => {
+		it("つながったとき(あいさつが届いたとき)と、切れたときに知らせる", () => {
+			const { latest, handlers } = connect();
+			expect(handlers.onConnection).not.toHaveBeenCalled();
+
+			latest().receive(HELLO);
+			expect(handlers.onConnection.mock.calls).toEqual([[true]]);
+
+			latest().close();
+			expect(handlers.onConnection.mock.calls).toEqual([[true], [false]]);
+
+			vi.advanceTimersByTime(1000);
+			latest().receive(HELLO);
+			expect(handlers.onConnection.mock.calls).toEqual([[true], [false], [true]]);
+		});
+
+		it("つながらないまま切れたときは、知らせを繰り返さない", () => {
+			const { latest, handlers } = connect();
+
+			latest().close();
+			vi.advanceTimersByTime(1000);
+			latest().close();
+
+			expect(handlers.onConnection).not.toHaveBeenCalled();
+		});
 	});
 });

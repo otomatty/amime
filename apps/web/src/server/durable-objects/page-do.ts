@@ -6,9 +6,12 @@ import {
 	type Commit,
 	type CommitId,
 	type CommitResult,
+	type CursorPosition,
 	type Line,
 	type LineId,
 	type PageSnapshot,
+	parseClientMessage,
+	parseCursorPosition,
 	type ServerMessage,
 } from "@amime/sync";
 import { generateKeyBetween } from "fractional-indexing";
@@ -65,15 +68,71 @@ export class PageDO extends DurableObject {
 	override fetch(request: Request): Response {
 		const client = new URL(request.url).searchParams.get("client") ?? "";
 		const { 0: clientSocket, 1: serverSocket } = new WebSocketPair();
+		// いまいる他の端末のカーソルを、先に集めておく(自分の接続を数えないため)。
+		const others = this.ctx.getWebSockets().flatMap((socket): ServerMessage[] => {
+			const owner = this.#clientOf(socket);
+			const cursor = this.#cursorOf(socket);
+			return owner === client || cursor === null ? [] : [{ type: "cursor", client: owner, cursor }];
+		});
 		// 端末の識別子をタグにする。その端末のコミットを、本人の接続には配信しないため。
 		this.ctx.acceptWebSocket(serverSocket, [client]);
 		this.#send(serverSocket, { type: "hello", version: this.#version() });
+		for (const message of others) this.#send(serverSocket, message);
 		return new Response(null, { status: 101, webSocket: clientSocket });
 	}
 
-	/** クライアントからのメッセージは、自動で応答する ping だけを想定している。それ以外を送る接続は閉じる。 */
-	override webSocketMessage(socket: WebSocket): void {
-		socket.close(WS_POLICY_VIOLATION, "unexpected message");
+	/**
+	 * クライアントからのメッセージ。自動で応答する ping のほかは、カーソルの位置だけを受け付ける(ADR-0023)。
+	 * カーソルの位置は保存しない。接続に添えて覚えておき(休止しても残る)、他の端末に配る。
+	 * 決めていないメッセージを送る接続は閉じる。
+	 */
+	override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+		const parsed = parseClientMessage(message);
+		if (!parsed.ok) {
+			socket.close(WS_POLICY_VIOLATION, "unexpected message");
+			return;
+		}
+		const { cursor } = parsed.value;
+		socket.serializeAttachment(cursor);
+		this.#broadcast({ type: "cursor", client: this.#clientOf(socket), cursor }, socket);
+	}
+
+	/** 接続が閉じた。その端末のカーソルを消すように、他の端末に知らせる。 */
+	override webSocketClose(socket: WebSocket): void {
+		this.#left(socket);
+	}
+
+	override webSocketError(socket: WebSocket): void {
+		this.#left(socket);
+	}
+
+	#left(socket: WebSocket): void {
+		const client = this.#clientOf(socket);
+		// 同じ端末が、もうつなぎ直している。その端末は、まだいる。
+		const remains = this.ctx
+			.getWebSockets(client)
+			.some((other) => other !== socket && other.readyState === WebSocket.OPEN);
+		if (!remains) this.#broadcast({ type: "leave", client }, socket);
+	}
+
+	/** 接続している端末の識別子(接続を受け付けたときに付けたタグ)。 */
+	#clientOf(socket: WebSocket): ClientId {
+		// タグは、接続を受け付ける前に Worker が検査した識別子。
+		return (this.ctx.getTags(socket)[0] ?? "") as ClientId;
+	}
+
+	/** その接続の端末が最後に知らせてきた、カーソルの位置。 */
+	#cursorOf(socket: WebSocket): CursorPosition | null {
+		const cursor = parseCursorPosition(socket.deserializeAttachment());
+		return cursor.ok ? cursor.value : null;
+	}
+
+	/** sender と同じ端末の接続を除く、すべての接続に送る。 */
+	#broadcast(message: ServerMessage, sender: WebSocket): void {
+		const skipped = new Set(this.ctx.getWebSockets(this.#clientOf(sender)));
+		for (const socket of this.ctx.getWebSockets()) {
+			if (!skipped.has(socket)) this.#send(socket, message);
+		}
 	}
 
 	getPage(): PageSnapshot {

@@ -3,8 +3,10 @@ import {
 	MAX_CHANGES,
 	MAX_LINE_LENGTH,
 	parseClientId,
+	parseClientMessage,
 	parseCommitRequest,
 	parseCommitResult,
+	parseCursorPosition,
 	parsePendingRecord,
 	parseServerMessage,
 	parseSnapshot,
@@ -53,6 +55,51 @@ describe("parseClientId", () => {
 	});
 });
 
+describe("parseClientMessage", () => {
+	it("カーソルの位置を受け付ける", () => {
+		const message = { type: "cursor", cursor: { line: "c1-0", column: 3 } };
+
+		expect(parseClientMessage(JSON.stringify(message))).toEqual({ ok: true, value: message });
+	});
+
+	it("カーソルを出していないこと(null)を受け付ける", () => {
+		expect(parseClientMessage('{"type":"cursor","cursor":null}')).toEqual({
+			ok: true,
+			value: { type: "cursor", cursor: null },
+		});
+	});
+
+	it.each([
+		["JSONでない", "hello?"],
+		["文字列でない", new ArrayBuffer(1)],
+		["知らない種類", '{"type":"commit","version":1,"applied":[]}'],
+		["カーソルがない", '{"type":"cursor"}'],
+		["行IDに使えない文字がある", '{"type":"cursor","cursor":{"line":"a b","column":0}}'],
+		["位置が整数でない", '{"type":"cursor","cursor":{"line":"a","column":1.5}}'],
+		["位置が負", '{"type":"cursor","cursor":{"line":"a","column":-1}}'],
+		[
+			"位置が行の長さの上限より後ろ",
+			`{"type":"cursor","cursor":{"line":"a","column":${MAX_LINE_LENGTH + 1}}}`,
+		],
+	])("%sメッセージは受け付けない", (_name, input) => {
+		expect(parseClientMessage(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parseCursorPosition", () => {
+	it("カーソルの位置か、null を受け付ける", () => {
+		expect(parseCursorPosition({ line: "a", column: 0 })).toEqual({
+			ok: true,
+			value: { line: "a", column: 0 },
+		});
+		expect(parseCursorPosition(null)).toEqual({ ok: true, value: null });
+	});
+
+	it.each([[undefined], ["a"], [{ line: "a" }]])("%j は受け付けない", (input) => {
+		expect(parseCursorPosition(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
 describe("parseServerMessage", () => {
 	it("接続したときのあいさつ(いまのバージョン)を受け付ける", () => {
 		expect(parseServerMessage('{"type":"hello","version":3}')).toEqual({
@@ -67,9 +114,24 @@ describe("parseServerMessage", () => {
 		expect(parseServerMessage(JSON.stringify(message))).toEqual({ ok: true, value: message });
 	});
 
+	it("他の端末のカーソルの位置を受け付ける。カーソルを出していなければ null", () => {
+		const moved = { type: "cursor", client: "tab-1", cursor: { line: "c1-0", column: 3 } };
+		const hidden = { type: "cursor", client: "tab-1", cursor: null };
+
+		expect(parseServerMessage(JSON.stringify(moved))).toEqual({ ok: true, value: moved });
+		expect(parseServerMessage(JSON.stringify(hidden))).toEqual({ ok: true, value: hidden });
+	});
+
+	it("他の端末が接続を閉じた知らせを受け付ける", () => {
+		const message = { type: "leave", client: "tab-1" };
+
+		expect(parseServerMessage(JSON.stringify(message))).toEqual({ ok: true, value: message });
+	});
+
 	it.each([
 		["JSONでない", "pong"],
 		["知らない種類", '{"type":"bye"}'],
+		["端末の識別子がないカーソル", '{"type":"cursor","cursor":null}'],
 		["形が違う", '{"type":"commit","version":4}'],
 		["文字列でない", new ArrayBuffer(1)],
 	])("%sメッセージは受け付けない", (_name, input) => {

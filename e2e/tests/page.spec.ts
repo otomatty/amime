@@ -215,6 +215,55 @@ test.describe("同時編集", () => {
 		await expectLines(other, [name, "たぶん最初の行"]);
 	});
 
+	test("別のタブのカーソルが、その行のその位置に見える。タブが閉じると消える", async ({
+		page,
+		context,
+	}) => {
+		const { name, other } = await openInTwoTabs(page, context);
+		const remoteCarets = (line: number) => lines(page).nth(line).getByTestId("remote-caret");
+		await expect(page.getByTestId("remote-caret")).toHaveCount(0);
+
+		// 別のタブが、2行目の末尾にカーソルを置く。
+		await clickLineEnd(other, 1);
+		await expect(remoteCarets(1)).toHaveCount(1);
+		// カーソルは「行」の直後(行末)にある。
+		await expect(remoteCarets(1).locator("xpath=preceding-sibling::*[1]")).toHaveText("行");
+
+		// 書き進めると、カーソルもついていく。行を移ると、カーソルも移る。
+		await other.keyboard.type("です");
+		await expectLines(page, [name, "最初の行です"]);
+		await expect(remoteCarets(1).locator("xpath=preceding-sibling::*[1]")).toHaveText("す");
+		await clickLineEnd(other, 0);
+		await expect(remoteCarets(0)).toHaveCount(1);
+		await expect(remoteCarets(1)).toHaveCount(0);
+
+		// 自分のカーソルは、相手には見えるが、自分の画面に「他の人のカーソル」としては出ない。
+		await clickLineEnd(page, 1);
+		await expect(other.getByTestId("remote-caret")).toHaveCount(1);
+		await expect(page.getByTestId("remote-caret")).toHaveCount(1);
+
+		await other.close();
+		await expect(page.getByTestId("remote-caret")).toHaveCount(0);
+	});
+
+	test("接続の状態が見える。切れたらつなぎ直し、つながったら元に戻る", async ({ page }) => {
+		// サーバーとの WebSocket を、テストから切れるようにする。
+		const connections: { close: () => Promise<void> }[] = [];
+		await page.routeWebSocket(/\/socket\?/, (socket) => {
+			socket.connectToServer();
+			connections.push({ close: () => socket.close() });
+		});
+		await page.goto(`/${newPageName()}`);
+		const connection = page.getByTestId("connection");
+		await expect(connection).toHaveText("オンライン");
+
+		await connections[0]?.close();
+
+		await expect(connection).toHaveText("オフライン(つなぎ直しています…)");
+		await expect(connection).toHaveText("オンライン");
+		expect(connections).toHaveLength(2);
+	});
+
 	test("他の人の変更が届いても、自分のカーソルは同じ行に残り、続けて書ける", async ({
 		page,
 		context,

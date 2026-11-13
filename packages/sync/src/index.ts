@@ -4,8 +4,10 @@ export { mapColumn } from "./merge-text.ts";
 export { type OwnEdit, reapplyEdit, recordEdit, revertEdit } from "./own-edit.ts";
 export {
 	parseClientId,
+	parseClientMessage,
 	parseCommitRequest,
 	parseCommitResult,
+	parseCursorPosition,
 	parsePendingRecord,
 	parseServerMessage,
 	parseSnapshot,
@@ -28,10 +30,12 @@ export {
 export type {
 	Change,
 	ClientId,
+	ClientMessage,
 	Commit,
 	CommitId,
 	CommitRequest,
 	CommitResult,
+	CursorPosition,
 	Line,
 	LineId,
 	PageSnapshot,

@@ -295,6 +295,99 @@ describe("Page", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	describe("他の人のカーソルと接続の状態(ADR-0023)", () => {
+		/** WebSocket の代わりを置いて、ページを開く。届けるメッセージと、送られたメッセージを扱える。 */
+		async function openWithSocket() {
+			const sockets: (EventTarget & { sent: string[] })[] = [];
+			class CapturedSocket extends EventTarget {
+				static readonly OPEN = 1;
+				readonly readyState = 1;
+				readonly sent: string[] = [];
+				constructor() {
+					super();
+					sockets.push(this);
+				}
+				send(data: string) {
+					this.sent.push(data);
+				}
+				close() {}
+			}
+			vi.stubGlobal("WebSocket", CapturedSocket);
+			stubFetch(() => json(saved));
+			render(<Page name="買い物" />);
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			await waitFor(() => expect(sockets).toHaveLength(1));
+			const socket = sockets[0];
+			if (!socket) throw new Error("no socket");
+			const receive = (message: unknown) =>
+				act(() => {
+					const data = typeof message === "string" ? message : JSON.stringify(message);
+					socket.dispatchEvent(new MessageEvent("message", { data }));
+				});
+			return { socket, receive };
+		}
+		const connection = () => screen.getByTestId("connection").textContent;
+		const hello = { type: "hello", version: 1 };
+
+		it("つながるまでは「接続しています…」、つながったら「オンライン」と表示する", async () => {
+			const { receive } = await openWithSocket();
+			expect(connection()).toBe("接続しています…");
+
+			receive(hello);
+
+			expect(connection()).toBe("オンライン");
+		});
+
+		it("接続が切れたら、つなぎ直していることを表示する", async () => {
+			const { socket, receive } = await openWithSocket();
+			receive(hello);
+
+			act(() => {
+				socket.dispatchEvent(new Event("close"));
+			});
+
+			expect(connection()).toBe("オフライン(つなぎ直しています…)");
+		});
+
+		it("他の人のカーソルが届くと、その行に表示する。その人が接続を閉じたら消す", async () => {
+			const { receive } = await openWithSocket();
+			receive(hello);
+
+			receive({ type: "cursor", client: "bob", cursor: { line: "a", column: 1 } });
+			const remote = screen.getByTestId("remote-caret");
+			expect(remote.closest("[data-testid=line]")?.getAttribute("data-text")).toBe("買い物");
+			expect(remote.nextElementSibling?.getAttribute("data-column")).toBe("1");
+
+			receive({ type: "leave", client: "bob" });
+			expect(screen.queryByTestId("remote-caret")).toBeNull();
+		});
+
+		it("接続が切れたら、他の人のカーソルを消す(切れているあいだの動きは分からない)", async () => {
+			const { socket, receive } = await openWithSocket();
+			receive(hello);
+			receive({ type: "cursor", client: "bob", cursor: { line: "a", column: 1 } });
+
+			act(() => {
+				socket.dispatchEvent(new Event("close"));
+			});
+
+			expect(screen.queryByTestId("remote-caret")).toBeNull();
+		});
+
+		it("自分のカーソルの位置を、他の人に知らせる", async () => {
+			const { socket, receive } = await openWithSocket();
+			receive(hello);
+
+			fireEvent.mouseDown(screen.getByTestId("line"));
+
+			await waitFor(() => expect(socket.sent).toHaveLength(1));
+			expect(JSON.parse(socket.sent[0] ?? "")).toEqual({
+				type: "cursor",
+				cursor: { line: "a", column: 3 },
+			});
+		});
+	});
+
 	it("保存に失敗したら、再試行することを表示する", async () => {
 		stubFetch((_url, init) => (init?.method === "POST" ? json({}, 500) : json(saved)));
 		render(<Page name="買い物" />);

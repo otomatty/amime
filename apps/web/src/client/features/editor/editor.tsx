@@ -13,7 +13,7 @@ import {
 	shortcutLetter,
 } from "@amime/editor-core";
 import { classifyLines } from "@amime/parser";
-import type { Line } from "@amime/sync";
+import type { Line, LineId } from "@amime/sync";
 import {
 	type ClipboardEvent,
 	type CompositionEvent,
@@ -32,6 +32,7 @@ import { createEditorStore } from "./editor-store.ts";
 import { cursorFromPoint, LINE_END } from "./hit-test.ts";
 import { groupLines } from "./line-groups.ts";
 import { lineSelection } from "./line-selection.ts";
+import { caretsByLine, type RemoteCursor } from "./remote-carets.ts";
 import "./editor.css";
 
 type EditorProps = {
@@ -46,7 +47,16 @@ type EditorProps = {
 	 * 外から届いた文書に置き換えたときは呼ばれない。
 	 */
 	readonly onChange?: (lines: readonly Line[]) => void;
+	/** 同じページを開いている、他の人のカーソル(ADR-0023)。 */
+	readonly others?: readonly RemoteCursor[];
+	/**
+	 * 自分のカーソルの位置が変わるたびに呼ばれる。行は行IDで指す。
+	 * 編集欄にフォーカスがないあいだは null(カーソルを出していない)。
+	 */
+	readonly onCursor?: (cursor: { readonly line: LineId; readonly column: number } | null) => void;
 };
+
+const NO_OTHERS: readonly RemoteCursor[] = [];
 
 /** 外から届く文書の出どころ。apply を登録しておくと、文書が届くたびに呼ばれる。 */
 type RemoteSource = {
@@ -77,7 +87,14 @@ const keyInput = (event: KeyboardEvent): KeyInput => ({
  * 行エディタ。表示は自前で描画し、文字入力は画面に見えない textarea で受け取る(ADR-0010)。
  * 編集の規則はすべて @amime/editor-core にあり、ここはイベントを操作に変換するだけ。
  */
-export function Editor({ initialLines, initialDocument, remote, onChange }: EditorProps) {
+export function Editor({
+	initialLines,
+	initialDocument,
+	remote,
+	onChange,
+	others = NO_OTHERS,
+	onCursor,
+}: EditorProps) {
 	// 状態は、描画の外で、操作を受け取ったその場で進める(editor-store.ts を参照)。
 	const [store] = useState(() =>
 		createEditorStore(createModel({ initialLines, initialDocument }, createIdPrefix())),
@@ -99,6 +116,19 @@ export function Editor({ initialLines, initialDocument, remote, onChange }: Edit
 
 	const [composing, setComposing] = useState<string | null>(null);
 	const [focused, setFocused] = useState(false);
+
+	// 自分のカーソルの位置を、行IDで外へ知らせる(他の人の画面に出すため)。
+	const latestOnCursor = useRef(onCursor);
+	useEffect(() => {
+		latestOnCursor.current = onCursor;
+	}, [onCursor]);
+	const cursorLine = tracker.lines[state.cursor.line]?.id ?? null;
+	const cursorColumn = state.cursor.column;
+	useEffect(() => {
+		const shown = focused && cursorLine !== null;
+		latestOnCursor.current?.(shown ? { line: cursorLine, column: cursorColumn } : null);
+	}, [focused, cursorLine, cursorColumn]);
+	const othersByLine = useMemo(() => caretsByLine(others), [others]);
 	// 行の役割(タイトル、コードブロックの中身など)は、ページ全体の行の並びから決まる。
 	const roles = useMemo(() => classifyLines(state.lines), [state.lines]);
 	const groups = useMemo(() => groupLines(roles.map((role) => role.kind)), [roles]);
@@ -309,10 +339,11 @@ export function Editor({ initialLines, initialDocument, remote, onChange }: Edit
 					const role = roles[index];
 					const isCursorLine = focused && state.cursor.line === index;
 					const selected = lineSelection(selection, index, text.length);
+					const id = tracker.lines[index]?.id;
 					return (
 						<EditorLine
 							// 行IDで識別する。行が増減したり動いたりしても、同じ行は同じ要素のまま保たれる。
-							key={tracker.lines[index]?.id}
+							key={id}
 							index={index}
 							text={text}
 							kind={role?.kind ?? "text"}
@@ -323,6 +354,7 @@ export function Editor({ initialLines, initialDocument, remote, onChange }: Edit
 							selectionStart={selected.start}
 							selectionEnd={selected.end}
 							selectsLineBreak={selected.lineBreak}
+							others={id && othersByLine.get(id)}
 						/>
 					);
 				});

@@ -88,12 +88,32 @@ export type CommitRequest = Commit & {
 	readonly client?: ClientId | undefined;
 };
 
+/**
+ * カーソルの位置(ADR-0023)。行は行IDで指す。column は、行の本文の中の位置(UTF-16 の単位)。
+ * 送った端末の画面の文書での位置なので、受け取った側の文書とは、少しずれていることがある。
+ */
+export type CursorPosition = {
+	readonly line: LineId;
+	readonly column: number;
+};
+
+/** クライアントが WebSocket で送るメッセージ。 */
+export type ClientMessage = {
+	/** 自分のカーソルが動いた。null は、カーソルを出していない(編集欄にフォーカスがない)。 */
+	readonly type: "cursor";
+	readonly cursor: CursorPosition | null;
+};
+
 /** サーバーが WebSocket で送るメッセージ。 */
 export type ServerMessage =
 	/** 接続した直後に送る。クライアントは、自分の持つバージョンより進んでいたら読み直す。 */
 	| { readonly type: "hello"; readonly version: number }
 	/** 他の端末のコミットが効いたときに送る。 */
-	| ({ readonly type: "commit" } & CommitResult);
+	| ({ readonly type: "commit" } & CommitResult)
+	/** 他の端末のカーソルが動いたときと、接続した直後(いまいる端末のカーソル)に送る。 */
+	| { readonly type: "cursor"; readonly client: ClientId; readonly cursor: CursorPosition | null }
+	/** 他の端末が接続を閉じたときに送る。 */
+	| { readonly type: "leave"; readonly client: ClientId };
 
 /** まだサーバーに入っていない(かもしれない)自分の変更。 */
 export type PendingEntry = {

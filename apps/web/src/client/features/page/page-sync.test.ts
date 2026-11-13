@@ -1,6 +1,7 @@
 import {
 	applyChanges,
 	type Change,
+	type ClientId,
 	type Commit,
 	type CommitId,
 	type CommitResult,
@@ -22,6 +23,8 @@ function createServer(initial: readonly Line[] = []) {
 	const server = {
 		failing: false,
 		commits: [] as (readonly Change[])[],
+		/** 端末が知らせてきた、カーソルの位置。 */
+		sendCursor: vi.fn(),
 		/** 接続している端末に届ける先。接続していなければ null。 */
 		handlers: null as PageSocketHandlers | null,
 		snapshot: () => state,
@@ -42,8 +45,11 @@ function createServer(initial: readonly Line[] = []) {
 		api: {
 			subscribe: vi.fn((handlers: PageSocketHandlers) => {
 				server.handlers = handlers;
-				return () => {
-					server.handlers = null;
+				return {
+					close() {
+						server.handlers = null;
+					},
+					sendCursor: server.sendCursor,
 				};
 			}),
 			load: vi.fn(async () => state),
@@ -61,6 +67,8 @@ function createServer(initial: readonly Line[] = []) {
 type Observed = { readonly status: SyncStatus; readonly remote: readonly Line[] | null };
 
 type StartOptions = {
+	/** 他の人のカーソルと、接続の状態の知らせの届け先。 */
+	readonly presence?: Pick<PageSocketHandlers, "onCursor" | "onLeave" | "onConnection">;
 	/** 編集欄に最初に表示する文書。省くと、読み込んだページの行。 */
 	readonly initial?: readonly Line[];
 	/** initial が、まだないページの仮のタイトルか。 */
@@ -77,6 +85,7 @@ function start(server: ReturnType<typeof createServer>, options: StartOptions = 
 		initial: options.initial ?? server.snapshot().lines,
 		placeholder: options.placeholder ?? false,
 		api: server.api,
+		...(options.presence && { presence: options.presence }),
 		onPending: (pending) => pendings.push(pending),
 		createCommitId: () => {
 			commitSerial += 1;
@@ -701,5 +710,34 @@ describe("createPageSync", () => {
 
 		expect(server.api.commit).not.toHaveBeenCalled();
 		expect(states).toHaveLength(count);
+	});
+
+	describe("他の人のカーソルと接続の状態(ADR-0023)", () => {
+		it("届いた知らせを、そのまま渡す", () => {
+			const server = createServer([line("a")]);
+			const presence = { onCursor: vi.fn(), onLeave: vi.fn(), onConnection: vi.fn() };
+			start(server, { presence });
+			const bob = "bob" as ClientId;
+			const cursor = { line: line("a").id, column: 1 };
+
+			server.handlers?.onConnection?.(true);
+			server.handlers?.onCursor?.(bob, cursor);
+			server.handlers?.onLeave?.(bob);
+
+			expect(presence.onConnection).toHaveBeenCalledExactlyOnceWith(true);
+			expect(presence.onCursor).toHaveBeenCalledExactlyOnceWith(bob, cursor);
+			expect(presence.onLeave).toHaveBeenCalledExactlyOnceWith(bob);
+		});
+
+		it("自分のカーソルの位置を、接続に渡す", () => {
+			const server = createServer([line("a")]);
+			const { sync } = start(server);
+			const cursor = { line: line("a").id, column: 1 };
+
+			sync.sendCursor(cursor);
+			sync.sendCursor(null);
+
+			expect(server.sendCursor.mock.calls).toEqual([[cursor], [null]]);
+		});
 	});
 });

@@ -1,4 +1,4 @@
-import { type Line, type PageSnapshot, startTracking } from "@amime/sync";
+import { type CursorPosition, type Line, type PageSnapshot, startTracking } from "@amime/sync";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "../editor/editor.tsx";
 import { createIdPrefix } from "../editor/editor-model.ts";
@@ -14,6 +14,7 @@ import {
 	createPendingStore,
 	type PendingStore,
 } from "./pending-store.ts";
+import { createPresence, type RemoteCursor } from "./presence.ts";
 import { restorePage } from "./restore.ts";
 import { titleFromName } from "./route.ts";
 import "./page.css";
@@ -43,6 +44,15 @@ const STATUS_LABELS: Record<SyncStatus, string> = {
 	retrying: "保存できませんでした。自動で再試行します",
 	rejected:
 		"保存できない内容があります。1行が20,000文字を超えていないか確かめてください。直すと保存されます",
+};
+
+/** 他の人の変更やカーソルを受け取る接続(WebSocket)の状態。 */
+type Connection = "connecting" | "online" | "offline";
+
+const CONNECTION_LABELS: Record<Connection, string> = {
+	connecting: "接続しています…",
+	online: "オンライン",
+	offline: "オフライン(つなぎ直しています…)",
 };
 
 /** 保存を待っている変更がない状態。ページを離れても何も失われない。 */
@@ -143,13 +153,25 @@ function PageEditor({ title, snapshot, restored, noticed, api, pending }: PageEd
 	// 他の人の変更を取り込んだ文書を、編集欄へその場で届ける通り道。
 	const [remote] = useState(() => createChannel<readonly Line[]>());
 	const sync = useRef<ReturnType<typeof createPageSync> | null>(null);
+	const [connection, setConnection] = useState<Connection>("connecting");
+	// 同じページを開いている、他の人のカーソル(ADR-0023)。
+	const [others, setOthers] = useState<readonly RemoteCursor[]>([]);
 
 	useEffect(() => {
+		const presence = createPresence(setOthers);
 		const current = createPageSync({
 			snapshot,
 			initial,
 			placeholder,
 			api,
+			presence: {
+				onCursor: presence.onCursor,
+				onLeave: presence.onLeave,
+				onConnection(connected) {
+					presence.onConnection(connected);
+					setConnection(connected ? "online" : "offline");
+				},
+			},
 			onStatus: setStatus,
 			onRemote: remote.emit,
 			// まだサーバーに入っていない変更を、端末内に残す。タブを閉じても、次に開いたときに送れる。
@@ -179,18 +201,31 @@ function PageEditor({ title, snapshot, restored, noticed, api, pending }: PageEd
 	const handleChange = useCallback((lines: readonly Line[]) => {
 		sync.current?.edit(lines);
 	}, []);
+	const handleCursor = useCallback((cursor: CursorPosition | null) => {
+		sync.current?.sendCursor(cursor);
+	}, []);
 
 	return (
 		<>
 			<p className="page-status" role="status" data-status={status}>
 				{STATUS_LABELS[status]}
 			</p>
+			{/* 保存の状態(上)とは別に示す。切れていても、書いたものは端末内に残り、つながったら送られる。 */}
+			<p className="page-connection" data-testid="connection" data-connection={connection}>
+				{CONNECTION_LABELS[connection]}
+			</p>
 			{noticed && (
 				<p className="page-notice" role="note">
 					前回、送信できなかった変更を復元しました。
 				</p>
 			)}
-			<Editor initialDocument={initial} remote={remote} onChange={handleChange} />
+			<Editor
+				initialDocument={initial}
+				remote={remote}
+				onChange={handleChange}
+				others={others}
+				onCursor={handleCursor}
+			/>
 		</>
 	);
 }
