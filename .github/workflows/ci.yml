@@ -74,6 +74,9 @@ jobs:
       # 設定の誤りで有効になっていないことを、ビルド成果物で確かめる。
       - name: 本番用のビルドでページのAPIが無効であることを確認
         run: grep -q '"PAGE_API":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
+      # 開発用のログイン(名前を入れるだけでログインできる)は、公開環境では無効にする(ADR-0032)。
+      - name: 本番用のビルドで開発用のログインが無効であることを確認
+        run: grep -q '"DEV_LOGIN":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
       - name: アップロードせずにデプロイ内容を検証
         run: pnpm --filter @amime/web exec cf deploy --prebuilt --mode production --dry-run
 

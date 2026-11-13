@@ -1,0 +1,4 @@
+# 手元で Google でのログインを試すときに、このファイルを .dev.vars という名前で写して、値を入れる。
+# 値は、Google Cloud の OAuth クライアントのもの(docs/deploy.md)。空のままなら、開発用のログインだけが使える。
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=

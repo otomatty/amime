@@ -1,3 +1,5 @@
+import { AccountProvider } from "../features/account/account.tsx";
+import { AccountMenu } from "../features/account/account-menu.tsx";
 import { Editor } from "../features/editor/editor.tsx";
 import { Page } from "../features/page/page.tsx";
 import { pageNameFromPath } from "../features/page/route.ts";
@@ -58,20 +60,23 @@ function Home() {
 export function App() {
 	const name = pageNameFromPath(window.location.pathname);
 	return (
-		<main className="app">
-			<header className="app-header">
-				<h1 className="app-title">
-					<a href="/">Amime</a>
-				</h1>
-				<TitleSearch />
-			</header>
-			{name === null ? (
-				<Home />
-			) : (
-				<article className="page">
-					<Page name={name} />
-				</article>
-			)}
-		</main>
+		<AccountProvider>
+			<main className="app">
+				<header className="app-header">
+					<h1 className="app-title">
+						<a href="/">Amime</a>
+					</h1>
+					<TitleSearch />
+					<AccountMenu />
+				</header>
+				{name === null ? (
+					<Home />
+				) : (
+					<article className="page">
+						<Page name={name} />
+					</article>
+				)}
+			</main>
+		</AccountProvider>
 	);
 }

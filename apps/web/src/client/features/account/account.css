@@ -1,0 +1,35 @@
+.account {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem 0.75rem;
+	align-items: center;
+	font-size: 0.9rem;
+}
+
+.account-user {
+	display: inline-flex;
+	gap: 0.4rem;
+	align-items: center;
+}
+
+.account-picture {
+	width: 1.5rem;
+	height: 1.5rem;
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.account-dev {
+	display: inline-flex;
+	gap: 0.25rem;
+}
+
+.account-dev input {
+	width: 8rem;
+}
+
+.account-notice {
+	flex-basis: 100%;
+	margin: 0;
+	color: var(--color-warning);
+}
