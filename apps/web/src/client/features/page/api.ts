@@ -4,10 +4,12 @@ import {
 	type Commit,
 	type PageId,
 	type PageInfo,
+	type PageLinks,
 	type PageList,
 	type PageSort,
 	parseCommitResult,
 	parsePageInfo,
+	parsePageLinks,
 	parsePageList,
 	parseSnapshot,
 } from "@amime/sync";
@@ -65,6 +67,11 @@ export function listPages({
 	readonly offset: number;
 }): Promise<PageList> {
 	return request(`/api/pages?sort=${sort}&offset=${offset}`, undefined, parsePageList);
+}
+
+/** ページのつながり(関連するページ、同じリンクを持つページ、まだないページへのリンク)を取り出す。ADR-0027。 */
+export function loadLinks(id: PageId): Promise<PageLinks> {
+	return request(`${pagePath(id)}/links`, undefined, parsePageLinks);
 }
 
 /** ページを、一覧の先頭に固定する(pinned が false なら、固定を外す)。ADR-0026。 */

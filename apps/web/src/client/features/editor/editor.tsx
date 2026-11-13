@@ -54,6 +54,8 @@ type EditorProps = {
 	 * 編集欄にフォーカスがないあいだは null(カーソルを出していない)。
 	 */
 	readonly onCursor?: (cursor: { readonly line: LineId; readonly column: number } | null) => void;
+	/** まだないページの名前(正規化したもの)。そのページへのリンクに、印を付ける(ADR-0027)。 */
+	readonly missingLinks?: ReadonlySet<string>;
 };
 
 const NO_OTHERS: readonly RemoteCursor[] = [];
@@ -94,6 +96,7 @@ export function Editor({
 	onChange,
 	others = NO_OTHERS,
 	onCursor,
+	missingLinks,
 }: EditorProps) {
 	// 状態は、描画の外で、操作を受け取ったその場で進める(editor-store.ts を参照)。
 	const [store] = useState(() =>
@@ -373,6 +376,7 @@ export function Editor({
 							selectionEnd={selected.end}
 							selectsLineBreak={selected.lineBreak}
 							others={id && othersByLine.get(id)}
+							missingLinks={missingLinks}
 						/>
 					);
 				});

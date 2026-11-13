@@ -59,6 +59,19 @@ a.link:hover {
 	text-decoration: underline;
 }
 
+/* まだないページへのリンク(ADR-0027)。開くと、その名前で書き始められる。 */
+.link[data-missing] {
+	color: var(--color-muted);
+	text-decoration: underline dashed;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 0.2em;
+}
+
+a.link[data-missing]:hover {
+	color: var(--color-link);
+	text-decoration-style: dashed;
+}
+
 /* 文字装飾 [記号 文字]。data-deco に使われた記号が入る。 */
 .deco[data-deco*="*"] {
 	font-weight: 700;

@@ -291,6 +291,63 @@ describe("ページのAPI", () => {
 		});
 	});
 
+	describe("GET /api/pages/:id/links(ページのつながり。ADR-0027)", () => {
+		/** 本文のあるページを作り、台帳への知らせが済むのを待つ。 */
+		async function write(title: string, ...body: string[]) {
+			const info = (await (
+				await get(`/api/pages/by-title/${encodeURIComponent(title)}`)
+			).json()) as { id: string };
+			const lines = [title, ...body].map((text, index) => ({ id: `l${index}`, text }));
+			await post(`/api/pages/${info.id}/commits`, {
+				id: commitId(),
+				changes: lines.map((line, index) => ({
+					type: "insert",
+					line,
+					after: lines[index - 1]?.id ?? null,
+					before: null,
+				})),
+			});
+			await runDurableObjectAlarm(exports.PageDO.getByName(`default/${info.id}`));
+			return info.id;
+		}
+
+		it("関連するページ、同じリンクを持つページ、まだないページへのリンクを返す", async () => {
+			const here = await write(
+				"つながり ここ",
+				"[つながり 料理] と [つながり まだない] と #つながり_旅行",
+			);
+			const cooking = await write("つながり 料理");
+			const curry = await write("つながり カレー", "[つながり 料理]");
+			const kyoto = await write("つながり 京都", "[つながり 旅行]");
+			const pointing = await write("つながり 参照元", "[つながり ここ]");
+
+			const response = await get(`/api/pages/${here}/links`);
+
+			expect(response.status).toBe(200);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			const links = (await response.json()) as {
+				missing: string[];
+				related: { id: string }[];
+				hops: { title: string; exists: boolean; pages: { id: string }[] }[];
+			};
+			expect([...links.missing].sort()).toEqual(["つながり_まだない", "つながり_旅行"]);
+			expect(links.related.map((page) => page.id).sort()).toEqual([cooking, pointing].sort());
+			expect(
+				links.hops.map((group) => [group.title, group.exists, group.pages.map((page) => page.id)]),
+			).toEqual([
+				["つながり 料理", true, [curry]],
+				["つながり_旅行", false, [kyoto]],
+			]);
+		});
+
+		it("ページのIDの形が正しくなければ、400 で断る", async () => {
+			const response = await get(`/api/pages/${"x".repeat(65)}/links`);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({ error: "invalid-page" });
+		});
+	});
+
 	describe("固定と削除(ADR-0026)", () => {
 		const send = (method: string, path: string, body?: unknown) =>
 			exports.default.fetch(`https://amime.test${path}`, {

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Page } from "./page.tsx";
 
@@ -15,12 +15,22 @@ const BY_TITLE = "/api/pages/by-title/";
  * fetch を差し替える。名前からページを引く要求には、決まったIDと、URLの名前から作った名前を返す。
  * それ以外の要求(ページの読み込みと、コミット)を handler に渡す。返すのは、handler の呼び出しの記録。
  */
+const NO_LINKS = { missing: [], related: [], hops: [] };
+
 function stubFetch(
 	handler: Handler,
-	info: { title?: string; problem?: string | null; pinned?: boolean } = {},
+	info: {
+		title?: string;
+		problem?: string | null;
+		pinned?: boolean;
+		/** ページのつながりへの応答。省くと、つながりのないページ。 */
+		links?: () => Response;
+	} = {},
 ) {
 	const fetchMock = vi.fn(handler);
 	vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+		// ページのつながりにも、ここで答える。
+		if (url.endsWith("/links")) return info.links?.() ?? json(NO_LINKS);
 		if (!url.startsWith(BY_TITLE)) return fetchMock(url, init);
 		const name = decodeURIComponent(url.slice(BY_TITLE.length));
 		const title = info.title ?? name.replaceAll("_", " ");
@@ -67,7 +77,7 @@ const pendingRecords = () =>
 const SAVED = { version: 1, lines: [{ id: "a", text: "買い物" }] };
 
 /** WebSocket の代わりを置いて、ページを開く。届けるメッセージと、送られたメッセージを扱える。 */
-async function openWithSocket() {
+async function openWithSocket(info: Parameters<typeof stubFetch>[1] = {}) {
 	const sockets: (EventTarget & { sent: string[] })[] = [];
 	class CapturedSocket extends EventTarget {
 		static readonly OPEN = 1;
@@ -83,7 +93,7 @@ async function openWithSocket() {
 		close() {}
 	}
 	vi.stubGlobal("WebSocket", CapturedSocket);
-	stubFetch(() => json(SAVED));
+	stubFetch(() => json(SAVED), info);
 	render(<Page name="買い物" />);
 	await waitFor(() => expect(lines()).toEqual(["買い物"]));
 	await waitFor(() => expect(sockets).toHaveLength(1));
@@ -348,6 +358,95 @@ describe("Page", () => {
 
 		expect(lines()).toEqual(["買い物", "x", "y"]);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	describe("ページのつながり(ADR-0027)", () => {
+		const card = (id: string, title: string) => ({
+			id,
+			title,
+			descriptions: [],
+			image: null,
+			updated: 1000,
+			created: 1000,
+			linked: 0,
+			pinned: false,
+		});
+		const relatedTitles = () =>
+			within(screen.getByRole("region", { name: "関連するページ" }))
+				.getAllByRole("listitem")
+				.map((item) => within(item).getByRole("heading").textContent);
+
+		it("ページの下に、関連するページを並べる", async () => {
+			stubFetch(() => json(saved), {
+				links: () => json({ ...NO_LINKS, related: [card("p2", "料理"), card("p3", "旅行")] }),
+			});
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(relatedTitles()).toEqual(["料理", "旅行"]));
+		});
+
+		it("まだないページへのリンクに、印を付ける", async () => {
+			const withLinks = {
+				version: 1,
+				lines: [
+					{ id: "a", text: "買い物" },
+					{ id: "b", text: "[まだない] [ある]" },
+				],
+			};
+			stubFetch(() => json(withLinks), {
+				links: () => json({ ...NO_LINKS, missing: ["まだない"] }),
+			});
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() =>
+				expect(screen.getByRole("link", { name: "まだない" }).getAttribute("data-missing")).toBe(
+					"true",
+				),
+			);
+			expect(screen.getByRole("link", { name: "ある" }).hasAttribute("data-missing")).toBe(false);
+		});
+
+		it("台帳への反映が済んだと知らされたら、つながりを取り出し直す", async () => {
+			let related = [card("p2", "料理")];
+			const { receive } = await openWithSocket({
+				links: () => json({ ...NO_LINKS, related }),
+			});
+			await waitFor(() => expect(relatedTitles()).toEqual(["料理"]));
+
+			related = [card("p2", "料理"), card("p3", "旅行")];
+			receive({ type: "page", title: "買い物", problem: null });
+
+			await waitFor(() => expect(relatedTitles()).toEqual(["料理", "旅行"]));
+		});
+
+		it("つながりを取り出せなくても、ページは読み書きできる。前に取り出したつながりは、そのまま見せる", async () => {
+			let failing = false;
+			const { receive } = await openWithSocket({
+				links: () =>
+					failing
+						? json({ error: "x" }, 500)
+						: json({ ...NO_LINKS, related: [card("p2", "料理")] }),
+			});
+			await waitFor(() => expect(relatedTitles()).toEqual(["料理"]));
+
+			failing = true;
+			receive({ type: "page", title: "買い物", problem: null });
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			expect(relatedTitles()).toEqual(["料理"]);
+			expect(lines()).toEqual(["買い物"]);
+		});
+
+		it("つながりのないページでは、関連するページの欄を出さない", async () => {
+			stubFetch(() => json(saved));
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			expect(screen.queryByRole("region", { name: "関連するページ" })).toBeNull();
+		});
 	});
 
 	describe("固定と削除(ADR-0026)", () => {

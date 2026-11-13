@@ -801,6 +801,20 @@ describe("Editor", () => {
 		});
 	});
 
+	it("まだないページへのリンクに、印を付ける(ADR-0027)", () => {
+		render(
+			<Editor
+				initialLines={["タイトル", "[まだない] と [ある]"]}
+				missingLinks={new Set(["まだない"])}
+			/>,
+		);
+
+		expect(screen.getByRole("link", { name: "まだない" }).getAttribute("data-missing")).toBe(
+			"true",
+		);
+		expect(screen.getByRole("link", { name: "ある" }).hasAttribute("data-missing")).toBe(false);
+	});
+
 	describe("他の人のカーソル(ADR-0023)", () => {
 		const id = (value: string) => value as LineId;
 		const document = [

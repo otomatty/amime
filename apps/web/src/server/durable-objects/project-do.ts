@@ -1,7 +1,16 @@
 import { DurableObject } from "cloudflare:workers";
 import type { PageSummary } from "@amime/parser";
 import { MAX_TITLE_LENGTH, titleFromName, titleOfLine, toTitleLc } from "@amime/shared";
-import type { PageCard, PageId, PageInfo, PageList, PageSort, TitleProblem } from "@amime/sync";
+import type {
+	LinkGroup,
+	PageCard,
+	PageId,
+	PageInfo,
+	PageLinks,
+	PageList,
+	PageSort,
+	TitleProblem,
+} from "@amime/sync";
 
 /** 開いただけで保存されていないページを、台帳に残しておく期間。 */
 export const PLACEHOLDER_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -43,6 +52,19 @@ type ListOptions = {
 
 /** 一覧で、1度に取り出せる件数の上限。 */
 export const MAX_LIST_LIMIT = 100;
+
+/** ページのつながりで、関連するページとして返す件数の上限。 */
+const MAX_RELATED = 100;
+/** 同じリンクを持つページのまとまり1つに入れる件数の上限。 */
+export const MAX_GROUP_PAGES = 20;
+/** 同じリンクを持つページとして返す件数の上限(すべてのまとまりの合計)。 */
+const MAX_HOP_PAGES = 1000;
+
+/** カードに出す列。linked は、他のページからリンクされている数。 */
+const CARD_COLUMNS = `p.id, p.title, p.descriptions, p.image, p.updated, p.created, p.pinned,
+	(SELECT COUNT(*) FROM links WHERE to_lc = p.title_lc AND from_id != p.id) AS linked`;
+
+const NO_LINKS: PageLinks = { missing: [], related: [], hops: [] };
 
 /** 並び順ごとの、SQL の並べ方。同じ値のページは、名前の順にする(順序が、取り出すたびに変わらないように)。 */
 /** 固定したページを先頭に並べる。あとから固定したものを前にする。 */
@@ -87,6 +109,8 @@ export const MIGRATIONS: readonly string[] = [
 		title TEXT NOT NULL,
 		removed INTEGER NOT NULL
 	);`,
+	// 4: リンク先の、書かれたとおりの名前(ADR-0027)。まだないページへのリンクを、名前で見せるために持つ。
+	"ALTER TABLE links ADD COLUMN title TEXT NOT NULL DEFAULT '';",
 ];
 
 /**
@@ -178,9 +202,8 @@ export class ProjectDO extends DurableObject {
 		const { sql } = this.ctx.storage;
 		const rows = sql
 			.exec<CardRow>(
-				`SELECT id, title, descriptions, image, updated, created, pinned,
-					(SELECT COUNT(*) FROM links WHERE to_lc = pages.title_lc AND from_id != pages.id) AS linked
-				FROM pages WHERE version > 0 ORDER BY ${PINNED_FIRST}, ${ORDER_BY[sort]} LIMIT ? OFFSET ?`,
+				`SELECT ${CARD_COLUMNS}
+				FROM pages p WHERE version > 0 ORDER BY ${PINNED_FIRST}, ${ORDER_BY[sort]} LIMIT ? OFFSET ?`,
 				Math.min(Math.max(limit, 0), MAX_LIST_LIMIT),
 				Math.max(offset, 0),
 			)
@@ -208,6 +231,73 @@ export class ProjectDO extends DurableObject {
 			this.#summarize(id, state.summary);
 			return info;
 		});
+	}
+
+	/**
+	 * ページのつながりを返す(ADR-0027)。
+	 * まだ保存されていないページ(開いただけ)でも、その名前へリンクしているページは返す。
+	 */
+	links(id: PageId): PageLinks {
+		const row = this.#byId(id);
+		if (row === null) return NO_LINKS;
+		const { sql } = this.ctx.storage;
+		const missing = sql
+			.exec<{ to_lc: string }>(
+				`SELECT to_lc FROM links
+				WHERE from_id = ? AND NOT EXISTS (SELECT 1 FROM pages WHERE title_lc = to_lc AND version > 0)`,
+				id,
+			)
+			.toArray()
+			.map((link) => link.to_lc);
+		// リンクしているページと、リンクされているページ。
+		const related = sql
+			.exec<CardRow>(
+				`SELECT ${CARD_COLUMNS} FROM pages p
+				WHERE p.version > 0 AND p.id != ?1 AND (
+					p.title_lc IN (SELECT to_lc FROM links WHERE from_id = ?1)
+					OR p.id IN (SELECT from_id FROM links WHERE to_lc = ?2)
+				)
+				ORDER BY p.updated DESC, p.title_lc LIMIT ${MAX_RELATED}`,
+				id,
+				row.title_lc,
+			)
+			.toArray()
+			.map(toCard);
+		return { missing, related, hops: this.#hops(id, row.title_lc) };
+	}
+
+	/**
+	 * 同じリンクを持つ他のページを、リンク先ごとにまとめる(2ホップ先)。
+	 * リンク先のページそのものと、このページ自身へのリンクは、まとめない(関連するページに出ている)。
+	 */
+	#hops(id: PageId, titleLc: string): LinkGroup[] {
+		const rows = this.ctx.storage.sql
+			.exec<HopRow>(
+				`SELECT * FROM (
+					SELECT mine.to_lc AS via, mine.title AS written, target.title AS target, ${CARD_COLUMNS},
+						ROW_NUMBER() OVER (PARTITION BY mine.to_lc ORDER BY p.updated DESC, p.title_lc) AS position
+					FROM links mine
+					JOIN links theirs ON theirs.to_lc = mine.to_lc AND theirs.from_id != mine.from_id
+					JOIN pages p ON p.id = theirs.from_id AND p.version > 0 AND p.title_lc != mine.to_lc
+					LEFT JOIN pages target ON target.title_lc = mine.to_lc AND target.version > 0
+					WHERE mine.from_id = ?1 AND mine.to_lc != ?2
+				) WHERE position <= ${MAX_GROUP_PAGES} ORDER BY via, position LIMIT ${MAX_HOP_PAGES}`,
+				id,
+				titleLc,
+			)
+			.toArray();
+		const groups = new Map<string, { title: string; exists: boolean; pages: PageCard[] }>();
+		for (const { via, written, target, position: _position, ...card } of rows) {
+			const group = groups.get(via) ?? {
+				// 名前は、ページがあればその名前。なければ、リンクに書かれたとおりの名前。
+				title: target ?? (written === "" ? titleFromName(via) : written),
+				exists: target !== null,
+				pages: [],
+			};
+			group.pages.push(toCard(card));
+			groups.set(via, group);
+		}
+		return [...groups.values()];
 	}
 
 	/**
@@ -268,20 +358,30 @@ export class ProjectDO extends DurableObject {
 			image,
 			id,
 		);
-		const wanted = new Set<string>(links.map((title) => toTitleLc(title)));
-		const current = new Set(
+		// 正規化した名前から、書かれたとおりの名前へ。
+		const wanted = new Map<string, string>(links.map((title) => [toTitleLc(title), title]));
+		const current = new Map(
 			sql
-				.exec<{ to_lc: string }>("SELECT to_lc FROM links WHERE from_id = ?", id)
+				.exec<{ to_lc: string; title: string }>(
+					"SELECT to_lc, title FROM links WHERE from_id = ?",
+					id,
+				)
 				.toArray()
-				.map((row) => row.to_lc),
+				.map((row) => [row.to_lc, row.title]),
 		);
-		for (const target of current) {
+		for (const target of current.keys()) {
 			if (!wanted.has(target))
 				sql.exec("DELETE FROM links WHERE from_id = ? AND to_lc = ?", id, target);
 		}
-		for (const target of wanted) {
-			if (!current.has(target))
-				sql.exec("INSERT INTO links (from_id, to_lc) VALUES (?, ?)", id, target);
+		for (const [target, title] of wanted) {
+			if (current.get(target) === title) continue;
+			sql.exec(
+				`INSERT INTO links (from_id, to_lc, title) VALUES (?, ?, ?)
+				ON CONFLICT (from_id, to_lc) DO UPDATE SET title = excluded.title`,
+				id,
+				target,
+				title,
+			);
 		}
 	}
 
@@ -401,6 +501,14 @@ type CardRow = {
 	created: number;
 	linked: number;
 	pinned: number;
+};
+
+/** 同じリンクを持つページの行。via はリンク先(正規化した名前)、written は書かれたとおりの名前、target はリンク先のページの名前。 */
+type HopRow = CardRow & {
+	via: string;
+	written: string;
+	target: string | null;
+	position: number;
 };
 
 /** 台帳の行を、一覧に出す情報にする。 */
