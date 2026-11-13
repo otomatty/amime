@@ -7,6 +7,8 @@ export type RemoteCursor = {
 	readonly client: string;
 	readonly line: LineId;
 	readonly column: number;
+	/** その人の表示名(ADR-0035)。分からなければ、ない。 */
+	readonly name?: string;
 };
 
 /** 他の人のカーソルに使う色の数(editor.css の data-color と合わせる)。 */
@@ -14,7 +16,7 @@ export const REMOTE_COLORS = 8;
 
 /**
  * 人ごとの色の番号。同じ人は、いつも同じ番号になる。
- * 名前を出せるようになるまで(ログインは P4)、色で人を見分ける。
+ * 色でも、人を見分けられるようにする(名前の札は、ログインしているメンバーにだけ付く)。
  */
 export function colorOf(client: string): number {
 	let hash = 0;
@@ -28,9 +30,10 @@ export function colorOf(client: string): number {
 /** 他の人のカーソルを、行ごとにまとめる。 */
 export function caretsByLine(others: readonly RemoteCursor[]): Map<LineId, RemoteCaret[]> {
 	const byLine = new Map<LineId, RemoteCaret[]>();
-	for (const { client, line, column } of others) {
+	for (const { client, line, column, name } of others) {
 		const carets = byLine.get(line) ?? [];
-		carets.push({ key: client, column, color: colorOf(client) });
+		const caret = { key: client, column, color: colorOf(client) };
+		carets.push(name === undefined ? caret : { ...caret, name });
 		byLine.set(line, carets);
 	}
 	return byLine;

@@ -699,7 +699,13 @@ describe("ページの WebSocket", () => {
 		const messages: unknown[] = [];
 		const closes: number[] = [];
 		socket.addEventListener("message", ({ data }) => {
-			messages.push(data === "pong" ? data : JSON.parse(String(data)));
+			if (data === "pong") {
+				messages.push(data);
+				return;
+			}
+			// カーソルに添える表示名(ADR-0035)は、ここでは見ない(members.test.ts で確かめる)。
+			const { name: _name, ...message } = JSON.parse(String(data));
+			messages.push(message);
 		});
 		socket.addEventListener("close", ({ code }) => closes.push(code));
 		return { socket, messages, closes };

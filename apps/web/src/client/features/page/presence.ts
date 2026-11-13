@@ -1,14 +1,18 @@
 import type { ClientId, CursorPosition } from "@amime/sync";
 
 /** 他の端末(人)のカーソル。 */
-export type RemoteCursor = CursorPosition & { readonly client: ClientId };
+export type RemoteCursor = CursorPosition & {
+	readonly client: ClientId;
+	/** その人の表示名(ADR-0035)。分からなければ、ない。 */
+	readonly name?: string;
+};
 
 /**
  * 同じページを開いている他の端末の、カーソルの一覧を持つ(ADR-0023)。
  * WebSocket で届く知らせを受け取り、一覧が変わるたびに onChange で知らせる。
  */
 export function createPresence(onChange: (cursors: readonly RemoteCursor[]) => void) {
-	const cursors = new Map<ClientId, CursorPosition>();
+	const cursors = new Map<ClientId, Omit<RemoteCursor, "client">>();
 
 	const publish = () => {
 		const list = [...cursors].map(([client, cursor]) => ({ client, ...cursor }));
@@ -21,12 +25,12 @@ export function createPresence(onChange: (cursors: readonly RemoteCursor[]) => v
 
 	return {
 		/** 他の端末のカーソルが動いた。null は、その端末がカーソルを出していない。 */
-		onCursor(client: ClientId, cursor: CursorPosition | null): void {
+		onCursor(client: ClientId, cursor: CursorPosition | null, name?: string): void {
 			if (cursor === null) {
 				remove(client);
 				return;
 			}
-			cursors.set(client, cursor);
+			cursors.set(client, name === undefined ? cursor : { ...cursor, name });
 			publish();
 		},
 		/** 他の端末が接続を閉じた。 */

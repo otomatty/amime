@@ -11,8 +11,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "../editor/editor.tsx";
 import { createIdPrefix } from "../editor/editor-model.ts";
+import { createIconSource, IconSourceProvider } from "../editor/icons.tsx";
 import { pageHref } from "../editor/links.ts";
-import { createPageApi, loadLinks, openPage, searchTitles } from "./api.ts";
+import { createPageApi, loadIcon, loadLinks, openPage, searchTitles } from "./api.ts";
 import { createChannel } from "./channel.ts";
 import { createClientId } from "./client-id.ts";
 import { createCommitId } from "./commit-id.ts";
@@ -149,11 +150,17 @@ const WITHOUT_TOOLS: ReadonlySet<SyncStatus> = new Set(["new", "deleted", "denie
  */
 export function Page({ name, readOnly = false }: PageProps) {
 	const opened = useLoading(useCallback(() => openPage(name), [name]));
+	const [icons] = useState(() => createIconSource(loadIcon));
 	if (opened.status !== "ready") return <Pending state={opened} />;
 	// 読むだけの表示と、書ける表示を切り替えたときは、ページを開き直す(端末の識別子も、作り直す)。
 	// 書ける表示に戻ったときに、前に残した未送信の変更を、閉じたタブのものと同じように引き取って送る。
 	const mode = readOnly ? "read" : "write";
-	return <OpenedPage key={`${opened.value.id}:${mode}`} info={opened.value} readOnly={readOnly} />;
+	return (
+		// `[名前.icon]` の画像は、このプロジェクトから引く(ADR-0035)。同じ名前は、1回だけ引く。
+		<IconSourceProvider source={icons}>
+			<OpenedPage key={`${opened.value.id}:${mode}`} info={opened.value} readOnly={readOnly} />
+		</IconSourceProvider>
+	);
 }
 
 /** IDの分かったページ。保存されている内容を読み込み、前回送れなかった変更を復元する。 */

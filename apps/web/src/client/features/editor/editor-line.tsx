@@ -9,6 +9,7 @@ import {
 } from "@amime/parser";
 import { toTitleLc } from "@amime/shared";
 import { type CSSProperties, Fragment, memo, type ReactNode } from "react";
+import { IconImage } from "./icons.tsx";
 import { pageHref, projectHref } from "./links.ts";
 
 type EditorLineProps = {
@@ -43,6 +44,8 @@ export type RemoteCaret = {
 	readonly column: number;
 	/** 人ごとの色の番号。 */
 	readonly color: number;
+	/** その人の表示名。分からなければ、ない。 */
+	readonly name?: string;
 };
 
 const NO_OTHERS: readonly RemoteCaret[] = [];
@@ -84,14 +87,17 @@ function othersIn(ctx: RenderContext, start: number, end: number): ReactNode {
 	if (ctx.others.length === 0) return null;
 	return ctx.others
 		.filter(({ column }) => column >= start && column < end)
-		.map(({ key, color }) => (
+		.map(({ key, color, name }) => (
 			<span
 				className="remote-caret"
 				data-testid="remote-caret"
 				data-color={color}
 				aria-hidden="true"
 				key={`other-${key}`}
-			/>
+			>
+				{/* だれのカーソルかを示す、名前の札(ADR-0035)。 */}
+				{name !== undefined && <span className="remote-caret-name">{name}</span>}
+			</span>
 		));
 }
 
@@ -257,7 +263,8 @@ function icon(ctx: RenderContext, node: NodeOf<"icon">): ReactNode {
 		<>
 			{othersIn(ctx, node.start, node.end)}
 			<span className={marked(ctx, node, "icon")} title={node.name} {...atomPosition(node)}>
-				{node.name}
+				{/* 画像を引けたら画像を、引けなければ名前の文字を出す(ADR-0035)。 */}
+				<IconImage name={node.name} />
 				{node.count > 1 && `×${node.count}`}
 			</span>
 		</>

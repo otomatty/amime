@@ -140,7 +140,12 @@ const ClientMessageSchema = v.object({ type: v.literal("cursor"), cursor: Cursor
 const ServerMessageSchema = v.variant("type", [
 	v.object({ type: v.literal("hello"), version: VersionSchema }),
 	v.object({ type: v.literal("commit"), ...commitResult }),
-	v.object({ type: v.literal("cursor"), client: ClientIdSchema, cursor: CursorSchema }),
+	v.object({
+		type: v.literal("cursor"),
+		client: ClientIdSchema,
+		cursor: CursorSchema,
+		name: v.optional(v.string()),
+	}),
 	v.object({ type: v.literal("leave"), client: ClientIdSchema }),
 	v.object({ type: v.literal("page"), ...pageTitle }),
 	v.object({ type: v.literal("deleted") }),

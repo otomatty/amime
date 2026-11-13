@@ -68,7 +68,10 @@ describe("AccountMenu(ログインの状態と、ログイン・ログアウト�
 
 		renderMenu();
 
-		expect(await screen.findByText("花子")).toBeDefined();
+		// 名前から、プロフィールの設定へ移れる。
+		expect((await screen.findByRole("link", { name: "花子" })).getAttribute("href")).toBe(
+			"/settings",
+		);
 		expect(screen.getByRole("button", { name: "ログアウト" })).toBeDefined();
 		expect(screen.queryByRole("link", { name: "Google でログイン" })).toBeNull();
 		expect(screen.queryByRole("img")).toBeNull();

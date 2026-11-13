@@ -22,7 +22,7 @@ export type PageSocketHandlers = {
 	/** 他の端末のコミットが届いた。 */
 	readonly onCommit: (event: CommitResult) => void;
 	/** 他の端末のカーソルが動いた。null は、その端末がカーソルを出していない。 */
-	readonly onCursor?: (client: ClientId, cursor: CursorPosition | null) => void;
+	readonly onCursor?: (client: ClientId, cursor: CursorPosition | null, name?: string) => void;
 	/** 他の端末が接続を閉じた。 */
 	readonly onLeave?: (client: ClientId) => void;
 	/** つながった(true)、切れた(false)。切れているあいだは、他の端末の変更もカーソルも届かない。 */
@@ -136,7 +136,7 @@ export function connectPageSocket({
 				handlers.onCommit(message);
 				return;
 			case "cursor":
-				handlers.onCursor?.(message.client, message.cursor);
+				handlers.onCursor?.(message.client, message.cursor, message.name);
 				return;
 			case "leave":
 				handlers.onLeave?.(message.client);

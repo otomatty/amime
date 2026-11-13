@@ -786,6 +786,29 @@ describe("Page", () => {
 		expect(leave()).toBe(false);
 	});
 
+	it("本文の [名前.icon] は、このプロジェクトから画像を引いて表示する。同じ名前は、1回だけ引く", async () => {
+		const withIcons = {
+			version: 1,
+			lines: [
+				{ id: "a", text: "買い物" },
+				{ id: "b", text: "[花子.icon] と [花子.icon]" },
+			],
+		};
+		const fetchMock = stubFetch((url) =>
+			url.includes("/icons/")
+				? json({ url: "https://images.example/hanako.png" })
+				: json(withIcons),
+		);
+
+		render(<Page name="買い物" />);
+
+		await waitFor(() => expect(screen.getAllByRole("img", { name: "花子" })).toHaveLength(2));
+		const lookups = fetchMock.mock.calls.filter(([url]) => String(url).includes("/icons/"));
+		expect(lookups).toEqual([
+			[`/api/projects/team/icons/${encodeURIComponent("花子")}`, undefined],
+		]);
+	});
+
 	it("読むだけの表示でも、ページが削除されたら、そのことを伝える", async () => {
 		const { receive } = await openWithSocket({}, true);
 		expect(status()).toMatch(/読むだけの表示です/);

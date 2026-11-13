@@ -55,7 +55,8 @@ function SignedIn({
 					// 名前が横にあるので、画像は飾り。画像の置き場所に、いまのページのURLを伝えない。
 					<img className="account-picture" src={user.picture} alt="" referrerPolicy="no-referrer" />
 				)}
-				<span>{user.name}</span>
+				{/* 名前から、プロフィール(表示名とアイコン)の設定へ移れる。 */}
+				<a href="/settings">{user.name}</a>
 			</span>
 			<button
 				type="button"

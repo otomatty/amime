@@ -359,6 +359,17 @@ export class ProjectDO extends DurableObject {
 		return this.#byId(id) !== null;
 	}
 
+	/** その名前のページの、最初の画像のURL(一覧のカードに出すもの)。ページか画像がなければ null。 */
+	image(name: string): string | null {
+		const row = this.ctx.storage.sql
+			.exec<{ image: string | null }>(
+				"SELECT image FROM pages WHERE title_lc = ? AND version > 0",
+				toTitleLc(name),
+			)
+			.toArray()[0];
+		return row?.image ?? null;
+	}
+
 	/** 名前からページを引く。open と違って、まだないページのIDは決めない(台帳を変えない)。 */
 	find(name: string): PageInfo | null {
 		const existing = this.#byTitle(toTitleLc(name));

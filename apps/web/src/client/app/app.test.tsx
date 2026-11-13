@@ -261,6 +261,16 @@ describe("App", () => {
 			expect(screen.queryByRole("link", { name: "メンバーと設定" })).toBeNull();
 		});
 
+		it("/settings では、自分のプロフィールを表示する", async () => {
+			stubServer();
+			open("/settings");
+
+			render(<App />);
+
+			expect(await screen.findByRole("heading", { name: "プロフィール" })).toBeDefined();
+			expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Amime");
+		});
+
 		it("/invite/値 では、招待リンクの画面を表示する", async () => {
 			stubServer({ "/api/invites/tok-1": () => Response.json({ project: "team", member: false }) });
 			open("/invite/tok-1");

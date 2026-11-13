@@ -263,6 +263,32 @@ a.link[data-missing]:hover {
 	border-left: 2px solid var(--remote-color, #868e96);
 }
 
+/* [名前.icon] の画像。行の高さに収める。 */
+.icon-image {
+	height: 1.3em;
+	width: auto;
+	max-width: 4em;
+	vertical-align: -0.25em;
+	border-radius: 0.2em;
+	object-fit: cover;
+}
+
+/* だれのカーソルかを示す、名前の札。カーソルの上に出す。行の高さや、文字の位置は変えない。 */
+.remote-caret-name {
+	position: absolute;
+	left: -1px;
+	bottom: 1.1em;
+	padding: 0 0.3em;
+	border-radius: 0.2em 0.2em 0.2em 0;
+	background: var(--remote-color, #868e96);
+	color: #fff;
+	font-size: 0.65rem;
+	font-weight: 600;
+	line-height: 1.4;
+	white-space: nowrap;
+	user-select: none;
+}
+
 .remote-caret[data-color="0"] {
 	--remote-color: #e8590c;
 }

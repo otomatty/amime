@@ -27,6 +27,28 @@ export const devLogin = (name: string): Promise<boolean> =>
 		body: JSON.stringify({ name }),
 	});
 
+/** 表示名とアイコンを変えられなかった理由。 */
+export type ProfileError = "invalid-name" | "invalid-picture" | "failed";
+
+/**
+ * 表示名とアイコンを変える(ADR-0035)。picture の null は、アイコンをなくす。
+ * 成功なら null、失敗なら理由。
+ */
+export async function updateProfile(profile: {
+	readonly name: string;
+	readonly picture: string | null;
+}): Promise<ProfileError | null> {
+	const response = await fetch("/api/me", {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(profile),
+	}).catch(() => null);
+	if (response?.ok) return null;
+	const body: unknown = await response?.json().catch(() => null);
+	const error = typeof body === "object" && body !== null && "error" in body ? body.error : null;
+	return error === "invalid-name" || error === "invalid-picture" ? error : "failed";
+}
+
 /** ログインを始めるリンク。ログインのあと、returnTo(このサイトの中のパス)へ戻る。 */
 export const loginHref = (method: "google", returnTo: string): string =>
 	`/api/auth/login/${method}?return=${encodeURIComponent(returnTo)}`;

@@ -202,7 +202,13 @@ export type ServerMessage =
 	/** 他の端末のコミットが効いたときに送る。 */
 	| ({ readonly type: "commit" } & CommitResult)
 	/** 他の端末のカーソルが動いたときと、接続した直後(いまいる端末のカーソル)に送る。 */
-	| { readonly type: "cursor"; readonly client: ClientId; readonly cursor: CursorPosition | null }
+	| {
+			readonly type: "cursor";
+			readonly client: ClientId;
+			readonly cursor: CursorPosition | null;
+			/** その端末を使っている人の表示名。分からなければ、ない。 */
+			readonly name?: string | undefined;
+	  }
 	/** 他の端末が接続を閉じたときに送る。 */
 	| { readonly type: "leave"; readonly client: ClientId }
 	/** ページの名前を、1行目に合わせて確かめたあとに送る(ADR-0024)。変わっていないこともある。 */
