@@ -136,7 +136,8 @@ export async function loadIcon(name: string): Promise<string | null> {
 	if (!response.ok) throw new PageApiError("failed");
 	const body: unknown = await response.json().catch(() => null);
 	const url = typeof body === "object" && body !== null && "url" in body ? body.url : null;
-	return typeof url === "string" && url.startsWith("https://") ? url : null;
+	// ページの画像は、本文の画像と同じく、http も使える。
+	return typeof url === "string" && /^https?:\/\//.test(url) ? url : null;
 }
 
 /** ページの WebSocket のURL。いま開いているページ(location)と同じ接続先にする。 */

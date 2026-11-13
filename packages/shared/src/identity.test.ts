@@ -12,6 +12,8 @@ describe("parseDisplayName(表示名)", () => {
 		["空白だけ", "   "],
 		["長すぎる", "あ".repeat(51)],
 		["改行が入っている", "花子\n太郎"],
+		["行の区切り(U+2028)が入っている", "花子\u2028太郎"],
+		["段落の区切り(U+2029)が入っている", "花子\u2029太郎"],
 	])("%sものは、受け付けない", (_name, value) => {
 		expect(parseDisplayName(value)).toBeNull();
 	});
@@ -99,6 +101,10 @@ describe("readIdentity(ログインの結果として受け取った内容を確
 		expect(readIdentity({ ...claims, name: "  花子  " }, expected)).toMatchObject({
 			value: { name: "花子" },
 		});
+		// 改行などは、空白に置き換える(名前の札やメンバーの一覧を、改行させない)。
+		expect(
+			readIdentity({ ...claims, name: "花子\n太郎\u2028次郎\u2029\t三郎" }, expected),
+		).toMatchObject({ value: { name: "花子 太郎 次郎 三郎" } });
 		expect(readIdentity({ ...claims, name: "あ".repeat(200) }, expected)).toMatchObject({
 			value: { name: "あ".repeat(50) },
 		});

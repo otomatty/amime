@@ -73,6 +73,40 @@ describe("Profile(表示名とアイコンを変える)", () => {
 		expect(screen.getByText("[山田 花子.icon]")).toBeDefined();
 	});
 
+	it("絵文字の表示名も、50文字まで入力できる(入力欄では、文字数を切り詰めない)", async () => {
+		const server = stubServer();
+		renderProfile();
+		const input = (await nameInput()) as HTMLInputElement;
+		expect(input.maxLength).toBe(-1);
+
+		fireEvent.change(input, { target: { value: "😀".repeat(50) } });
+		fireEvent.click(screen.getByRole("button", { name: "保存する" }));
+
+		await waitFor(() => expect(server.saved).toHaveLength(1));
+		expect(server.saved[0]).toMatchObject({ name: "😀".repeat(50) });
+	});
+
+	it("長すぎる表示名は、送らずに、理由を伝える", async () => {
+		const server = stubServer();
+		renderProfile();
+
+		fireEvent.change(await nameInput(), { target: { value: "あ".repeat(51) } });
+		fireEvent.click(screen.getByRole("button", { name: "保存する" }));
+
+		expect((await screen.findByRole("alert")).textContent).toMatch(/1文字から50文字まで/);
+		expect(server.saved).toEqual([]);
+	});
+
+	it("表示名が、アイコンの記法で書けない(角括弧がある)ときは、書き方を案内せず、そのことを伝える", async () => {
+		stubServer();
+		renderProfile();
+
+		fireEvent.change(await nameInput(), { target: { value: "山田[花子]" } });
+
+		expect(screen.queryByText("[山田[花子].icon]")).toBeNull();
+		expect(screen.getByText(/この表示名では、本文にアイコンを置けません/)).toBeDefined();
+	});
+
 	it("アイコンの欄を空にして保存すると、アイコンをなくす", async () => {
 		const server = stubServer({ ...hanako, picture: "https://images.example/a.png" });
 		renderProfile();

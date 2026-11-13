@@ -1,3 +1,5 @@
+import { parseLine } from "@amime/parser";
+import { parseDisplayName } from "@amime/shared";
 import type { Account } from "@amime/sync";
 import { type FormEvent, useState } from "react";
 import "./account.css";
@@ -9,6 +11,12 @@ const ERRORS: Record<ProfileError, string> = {
 	"invalid-picture": "アイコンの画像は、https:// で始まるURLで指定してください。",
 	failed: "保存できませんでした。もう一度お試しください。",
 };
+
+/** その表示名を、本文に `[表示名.icon]` と書いたときに、その名前のアイコンとして読まれるか。 */
+function writableAsIcon(name: string): boolean {
+	const [node, ...rest] = parseLine(`[${name}.icon]`).nodes;
+	return rest.length === 0 && node?.type === "icon" && node.name === name;
+}
 
 function ProfileForm({
 	user,
@@ -23,10 +31,17 @@ function ProfileForm({
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
 		const url = picture.trim();
+		// 長さは、サーバーと同じ決まりで数える(絵文字も1文字)。入力欄では、切り詰めない。
+		if (parseDisplayName(name) === null) {
+			setResult("invalid-name");
+			return;
+		}
 		const error = await updateProfile({ name, picture: url === "" ? null : url });
 		setResult(error ?? "saved");
 		if (error === null) await onSaved();
 	};
+	// 案内に出す名前。空のあいだは、仮の名前を出す。
+	const shown = name.trim() || "表示名";
 	const edit = (change: () => void) => {
 		change();
 		setResult(null);
@@ -35,11 +50,7 @@ function ProfileForm({
 		<form className="profile-form" onSubmit={(event) => void submit(event)}>
 			<label>
 				表示名(他の人のカーソルや、メンバーの一覧に出ます)
-				<input
-					value={name}
-					maxLength={50}
-					onChange={(event) => edit(() => setName(event.target.value))}
-				/>
+				<input value={name} onChange={(event) => edit(() => setName(event.target.value))} />
 			</label>
 			<label>
 				アイコンの画像のURL(空にすると、アイコンなし)
@@ -60,10 +71,17 @@ function ProfileForm({
 					/>
 				</p>
 			)}
-			<p className="profile-hint">
-				本文に <code>[{name.trim() || "表示名"}.icon]</code>{" "}
-				と書くと、参加しているプロジェクトのページに、このアイコンを置けます。
-			</p>
+			{writableAsIcon(shown) ? (
+				<p className="profile-hint">
+					本文に <code>[{shown}.icon]</code>{" "}
+					と書くと、参加しているプロジェクトのページに、このアイコンを置けます。
+				</p>
+			) : (
+				<p className="profile-hint">
+					この表示名では、本文にアイコンを置けません(<code>[</code> や <code>]</code> を含む名前は、
+					<code>[名前.icon]</code> と書けません)。
+				</p>
+			)}
 			<button type="submit">保存する</button>
 			{result === "saved" && (
 				<p className="page-status" role="status">

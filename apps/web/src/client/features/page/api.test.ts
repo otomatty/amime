@@ -164,6 +164,12 @@ describe("pinPage(一覧の先頭に固定する)", () => {
 });
 
 describe("loadIcon([名前.icon] の画像のURLを引く)", () => {
+	it("ページの画像は、http のURLでも使う(本文の画像と同じ)", async () => {
+		stubFetch(json({ url: "http://images.example/old.png" }));
+
+		expect(await loadIcon("古い画像")).toBe("http://images.example/old.png");
+	});
+
 	it("名前をURLに符号化して引き、画像のURLを返す", async () => {
 		const fetchMock = stubFetch(json({ url: "https://images.example/hanako.png" }));
 
@@ -177,7 +183,7 @@ describe("loadIcon([名前.icon] の画像のURLを引く)", () => {
 	it.each([
 		["その名前のアイコンがない", json({ error: "unknown-icon" }, 404)],
 		["形の違う応答が返った", json({ image: "x" })],
-		["https でないURLが返った", json({ url: "javascript:alert(1)" })],
+		["http でも https でもないURLが返った", json({ url: "javascript:alert(1)" })],
 		["JSONでない応答が返った", new Response("<html>")],
 	])("%sときは、null", async (_name, response) => {
 		stubFetch(response);
