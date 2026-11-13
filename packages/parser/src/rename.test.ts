@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { renameLinks } from "./rename.ts";
 
+/** 1つの名前の変更で、書き換えた行(行番号と、書き換えたあとの文字列)。 */
+const rename = (lines: readonly string[], from: string, to: string) =>
+	renameLinks(lines, [{ from, to }]).map(({ index, text }) => ({ index, text }));
+
 /** 書き換えたあとの行。書き換えなかった行は、元のまま。 */
 function renamed(lines: readonly string[], from: string, to: string): string[] {
 	const result = [...lines];
-	for (const { index, text } of renameLinks(lines, from, to)) result[index] = text;
+	for (const { index, text } of rename(lines, from, to)) result[index] = text;
 	return result;
 }
 
@@ -12,7 +16,7 @@ describe("renameLinks(名前が変わったページへのリンクを書き換�
 	it("[前の名前] を [新しい名前] に書き換える。書き換えた行だけを返す", () => {
 		const lines = ["題", "[牛乳] を買う", "関係ない行", " [牛乳] と [卵]"];
 
-		expect(renameLinks(lines, "牛乳", "豆乳")).toEqual([
+		expect(rename(lines, "牛乳", "豆乳")).toEqual([
 			{ index: 1, text: "[豆乳] を買う" },
 			{ index: 3, text: " [豆乳] と [卵]" },
 		]);
@@ -57,7 +61,7 @@ describe("renameLinks(名前が変わったページへのリンクを書き換�
 			" [牛乳]",
 		];
 
-		expect(renameLinks(lines, "牛乳", "豆乳")).toEqual([]);
+		expect(rename(lines, "牛乳", "豆乳")).toEqual([]);
 	});
 
 	it("他のページへのリンクは、そのままにする", () => {
@@ -77,15 +81,71 @@ describe("renameLinks(名前が変わったページへのリンクを書き換�
 	])(
 		"新しい名前が、[名前] と書いてもそのページへのリンクにならない(%s)ときは、書き換えない",
 		(_name, to) => {
-			expect(renameLinks(["題", "[牛乳] を買う"], "牛乳", to)).toEqual([]);
+			expect(rename(["題", "[牛乳] を買う"], "牛乳", to)).toEqual([]);
 		},
 	);
 
+	describe("いくつかの名前の変更を、まとめて書き換える", () => {
+		it("それぞれのリンクを、その行き先の新しい名前に書き換える。どの名前を書き換えたかも返す", () => {
+			const lines = ["題", "[牛乳] と [卵]", "#卵 だけ", "関係ない [パン]"];
+
+			expect(
+				renameLinks(lines, [
+					{ from: "牛乳", to: "豆乳" },
+					{ from: "卵", to: "たまご" },
+				]),
+			).toEqual([
+				{ index: 1, text: "[豆乳] と [たまご]", renamed: ["牛乳", "卵"] },
+				{ index: 2, text: "#たまご だけ", renamed: ["卵"] },
+			]);
+		});
+
+		it("書き換えた結果を、もう1度書き換えない(名前を入れ替えたときも、それぞれの行き先を保つ)", () => {
+			expect(
+				renameLinks(
+					["題", "[A] [B] #a"],
+					[
+						{ from: "A", to: "B" },
+						{ from: "B", to: "A" },
+					],
+				),
+			).toEqual([{ index: 1, text: "[B] [A] #B", renamed: ["a", "b"] }]);
+		});
+
+		it("同じ名前からの変更が2つあれば、先のものを使う", () => {
+			expect(
+				renameLinks(
+					["題", "[牛乳]"],
+					[
+						{ from: "牛乳", to: "豆乳" },
+						{ from: "牛乳", to: "オーツ" },
+					],
+				),
+			).toEqual([{ index: 1, text: "[豆乳]", renamed: ["牛乳"] }]);
+		});
+
+		it("書けない名前への変更だけを、とばす", () => {
+			expect(
+				renameLinks(
+					["題", "[牛乳] と [卵]"],
+					[
+						{ from: "牛乳", to: "a]b" },
+						{ from: "卵", to: "たまご" },
+					],
+				),
+			).toEqual([{ index: 1, text: "[牛乳] と [たまご]", renamed: ["卵"] }]);
+		});
+
+		it("変更が1つもなければ、何も書き換えない", () => {
+			expect(renameLinks(["題", "[牛乳]"], [])).toEqual([]);
+		});
+	});
+
 	it("書き換えると、行の中の他のリンクが読めなくなるときは、その行を書き換えない", () => {
 		// バッククォートを含む名前を2か所に入れると、あいだがコードになり、[卵] がリンクでなくなる。
-		expect(renameLinks(["題", "[牛乳] [卵] [牛乳]"], "牛乳", "a`b")).toEqual([]);
+		expect(rename(["題", "[牛乳] [卵] [牛乳]"], "牛乳", "a`b")).toEqual([]);
 		// もともとあるコードと組になって、書き換えたリンクがコードの中に入るときも、書き換えない。
-		expect(renameLinks(["題", "[牛乳] と `code`"], "牛乳", "a`b")).toEqual([]);
+		expect(rename(["題", "[牛乳] と `code`"], "牛乳", "a`b")).toEqual([]);
 	});
 
 	it("バッククォートを含む名前でも、他のリンクを壊さなければ、書き換える", () => {
@@ -97,6 +157,6 @@ describe("renameLinks(名前が変わったページへのリンクを書き換�
 	});
 
 	it("タグとしても [名前] としても書けない名前なら、タグも書き換えない", () => {
-		expect(renameLinks(["題", "#牛乳"], "牛乳", "a]b")).toEqual([]);
+		expect(rename(["題", "#牛乳"], "牛乳", "a]b")).toEqual([]);
 	});
 });

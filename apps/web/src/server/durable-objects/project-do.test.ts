@@ -822,14 +822,13 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				let calls = 0;
 				vi.spyOn(prototype, "rewriteLinks").mockImplementation(async function (
 					this: typeof instance,
-					from,
-					to,
+					renames,
 				) {
 					if (this === instance) {
 						calls += 1;
 						await before(calls);
 					}
-					return original.call(this, from, to);
+					return original.call(this, renames);
 				});
 			});
 		}
@@ -1067,6 +1066,43 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 
 				expect(await queued(name)).toBe(0);
 			});
+		});
+
+		it("2つのページの名前を入れ替えても、それぞれへのリンクは、行き先を保つ", async () => {
+			const name = "rw-swap";
+			const first = await write(name, "A");
+			const second = await write(name, "B");
+			const list = await write(name, "一覧", "[A] と [B]");
+
+			// 仮の名前をはさんで、入れ替える。
+			await retitle(name, first, "仮");
+			await retitle(name, second, "A");
+			await retitle(name, first, "B");
+			await rewrite(name);
+
+			// 「A」だったページは、いま「B」。「B」だったページは、いま「A」。
+			expect(await textsOf(name, list)).toEqual(["一覧", "[B] と [A]"]);
+			expect(await queued(name)).toBe(0);
+			const links = await project(name).links(list);
+			expect(links.related.map((page) => page.id).sort()).toEqual([first, second].sort());
+		});
+
+		it("書き換えの予定を入れたあとで、アラームの予約に失敗していたら、反映のやり直しのときに予約し直す", async () => {
+			const name = "rw-reschedule";
+			const milk = await write(name, "牛乳");
+			const list = await write(name, "買い物", "[牛乳]");
+			const renamed = saved("豆乳", 2);
+			await runInDurableObject(project(name), async (instance, state) => {
+				vi.spyOn(state.storage, "setAlarm").mockRejectedValueOnce(new Error("alarm failed"));
+				await expect(instance.index(milk, renamed)).rejects.toThrow();
+			});
+			expect(await queued(name)).toBe(1);
+
+			// PageDO は、同じ内容で、反映をやり直す。名前は、もう変わっている。
+			await project(name).index(milk, renamed);
+
+			expect(await rewrite(name)).toBe(true);
+			expect(await textsOf(name, list)).toEqual(["買い物", "[豆乳]"]);
 		});
 
 		it("書き換えに失敗したら、あとでやり直す", async () => {

@@ -1,5 +1,5 @@
 import { DurableObject, exports } from "cloudflare:workers";
-import { renameLinks, summarizePage } from "@amime/parser";
+import { type Rename, renameLinks, summarizePage } from "@amime/parser";
 import { toTitleLc } from "@amime/shared";
 import {
 	applyChanges,
@@ -221,31 +221,38 @@ export class PageDO extends DurableObject {
 	}
 
 	/**
-	 * 名前が from から to に変わったページへのリンクを、書き換える(ADR-0028)。台帳が呼ぶ。
+	 * 名前が変わったページへのリンクを、書き換える(ADR-0028)。台帳が呼ぶ。
+	 * いくつかの名前の変更を、まとめて書き換える(書き換えた結果を、もう1度書き換えない)。
 	 * 書き換えは、ふつうのコミットと同じように保存し、開いている端末に配信する。
 	 * 何度呼んでも、結果は同じ(書き換えるリンクが残っていなければ、何もしない)。
-	 * 書き換えたか(changed)と、前の名前へのリンクがこのページに残っているか(remaining)を返す
+	 * 変更ごとに、書き換えたか(changed)と、前の名前へのリンクがこのページに残っているか(remaining)を返す
 	 * (新しい名前がリンクとして書けないときなどは、残る)。
 	 */
 	async rewriteLinks(
-		from: string,
-		to: string,
-	): Promise<{ readonly changed: boolean; readonly remaining: boolean }> {
-		if (this.#deleted()) return { changed: false, remaining: false };
+		renames: readonly Rename[],
+	): Promise<{ readonly changed: boolean; readonly remaining: boolean }[]> {
+		if (this.#deleted()) return renames.map(() => ({ changed: false, remaining: false }));
 		const lines = this.#lines();
 		const texts = lines.map((line) => line.text);
 		const changes: Change[] = [];
-		for (const { index, text } of renameLinks(texts, from, to)) {
+		// 書き換えたリンクの、前の名前(正規化したもの)。
+		const changed = new Set<string>();
+		for (const { index, text, renamed } of renameLinks(texts, renames)) {
 			const line = lines[index];
 			// 書き換えると長さの上限を超える行は、そのままにする(リンクは、前の名前を指したまま残る)。
 			if (line === undefined || text.length > MAX_LINE_LENGTH) continue;
 			texts[index] = text;
 			changes.push({ type: "update", id: line.id, text });
+			for (const title of renamed) changed.add(title);
 		}
 		if (changes.length > 0) await this.#apply(changes);
-		const fromLc = toTitleLc(from);
-		const remaining = summarizePage(texts).links.some((title) => toTitleLc(title) === fromLc);
-		return { changed: changes.length > 0, remaining };
+		// 前回、書き換えを保存したあとで台帳への知らせの予約に失敗していたら、ここで予約し直す。
+		else await this.#scheduleIndexing();
+		const remaining = new Set(summarizePage(texts).links.map((title) => toTitleLc(title)));
+		return renames.map(({ from }) => ({
+			changed: changed.has(toTitleLc(from)),
+			remaining: remaining.has(toTitleLc(from)),
+		}));
 	}
 
 	/**

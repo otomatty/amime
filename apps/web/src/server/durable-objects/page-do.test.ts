@@ -8,7 +8,7 @@ import {
 	type LineId,
 	MAX_LINE_LENGTH,
 } from "@amime/sync";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const id = (value: string): LineId => value as LineId;
 const line = (lineId: string, text: string): Line => ({ id: id(lineId), text });
@@ -237,6 +237,47 @@ describe("PageDO", () => {
 	});
 
 	describe("rewriteLinks(名前が変わったページへのリンクを書き換える。ADR-0028)", () => {
+		/** 1つの名前の変更で、書き換える。 */
+		const rewriteOne = async (stub: ReturnType<typeof page>, from: string, to: string) =>
+			(await stub.rewriteLinks([{ from, to }]))[0];
+
+		it("いくつかの名前の変更を、まとめて書き換える。変更ごとに、結果を返す", async () => {
+			const stub = page("rewrite-many");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[A] [B] [卵]")]);
+
+			// 名前を入れ替えたときも、それぞれのリンクの行き先を保つ。
+			const results = await stub.rewriteLinks([
+				{ from: "A", to: "B" },
+				{ from: "B", to: "A" },
+				{ from: "パン", to: "ごはん" },
+			]);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[B] [A] [卵]")]);
+			expect(results).toEqual([
+				// 書き換えたあとも、もう一方から書き換わったリンクが、その名前を指している。
+				{ changed: true, remaining: true },
+				{ changed: true, remaining: true },
+				{ changed: false, remaining: false },
+			]);
+		});
+
+		it("書き換えたあとで、台帳への知らせの予約に失敗していたら、やり直しのときに予約し直す", async () => {
+			const stub = page("rewrite-reschedule");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
+			await runDurableObjectAlarm(stub);
+			await runInDurableObject(stub, async (instance, state) => {
+				vi.spyOn(state.storage, "setAlarm").mockRejectedValueOnce(new Error("alarm failed"));
+				await expect(instance.rewriteLinks([{ from: "牛乳", to: "豆乳" }])).rejects.toThrow();
+			});
+
+			// 本文は、もう書き換わっている。やり直しでは、書き換えるものがない。
+			expect(await rewriteOne(stub, "牛乳", "豆乳")).toEqual({ changed: false, remaining: false });
+
+			await runInDurableObject(stub, async (_instance, state) => {
+				expect(await state.storage.getAlarm()).not.toBeNull();
+			});
+		});
+
 		it("リンクを新しい名前に書き換え、バージョンを1つ進める。台帳への知らせも予約する", async () => {
 			const stub = page("rewrite");
 			await commitTo(stub, [
@@ -248,7 +289,7 @@ describe("PageDO", () => {
 			await runDurableObjectAlarm(stub);
 
 			// 書き換えたかどうかと、前の名前へのリンクが残っているかどうかを返す。
-			expect(await stub.rewriteLinks("牛乳", "豆乳")).toEqual({ changed: true, remaining: false });
+			expect(await rewriteOne(stub, "牛乳", "豆乳")).toEqual({ changed: true, remaining: false });
 
 			expect(await read(stub)).toEqual({
 				version: 2,
@@ -269,9 +310,9 @@ describe("PageDO", () => {
 			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[卵]")]);
 
 			const nothing = { changed: false, remaining: false };
-			expect(await stub.rewriteLinks("牛乳", "豆乳")).toEqual(nothing);
+			expect(await rewriteOne(stub, "牛乳", "豆乳")).toEqual(nothing);
 			// もう1度呼んでも(やり直しでも)、同じ。
-			expect(await stub.rewriteLinks("牛乳", "豆乳")).toEqual(nothing);
+			expect(await rewriteOne(stub, "牛乳", "豆乳")).toEqual(nothing);
 
 			expect((await read(stub)).version).toBe(1);
 		});
@@ -286,7 +327,7 @@ describe("PageDO", () => {
 			]);
 
 			// 書き換えられた行と、書き換えられなかった行の、両方がある。
-			expect(await stub.rewriteLinks("牛乳", "豆乳ヨーグルト")).toEqual({
+			expect(await rewriteOne(stub, "牛乳", "豆乳ヨーグルト")).toEqual({
 				changed: true,
 				remaining: true,
 			});
@@ -302,7 +343,7 @@ describe("PageDO", () => {
 			const stub = page("rewrite-unwritable");
 			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
 
-			expect(await stub.rewriteLinks("牛乳", "a]b")).toEqual({ changed: false, remaining: true });
+			expect(await rewriteOne(stub, "牛乳", "a]b")).toEqual({ changed: false, remaining: true });
 
 			expect((await read(stub)).version).toBe(1);
 		});
@@ -312,7 +353,7 @@ describe("PageDO", () => {
 			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
 			await stub.destroy();
 
-			expect(await stub.rewriteLinks("牛乳", "豆乳")).toEqual({ changed: false, remaining: false });
+			expect(await rewriteOne(stub, "牛乳", "豆乳")).toEqual({ changed: false, remaining: false });
 
 			expect(await stub.getPage()).toBe("deleted");
 		});

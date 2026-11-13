@@ -269,7 +269,11 @@ export class ProjectDO extends DurableObject {
 			return info;
 		});
 		// 名前が変わって、リンクの書き換えが増えた。応答を待たせないように、アラームで行う(ADR-0028)。
-		if (this.#lastRewrite() !== queued) await this.ctx.storage.setAlarm(Date.now());
+		// 前回、予定を入れたあとでアラームの予約に失敗していたら(予定は残っている)、ここで予約し直す。
+		const added = this.#lastRewrite() !== queued;
+		if (added || (this.#hasRewrites() && (await this.ctx.storage.getAlarm()) === null)) {
+			await this.ctx.storage.setAlarm(Date.now());
+		}
 		return info;
 	}
 
@@ -345,30 +349,65 @@ export class ProjectDO extends DurableObject {
 	 */
 	override async alarm(): Promise<void> {
 		const { sql } = this.ctx.storage;
+		// ページごとに、まとめて書き換える。予定の古いページから、上限まで。
 		const rows = sql
 			.exec<RewriteRow>(
-				"SELECT seq, page_id, old_lc, new_lc, new_title FROM rewrites ORDER BY seq LIMIT ?",
+				`SELECT seq, page_id, old_lc, new_lc, new_title FROM rewrites
+				WHERE page_id IN (
+					SELECT page_id FROM rewrites GROUP BY page_id ORDER BY MIN(seq) LIMIT ?
+				) ORDER BY seq`,
 				REWRITE_BATCH,
 			)
 			.toArray();
+		const pages = new Map<string, RewriteRow[]>();
+		for (const row of rows) pages.set(row.page_id, [...(pages.get(row.page_id) ?? []), row]);
+
 		let failed = false;
-		for (const row of rows) {
-			// このプロジェクト(この Durable Object の名前)の、そのページ。
-			const page = exports.PageDO.getByName(`${this.ctx.id.name}/${row.page_id}`);
+		for (const [pageId, pending] of pages) {
 			try {
-				this.#rewritten(row, await page.rewriteLinks(row.old_lc, row.new_title));
+				await this.#rewritePage(pageId, pending);
 			} catch {
 				failed = true;
-				sql.exec("UPDATE rewrites SET attempts = attempts + 1 WHERE seq = ?", row.seq);
-				sql.exec(
-					"DELETE FROM rewrites WHERE seq = ? AND attempts >= ?",
-					row.seq,
-					MAX_REWRITE_ATTEMPTS,
-				);
+				for (const { seq } of pending) {
+					sql.exec("UPDATE rewrites SET attempts = attempts + 1 WHERE seq = ?", seq);
+					sql.exec(
+						"DELETE FROM rewrites WHERE seq = ? AND attempts >= ?",
+						seq,
+						MAX_REWRITE_ATTEMPTS,
+					);
+				}
 			}
 		}
-		const left = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM rewrites").one().n;
-		if (left > 0) await this.ctx.storage.setAlarm(Date.now() + (failed ? REWRITE_RETRY_MS : 0));
+		if (this.#hasRewrites()) {
+			await this.ctx.storage.setAlarm(Date.now() + (failed ? REWRITE_RETRY_MS : 0));
+		}
+	}
+
+	/**
+	 * 1つのページの、予定に入っている書き換えを、まとめて行う。
+	 * 1つずつ順に行うと、書き換えた結果を、次の書き換えがもう1度書き換えてしまう(名前を入れ替えたとき)。
+	 * 同じ名前からの書き換えが2つあれば、先に予定に入ったものだけを行う。
+	 */
+	async #rewritePage(pageId: string, pending: readonly RewriteRow[]): Promise<void> {
+		const first = new Map<string, RewriteRow>();
+		for (const row of pending) {
+			if (!first.has(row.old_lc)) first.set(row.old_lc, row);
+		}
+		const applied = [...first.values()];
+		// このプロジェクト(この Durable Object の名前)の、そのページ。
+		const page = exports.PageDO.getByName(`${this.ctx.id.name}/${pageId}`);
+		const results = await page.rewriteLinks(
+			applied.map((row) => ({ from: row.old_lc, to: row.new_title })),
+		);
+		for (const row of pending) {
+			// 行わなかった書き換えは、何も変えなかったものとして、予定から消す。
+			this.#rewritten(row, results[applied.indexOf(row)] ?? { changed: false, remaining: true });
+		}
+	}
+
+	/** まだ済んでいない、リンクの書き換えがあるか。 */
+	#hasRewrites(): boolean {
+		return this.#lastRewrite() !== 0;
 	}
 
 	/**
