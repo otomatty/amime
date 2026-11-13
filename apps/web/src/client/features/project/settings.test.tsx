@@ -295,6 +295,46 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			expect(screen.queryByRole("button", { name: "太郎 を外す" })).toBeNull();
 		});
 
+		it("招待リンクを作っているあいだは、もう1つ作り始められない(応答の順番が入れ替わって、前のリンクで上書きしない)", async () => {
+			const server = stubServer({ members: [admin], invites: [] });
+			let finish: (response: Response) => void = () => {};
+			server.replies["POST /api/projects/team/invites"] = () =>
+				new Promise<Response>((resolve) => {
+					finish = resolve;
+				});
+			renderSettings();
+			const create = (await screen.findByRole("button", {
+				name: "招待リンクを作る",
+			})) as HTMLButtonElement;
+
+			fireEvent.click(create);
+			await waitFor(() => expect(create.disabled).toBe(true));
+			fireEvent.click(create);
+			finish(Response.json({ ...invite, token: "only" }, { status: 201 }));
+
+			await screen.findByDisplayValue("https://amime.example/invite/only");
+			await waitFor(() => expect(create.disabled).toBe(false));
+			expect(server.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+		});
+
+		it("作ったばかりのリンクを無効にしたら、一覧の読み直しを待たずに、表示を消す", async () => {
+			const server = stubServer({ members: [admin], invites: [invite] });
+			server.replies["POST /api/projects/team/invites"] = () =>
+				Response.json({ ...invite, token: "tok" }, { status: 201 });
+			renderSettings();
+			fireEvent.click(await screen.findByRole("button", { name: "招待リンクを作る" }));
+			await screen.findByDisplayValue("https://amime.example/invite/tok");
+			await waitFor(() => expect(server.requests).toHaveLength(1));
+			// 無効にしたあとの読み直しは、届かないまま。
+			server.loads.push(() => new Promise<Response>(() => {}));
+
+			fireEvent.click(screen.getByRole("button", { name: "無効にする" }));
+
+			await waitFor(() =>
+				expect(screen.queryByDisplayValue("https://amime.example/invite/tok")).toBeNull(),
+			);
+		});
+
 		it("前に作ったリンクの読み直しが、あとから届いても、新しく作ったリンクを表示したままにする", async () => {
 			const server = stubServer({ members: [admin], invites: [] });
 			renderSettings();
