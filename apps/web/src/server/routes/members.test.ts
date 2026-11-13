@@ -420,7 +420,7 @@ describe("権限がなくなった人の接続", () => {
 	 * 台帳のメソッドを、このプロジェクトの台帳でだけ、差し替える。
 	 * 外から呼べるのは、クラスに定義したメソッドだけなので、クラスの側を差し替える。
 	 */
-	async function replace<Name extends "revocations" | "revoke">(
+	async function replace<Name extends "revocations" | "revoke" | "settle">(
 		path: string,
 		method: Name,
 		replacement: () => Promise<never[]> | never[],
@@ -554,6 +554,65 @@ describe("権限がなくなった人の接続", () => {
 		again.socket.close();
 	});
 
+	it("最後の管理者を外そうとして断られたときは、その人の接続を閉じない", async () => {
+		const { path, admin } = await project();
+		const own = await watch(path, admin, "admin-1");
+		const other = await watch(path, await member(path, admin), "member-1");
+
+		expect((await send("DELETE", `${path}/members/${admin.id}`, admin)).status).toBe(409);
+		expect((await commit(path, own.id, await member(path, admin))).status).toBe(200);
+
+		await vi.waitFor(() => expect(commits(own.messages)).toHaveLength(1));
+		expect(own.closes).toEqual([]);
+		expect(other.closes).toEqual([]);
+		for (const { socket } of [own, other]) socket.close();
+	});
+
+	it("コミットがなくても、カーソルを配る前に、権限のなくなった人の接続を閉じる", async () => {
+		const { path, admin } = await project();
+		const leaving = await member(path, admin);
+		const removed = await watch(path, leaving, "leaving");
+		const own = await watch(path, admin, "admin-1");
+
+		expect((await send("DELETE", `${path}/members/${leaving.id}`, admin)).status).toBe(204);
+		own.socket.send(JSON.stringify({ type: "cursor", cursor: { line: "t", column: 1 } }));
+
+		await vi.waitFor(() => expect(removed.closes).toEqual([4001]));
+		expect(removed.messages.filter((message) => message.type === "cursor")).toEqual([]);
+		own.socket.close();
+	});
+
+	it("管理者でなくなった人が、確かめを通ったあとの要求を送り終えても、役割は変わらない", async () => {
+		const { path, admin } = await project();
+		const demoted = await member(path, admin);
+		await send("PUT", `${path}/members/${demoted.id}`, admin, { role: "admin" });
+		// 本文を、あとから送る要求。権限は、本文を読む前に確かめられる。
+		let finish: () => void = () => {};
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				finish = () => {
+					controller.enqueue(new TextEncoder().encode(JSON.stringify({ role: "admin" })));
+					controller.close();
+				};
+			},
+		});
+		const pending = app.request(
+			`${ORIGIN}${path}/members/${demoted.id}`,
+			{ method: "PUT", headers: { cookie: demoted.cookie }, body, duplex: "half" } as RequestInit,
+			env,
+		);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		// そのあいだに、もとの管理者が、メンバーに戻す。
+		expect(
+			(await send("PUT", `${path}/members/${demoted.id}`, admin, { role: "member" })).status,
+		).toBe(204);
+		finish();
+
+		expect((await pending).status).toBe(403);
+		expect(await (await call(path, { as: demoted })).json()).toMatchObject({ role: "member" });
+	});
+
 	it("権限を取り上げたことを、台帳に覚えさせられなかったら、権限も変えない(メンバーを外す、非公開にする)", async () => {
 		const { path, admin } = await project("public");
 		const leaving = await member(path, admin);
@@ -595,6 +654,29 @@ describe("権限がなくなった人の接続", () => {
 		expect(late.status).toBe(410);
 		vi.restoreAllMocks();
 		expect((await call(`${path}/pages/${other.id}`, { as: admin })).status).toBe(410);
+	});
+
+	it("権限を取り上げ終えたことを、台帳に覚えさせられなくても、変更は成り立つ。接続は、1分の余裕をもって閉じる", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-07-01T00:00:00Z"));
+		const { path, admin } = await project("public");
+		const leaving = await member(path, admin);
+		await replace(path, "settle", () => {
+			throw new Error("the directory is down");
+		});
+
+		const removed = await send("DELETE", `${path}/members/${leaving.id}`, admin);
+		const closed = await send("PATCH", path, admin, { visibility: "private" });
+
+		expect(removed.status).toBe(204);
+		expect(closed.status).toBe(200);
+		vi.restoreAllMocks();
+		const at = Date.parse("2026-07-01T00:01:00Z");
+		const stub = exports.ProjectDO.getByName(await projectId(path));
+		expect(await stub.revocations()).toEqual([
+			{ subject: "*", at },
+			{ subject: leaving.id, at },
+		]);
 	});
 
 	it("外されたあとで、もう一度招待されて参加した人の、新しい接続は閉じない", async () => {

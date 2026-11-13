@@ -55,26 +55,71 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 		});
 	});
 
-	describe("revoke / revocations(権限を取り上げた相手と、その時刻)", () => {
+	describe("revoke / settle / revocations(権限を取り上げた相手と、その時刻)", () => {
 		afterEach(() => {
 			vi.useRealTimers();
 		});
 
-		it("取り上げた相手ごとに、いちばん新しい時刻を覚える", async () => {
+		it("取り上げ始めたときは、1分先の時刻を覚える(権限を変え終わるまでにつないだ接続も、閉じられるように)。相手ごとに、いちばん新しい時刻を覚える", async () => {
 			vi.useFakeTimers({ toFake: ["Date"] });
 			vi.setSystemTime(5_000);
 			const stub = project("revoke");
 
 			expect(await stub.revocations()).toEqual([]);
-			await stub.revoke("u1");
-			await stub.revoke("*");
+			expect(await stub.revoke("u1")).toBe(65_000);
+			expect(await stub.revoke("*")).toBe(65_000);
 			vi.setSystemTime(9_000);
-			await stub.revoke("u1");
+			expect(await stub.revoke("u1")).toBe(69_000);
 
 			expect(await stub.revocations()).toEqual([
-				{ subject: "*", at: 5_000 },
-				{ subject: "u1", at: 9_000 },
+				{ subject: "*", at: 65_000 },
+				{ subject: "u1", at: 69_000 },
 			]);
+		});
+
+		it("取り上げ終えたら、そのときの時刻に直す(すぐにつなぎ直した接続を、閉じない)", async () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			vi.setSystemTime(5_000);
+			const stub = project("settle");
+			const pending = await stub.revoke("u1");
+			vi.setSystemTime(5_200);
+
+			await stub.settle("u1", pending);
+
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 5_200 }]);
+		});
+
+		it("同じ相手から、重ねて取り上げているあいだは、最後の1つが終わるまで、先の時刻のままにする", async () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			vi.setSystemTime(5_000);
+			const stub = project("settle-overlap");
+			const first = await stub.revoke("u1");
+			vi.setSystemTime(6_000);
+			const second = await stub.revoke("u1");
+			vi.setSystemTime(7_000);
+
+			await stub.settle("u1", first);
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 66_000 }]);
+
+			vi.setSystemTime(8_000);
+			await stub.settle("u1", second);
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 8_000 }]);
+		});
+
+		it("あとから始めたほうが先に終わっても、先に始めたほうが終わった時刻より、前には戻さない", async () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			vi.setSystemTime(5_000);
+			const stub = project("settle-order");
+			const first = await stub.revoke("u1");
+			vi.setSystemTime(6_000);
+			const second = await stub.revoke("u1");
+			vi.setSystemTime(7_000);
+			await stub.settle("u1", second);
+			vi.setSystemTime(8_000);
+
+			await stub.settle("u1", first);
+
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 8_000 }]);
 		});
 	});
 

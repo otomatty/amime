@@ -113,11 +113,16 @@ function Invites({
 	const [created, setCreated] = useState<NewInvite | null>(null);
 	const create = async () => {
 		let invite: NewInvite | null = null;
-		await run(async () => {
+		const made = await run(async () => {
 			invite = await createInvite(project);
 			return invite === null ? "failed" : null;
 		});
-		setCreated(invite);
+		// 作れなかったときは、前に作ったリンクを出したままにする(まだ使えるリンクを、見失わせない)。
+		if (made) setCreated(invite);
+	};
+	const revoke = async (id: string) => {
+		// 無効にできたときにだけ、表示を消す(できなかったリンクは、まだ使える)。
+		if ((await run(() => revokeInvite(project, id))) && created?.id === id) setCreated(null);
 	};
 	return (
 		<section aria-labelledby="settings-invites">
@@ -146,13 +151,7 @@ function Invites({
 						<li key={invite.id}>
 							<span>{dateTime.format(invite.created)} に作成</span>
 							<span className="project-visibility">{dateTime.format(invite.expires)} まで</span>
-							<button
-								type="button"
-								onClick={() => {
-									if (created?.id === invite.id) setCreated(null);
-									void run(() => revokeInvite(project, invite.id));
-								}}
-							>
+							<button type="button" onClick={() => void revoke(invite.id)}>
 								無効にする
 							</button>
 						</li>
@@ -171,9 +170,13 @@ export function ProjectSettings({
 }: SettingsProps) {
 	const { state } = useAccount();
 	const me = state?.user?.id ?? null;
-	const admin = project.role === "admin";
 	const [visibility, setShown] = useState(project.visibility);
 	const [list, setList] = useState<ProjectMembers | null | "failed">(null);
+	// 自分の役割は、読み込んだ一覧から決める(この画面で自分の役割を変えたら、管理者だけの操作を出すのをやめる)。
+	// 一覧を読み込むまでは、画面を開いたときに分かっていた役割を使う。
+	const mine =
+		list === null || list === "failed" ? undefined : list.members.find((m) => m.id === me);
+	const admin = (mine?.role ?? project.role) === "admin";
 	const [failure, setFailure] = useState<string | null>(null);
 	const reload = useCallback(async () => {
 		const loaded = await loadMembers(project.name);

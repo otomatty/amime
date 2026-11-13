@@ -117,6 +117,8 @@ const WS_REAUTHORIZE = 4001;
 export class PageDO extends DurableObject {
 	/** 権限を取り上げた相手(台帳に聞いた結果)と、聞いた時刻。まだ聞いていなければ null。 */
 	#revocations: { checked: number; list: readonly { subject: string; at: number }[] } | null = null;
+	/** 台帳に聞いている途中の、問い合わせ。 */
+	#asking: Promise<void> | null = null;
 
 	constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
 		super(ctx, env);
@@ -202,14 +204,16 @@ export class PageDO extends DurableObject {
 	 * カーソルの位置は保存しない。接続に添えて覚えておき(休止しても残る)、他の端末に配る。
 	 * 決めていないメッセージを送る接続は閉じる。
 	 */
-	override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+	override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
 		const parsed = parseClientMessage(message);
 		if (!parsed.ok) {
 			socket.close(WS_POLICY_VIOLATION, "unexpected message");
 			return;
 		}
-		// 権限がなくなったと分かっている接続には、他の人のカーソルも配らない。
-		this.#closeRevoked();
+		// 権限のなくなった人の接続には、他の人のカーソルも配らない(コミットがなくても、確かめ直す)。
+		await this.#dropRevoked();
+		// 送ってきた接続が、いま閉じられた。その人のカーソルは、配らない。
+		if (socket.readyState !== WebSocket.OPEN) return;
 		// 読むだけの人のカーソルは、配らない(書いている人の画面に、知らない人のカーソルを出さない)。
 		if (this.ctx.getTags(socket).includes(VIEWER_TAG)) return;
 		const { cursor } = parsed.value;
@@ -248,20 +252,30 @@ export class PageDO extends DurableObject {
 		if (this.ctx.getWebSockets().length === 0) return;
 		const now = Date.now();
 		if (this.#revocations === null || now - this.#revocations.checked >= REVOCATION_CACHE_MS) {
-			const [project = ""] = (this.ctx.id.name ?? "").split("/");
-			try {
-				const list = await exports.ProjectDO.getByName(project).revocations();
-				this.#revocations = { checked: now, list };
-			} catch {
-				// 聞けなかった結果は、覚えない(次の配信で、聞き直す)。
-				this.#revocations = null;
-				for (const socket of this.ctx.getWebSockets()) {
-					socket.close(WS_REAUTHORIZE, "access unknown");
-				}
-				return;
+			// 聞いている途中なら、同じ答えを待つ(待った順に進むので、カーソルの順番が入れ替わらない)。
+			this.#asking ??= this.#askRevocations(now).finally(() => {
+				this.#asking = null;
+			});
+			await this.#asking;
+		}
+		if (this.#revocations === null) {
+			for (const socket of this.ctx.getWebSockets()) {
+				socket.close(WS_REAUTHORIZE, "access unknown");
 			}
+			return;
 		}
 		this.#closeRevoked();
+	}
+
+	/** 権限を取り上げた相手を、台帳に聞いて、覚える。聞けなかった結果は、覚えない(次の配信で、聞き直す)。 */
+	async #askRevocations(now: number): Promise<void> {
+		const [project = ""] = (this.ctx.id.name ?? "").split("/");
+		try {
+			const list = await exports.ProjectDO.getByName(project).revocations();
+			this.#revocations = { checked: now, list };
+		} catch {
+			this.#revocations = null;
+		}
 	}
 
 	/**

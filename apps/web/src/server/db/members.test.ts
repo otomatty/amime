@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { signIn } from "../auth/accounts.ts";
 import {
 	acceptInvite,
+	canRemove,
 	createInvite,
 	findInvite,
 	INVITE_TTL,
@@ -44,6 +45,13 @@ const join = (id: string, member: UserId, joined: number) =>
 		.bind(id, member, joined)
 		.run();
 
+/** 管理者として、招待リンクを作る。 */
+async function mustInvite(id: string, admin: UserId, now: number) {
+	const invite = await createInvite(env.DB, id, admin, now);
+	if (invite === null) throw new Error("the invite was not created");
+	return invite;
+}
+
 const roles = async (id: string) =>
 	Object.fromEntries((await listMembers(env.DB, id)).map((member) => [member.id, member.role]));
 
@@ -71,10 +79,10 @@ describe("setRole / removeMember(管理者を、0人にしない)", () => {
 		const { id, admin } = await project();
 		await join(id, await user(), 2_000);
 
-		expect(await setRole(env.DB, id, admin, "member")).toBe("last-admin");
-		expect(await removeMember(env.DB, id, admin)).toBe("last-admin");
+		expect(await setRole(env.DB, id, admin, "member", admin)).toBe("last-admin");
+		expect(await removeMember(env.DB, id, admin, admin)).toBe("last-admin");
 		// 同じ役割(admin)にするのは、できる。
-		expect(await setRole(env.DB, id, admin, "admin")).toBe("changed");
+		expect(await setRole(env.DB, id, admin, "admin", admin)).toBe("changed");
 		expect((await roles(id))[admin]).toBe("admin");
 	});
 
@@ -83,30 +91,74 @@ describe("setRole / removeMember(管理者を、0人にしない)", () => {
 		const other = await user();
 		await join(id, other, 2_000);
 
-		expect(await setRole(env.DB, id, other, "admin")).toBe("changed");
-		expect(await setRole(env.DB, id, admin, "member")).toBe("changed");
+		expect(await setRole(env.DB, id, other, "admin", admin)).toBe("changed");
+		expect(await setRole(env.DB, id, admin, "member", admin)).toBe("changed");
 
 		expect(await roles(id)).toEqual({ [admin]: "member", [other]: "admin" });
-		expect(await removeMember(env.DB, id, other)).toBe("last-admin");
-		expect(await removeMember(env.DB, id, admin)).toBe("removed");
+		expect(await removeMember(env.DB, id, other, other)).toBe("last-admin");
+		expect(await removeMember(env.DB, id, admin, admin)).toBe("removed");
 	});
 
 	it("いないメンバーは unknown。ほかのプロジェクトのメンバーには、触れない", async () => {
-		const { id } = await project();
+		const { id, admin } = await project();
 		const other = await project();
 
-		expect(await setRole(env.DB, id, other.admin, "member")).toBe("unknown");
-		expect(await removeMember(env.DB, id, other.admin)).toBe("unknown");
-		expect(await removeMember(env.DB, id, "nobody" as UserId)).toBe("unknown");
+		expect(await setRole(env.DB, id, other.admin, "member", admin)).toBe("unknown");
+		expect(await removeMember(env.DB, id, other.admin, admin)).toBe("unknown");
+		expect(await removeMember(env.DB, id, "nobody" as UserId, admin)).toBe("unknown");
 		expect(await roles(other.id)).toEqual({ [other.admin]: "admin" });
+	});
+});
+
+describe("操作する人が、その時点で管理者であること(確かめたあとで管理者でなくなっても、通さない)", () => {
+	it("管理者でない人は、役割を変えられず、ほかの人を外せず、公開範囲を変えられず、招待リンクを作ることも無効にすることもできない", async () => {
+		const { id, name, admin } = await project();
+		const [member, other, stranger] = [await user(), await user(), await user()];
+		await join(id, member, 2_000);
+		await join(id, other, 3_000);
+		const invite = await mustInvite(id, admin, 1_000);
+
+		for (const actor of [member, stranger]) {
+			expect(await setRole(env.DB, id, member, "admin", actor)).toBe("not-admin");
+			expect(await removeMember(env.DB, id, other, actor)).toBe("not-admin");
+			expect(await setVisibility(env.DB, id, "public", actor)).toBe(false);
+			expect(await createInvite(env.DB, id, actor, 4_000)).toBeNull();
+			expect(await revokeInvite(env.DB, id, invite.id, actor, 4_000)).toBe(false);
+		}
+
+		expect(await roles(id)).toEqual({ [admin]: "admin", [member]: "member", [other]: "member" });
+		expect(await findProject(env.DB, name, null)).toMatchObject({ visibility: "private" });
+		expect(await listInvites(env.DB, id, 5_000)).toHaveLength(1);
+	});
+
+	it("メンバーは、管理者でなくても、自分を外せる", async () => {
+		const { id, admin } = await project();
+		const member = await user();
+		await join(id, member, 2_000);
+
+		expect(await removeMember(env.DB, id, member, member)).toBe("removed");
+		expect(await roles(id)).toEqual({ [admin]: "admin" });
+	});
+
+	it("canRemove: 外せるかを、先に確かめられる(外さない)", async () => {
+		const { id, admin } = await project();
+		const member = await user();
+		await join(id, member, 2_000);
+
+		expect(await canRemove(env.DB, id, member, admin)).toBe("ok");
+		expect(await canRemove(env.DB, id, member, member)).toBe("ok");
+		expect(await canRemove(env.DB, id, admin, admin)).toBe("last-admin");
+		expect(await canRemove(env.DB, id, admin, member)).toBe("not-admin");
+		expect(await canRemove(env.DB, id, "nobody" as UserId, admin)).toBe("unknown");
+		expect(await roles(id)).toEqual({ [admin]: "admin", [member]: "member" });
 	});
 });
 
 describe("setVisibility", () => {
 	it("公開範囲を変える", async () => {
-		const { id, name } = await project();
+		const { id, name, admin } = await project();
 
-		await setVisibility(env.DB, id, "public");
+		expect(await setVisibility(env.DB, id, "public", admin)).toBe(true);
 
 		expect(await findProject(env.DB, name, null)).toMatchObject({ visibility: "public" });
 	});
@@ -116,7 +168,7 @@ describe("招待リンク", () => {
 	it("作ったリンクの値から、招待先を引ける。期限は7日", async () => {
 		const { id, name, admin } = await project();
 
-		const invite = await createInvite(env.DB, id, admin, 1_000);
+		const invite = await mustInvite(id, admin, 1_000);
 
 		expect(invite).toEqual({
 			id: expect.stringMatching(/^[\w-]{16}$/),
@@ -133,7 +185,7 @@ describe("招待リンク", () => {
 	it("acceptInvite: 使えるリンクなら、メンバーにして、招待先を返す。もうメンバーなら、役割を変えない", async () => {
 		const { id, name, admin } = await project();
 		const guest = await user();
-		const invite = await createInvite(env.DB, id, admin, 1_000);
+		const invite = await mustInvite(id, admin, 1_000);
 
 		expect(await acceptInvite(env.DB, invite.token, guest, 2_000)).toEqual({ id, name });
 		expect(await acceptInvite(env.DB, invite.token, guest, 3_000)).toEqual({ id, name });
@@ -148,9 +200,9 @@ describe("招待リンク", () => {
 	it("acceptInvite: 無効にされたリンク、期限の切れたリンク、ないリンクでは、メンバーにしない", async () => {
 		const { id, admin } = await project();
 		const guest = await user();
-		const revoked = await createInvite(env.DB, id, admin, 1_000);
-		const expired = await createInvite(env.DB, id, admin, 1_000);
-		await revokeInvite(env.DB, id, revoked.id, 2_000);
+		const revoked = await mustInvite(id, admin, 1_000);
+		const expired = await mustInvite(id, admin, 1_000);
+		await revokeInvite(env.DB, id, revoked.id, admin, 2_000);
 
 		expect(await acceptInvite(env.DB, revoked.token, guest, 3_000)).toBeNull();
 		expect(await acceptInvite(env.DB, expired.token, guest, 1_000 + INVITE_TTL)).toBeNull();
@@ -161,10 +213,10 @@ describe("招待リンク", () => {
 
 	it("一覧は、まだ使えるものだけを、新しい順に返す", async () => {
 		const { id, admin } = await project();
-		const old = await createInvite(env.DB, id, admin, 1_000);
-		const revoked = await createInvite(env.DB, id, admin, 2_000);
-		const fresh = await createInvite(env.DB, id, admin, 3_000);
-		await revokeInvite(env.DB, id, revoked.id, 4_000);
+		const old = await mustInvite(id, admin, 1_000);
+		const revoked = await mustInvite(id, admin, 2_000);
+		const fresh = await mustInvite(id, admin, 3_000);
+		await revokeInvite(env.DB, id, revoked.id, admin, 4_000);
 
 		const ids = async (now: number) => (await listInvites(env.DB, id, now)).map((item) => item.id);
 
@@ -175,11 +227,11 @@ describe("招待リンク", () => {
 	it("無効にできるのは、そのプロジェクトの、まだ無効でないリンクだけ", async () => {
 		const { id, admin } = await project();
 		const other = await project();
-		const invite = await createInvite(env.DB, id, admin, 1_000);
+		const invite = await mustInvite(id, admin, 1_000);
 
-		expect(await revokeInvite(env.DB, other.id, invite.id, 2_000)).toBe(false);
-		expect(await revokeInvite(env.DB, id, invite.id, 2_000)).toBe(true);
-		expect(await revokeInvite(env.DB, id, invite.id, 3_000)).toBe(false);
+		expect(await revokeInvite(env.DB, other.id, invite.id, other.admin, 2_000)).toBe(false);
+		expect(await revokeInvite(env.DB, id, invite.id, admin, 2_000)).toBe(true);
+		expect(await revokeInvite(env.DB, id, invite.id, admin, 3_000)).toBe(false);
 		expect(await findInvite(env.DB, invite.token, 3_000)).toBeNull();
 	});
 });

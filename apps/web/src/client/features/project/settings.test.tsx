@@ -218,6 +218,57 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			expect(await memberItems()).toHaveLength(2);
 		});
 
+		it("招待リンクを作ったあとで、もう一度作ろうとして失敗しても、前に作ったリンクは表示したままにする", async () => {
+			const server = stubServer();
+			server.replies["POST /api/projects/team/invites"] = () =>
+				Response.json({ id: "i2", created: 1, expires: 2, token: "first" }, { status: 201 });
+			renderSettings();
+			fireEvent.click(await screen.findByRole("button", { name: "招待リンクを作る" }));
+			await screen.findByRole("textbox", { name: /新しい招待リンク/ });
+
+			server.replies["POST /api/projects/team/invites"] = () => new Response("x", { status: 500 });
+			fireEvent.click(screen.getByRole("button", { name: "招待リンクを作る" }));
+
+			await screen.findByRole("alert");
+			const input = screen.getByRole("textbox", { name: /新しい招待リンク/ }) as HTMLInputElement;
+			expect(input.value).toBe("https://amime.example/invite/first");
+		});
+
+		it("作ったばかりのリンクを無効にできなかったら、リンクは表示したままにする(まだ使えるリンクを、見失わせない)", async () => {
+			const server = stubServer({ members: [admin], invites: [invite] });
+			server.replies["POST /api/projects/team/invites"] = () =>
+				Response.json({ ...invite, token: "tok" }, { status: 201 });
+			server.replies["DELETE /api/projects/team/invites/i1"] = () =>
+				new Response("x", { status: 500 });
+			renderSettings();
+			fireEvent.click(await screen.findByRole("button", { name: "招待リンクを作る" }));
+			await screen.findByRole("textbox", { name: /新しい招待リンク/ });
+
+			fireEvent.click(screen.getByRole("button", { name: "無効にする" }));
+
+			await screen.findByRole("alert");
+			expect(screen.getByRole("textbox", { name: /新しい招待リンク/ })).toBeDefined();
+		});
+
+		it("自分をメンバーに戻したら、管理者だけの操作(役割の変更、招待リンク)を出すのをやめる", async () => {
+			const second = { ...taro, role: "admin" };
+			const server = stubServer({ members: [admin, second], invites: [invite] });
+			renderSettings();
+			const role = await screen.findByRole("combobox", { name: "花子 の役割" });
+
+			server.members = { members: [{ ...admin, role: "member" }, second], invites: [] };
+			fireEvent.change(role, { target: { value: "member" } });
+
+			await waitFor(() =>
+				expect(screen.queryByRole("combobox", { name: "花子 の役割" })).toBeNull(),
+			);
+			expect(screen.queryByRole("heading", { name: "招待リンク" })).toBeNull();
+			expect(screen.queryByRole("combobox", { name: "公開範囲" })).toBeNull();
+			expect(screen.queryByRole("button", { name: "太郎 を外す" })).toBeNull();
+			// 自分で抜けることは、できる。
+			expect(screen.getByRole("button", { name: "このプロジェクトから抜ける" })).toBeDefined();
+		});
+
 		it("招待リンクを作れなかったら、そのことを伝える", async () => {
 			const server = stubServer();
 			server.replies["POST /api/projects/team/invites"] = () => new Response("x", { status: 500 });

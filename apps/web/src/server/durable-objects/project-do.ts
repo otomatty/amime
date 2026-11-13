@@ -125,6 +125,12 @@ type FoundPage = {
 /** 権限を取り上げた相手(利用者のID。「*」は、メンバーでない人すべて)と、その時刻。 */
 type Revocation = { subject: string; at: number };
 
+/**
+ * 権限を取り上げ始めてから、変え終わるまでにかかってもよい長さ(ミリ秒)。
+ * 取り上げ終えたことを覚えられなかったときは、この長さのあいだにつないだ接続も、閉じる。
+ */
+const REVOKE_MARGIN_MS = 60_000;
+
 type RewriteRow = {
 	seq: number;
 	page_id: string;
@@ -271,16 +277,37 @@ export class ProjectDO extends DurableObject {
 	}
 
 	/**
-	 * 権限を取り上げたことを覚える(ADR-0034)。subject は、外したメンバーのID。
-	 * 「*」は、メンバーでない人すべて(プロジェクトを、非公開に変えた)。
-	 * ページ(PageDO)が、これを見て、その相手がつないだままの接続を閉じる。
+	 * 権限を取り上げ始めることを覚える(ADR-0034)。権限を変える前に呼ぶ。subject は、外すメンバーのID。
+	 * 「*」は、メンバーでない人すべて(プロジェクトを、非公開に変える)。
+	 * ページ(PageDO)が、これを見て、覚えた時刻までにその相手がつないだ接続を閉じる。
+	 *
+	 * 覚えるのは、少し先の時刻。権限を変え終わるまでのあいだにつないだ接続も、閉じられるようにする
+	 * (変え終えたあとで、もう一度ここに来られなくても、残さない)。返した値は、settle に渡す。
 	 */
-	revoke(subject: string): void {
+	revoke(subject: string): number {
+		return this.ctx.storage.sql
+			.exec<{ at: number }>(
+				`INSERT INTO revocations (subject, at) VALUES (?, ?)
+				ON CONFLICT (subject) DO UPDATE SET at = max(at, excluded.at) RETURNING at`,
+				subject,
+				Date.now() + REVOKE_MARGIN_MS,
+			)
+			.one().at;
+	}
+
+	/**
+	 * 権限を取り上げ終えたことを覚える。権限を変えたあとに呼ぶ。pending は、revoke が返した値。
+	 * 覚えた時刻を、いまの時刻に直す(このあとで、権限を確かめ直してつないだ接続は、閉じない)。
+	 * 同じ相手から、ほかの要求も取り上げている途中なら(覚えている時刻が、pending と違う)、前には戻さない。
+	 */
+	settle(subject: string, pending: number): void {
+		const now = Date.now();
 		this.ctx.storage.sql.exec(
-			`INSERT INTO revocations (subject, at) VALUES (?, ?)
-			ON CONFLICT (subject) DO UPDATE SET at = excluded.at`,
+			"UPDATE revocations SET at = CASE WHEN at = ? THEN ? ELSE max(at, ?) END WHERE subject = ?",
+			pending,
+			now,
+			now,
 			subject,
-			Date.now(),
 		);
 	}
 
