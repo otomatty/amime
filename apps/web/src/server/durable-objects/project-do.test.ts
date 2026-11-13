@@ -422,14 +422,16 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			const stub = project("index-atomic");
 			const page = await stub.open("前の名前");
 			await stub.index(page.id, saved("前の名前", 1, { links: ["卵"] }));
-			// リンクを書き込む途中で失敗させる。
-			await runInDurableObject(stub, (_instance, state) => {
-				state.storage.sql.exec("DROP TABLE links");
-			});
+			await runInDurableObject(stub, (instance, state) => {
+				// リンクを書き込むところで失敗させる(名前は、その前に書き込まれる)。
+				state.storage.sql.exec("ALTER TABLE links RENAME TO links_away");
 
-			await expect(
-				stub.index(page.id, saved("新しい名前", 2, { links: ["牛乳"] })),
-			).rejects.toThrow();
+				expect(() =>
+					instance.index(page.id, saved("新しい名前", 2, { links: ["牛乳"] })),
+				).toThrow();
+
+				state.storage.sql.exec("ALTER TABLE links_away RENAME TO links");
+			});
 
 			expect(await stub.open("前の名前")).toMatchObject({ id: page.id, title: "前の名前" });
 		});
