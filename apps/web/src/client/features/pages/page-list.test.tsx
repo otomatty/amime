@@ -120,10 +120,18 @@ describe("PageList(ページの一覧)", () => {
 		unmount();
 
 		window.history.replaceState(null, "", "/?sort=popular");
-		render(<PageList />);
+		const second = render(<PageList />);
 
 		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 		expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/pages?sort=updated&offset=0");
+		second.unmount();
+
+		// どのオブジェクトにもある名前(toString など)も、並び順としては知らない値。
+		window.history.replaceState(null, "", "/?sort=toString");
+		render(<PageList />);
+
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+		expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/pages?sort=updated&offset=0");
 	});
 
 	it("まだ取り出していないページがあれば、続きを取り出せる", async () => {
@@ -154,6 +162,65 @@ describe("PageList(ページの一覧)", () => {
 		fireEvent.click(screen.getByRole("button", { name: "もっと見る" }));
 
 		await waitFor(() => expect(titles()).toEqual(["1つめ", "2つめ", "3つめ"]));
+	});
+
+	it("続きは、サーバーから受け取った件数の次から取り出す(重なった分を数え直さない)。最後まで取り出したら終わる", async () => {
+		// 取り出しているあいだに、先頭にページが増えた。サーバーの並びは [X, 1つめ, 2つめ, 3つめ] になっている。
+		const fetchMock = stubList((url) => {
+			const offset = url.searchParams.get("offset");
+			if (offset === "0")
+				return json({ pages: [card("p1", "1つめ"), card("p2", "2つめ")], total: 3 });
+			if (offset === "2")
+				return json({ pages: [card("p2", "2つめ"), card("p3", "3つめ")], total: 4 });
+			return json({ pages: [], total: 4 });
+		});
+		render(<PageList />);
+		await waitFor(() => expect(titles()).toEqual(["1つめ", "2つめ"]));
+
+		fireEvent.click(screen.getByRole("button", { name: "もっと見る" }));
+
+		await waitFor(() => expect(titles()).toEqual(["1つめ", "2つめ", "3つめ"]));
+		// 受け取ったのは4件。総数も4件なので、続きはない。
+		expect(screen.queryByRole("button", { name: "もっと見る" })).toBeNull();
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("続きが1件も返ってこなければ、そこで終わりにする", async () => {
+		stubList((url) =>
+			url.searchParams.get("offset") === "0"
+				? json({ pages: [card("p1", "1つめ")], total: 5 })
+				: json({ pages: [], total: 5 }),
+		);
+		render(<PageList />);
+		await waitFor(() => expect(titles()).toEqual(["1つめ"]));
+
+		fireEvent.click(screen.getByRole("button", { name: "もっと見る" }));
+
+		await waitFor(() => expect(screen.queryByRole("button", { name: "もっと見る" })).toBeNull());
+	});
+
+	it("続きを取り出しているあいだに並び順を変えたら、前の並び順の続きは捨てる", async () => {
+		let releaseMore: (response: Response) => void = () => {};
+		stubList((url) => {
+			if (url.searchParams.get("offset") !== "0") {
+				return new Promise<Response>((resolve) => {
+					releaseMore = resolve;
+				});
+			}
+			return url.searchParams.get("sort") === "title"
+				? json({ pages: [card("t1", "名前順の先頭")], total: 2 })
+				: json({ pages: [card("u1", "更新順の先頭")], total: 2 });
+		});
+		render(<PageList />);
+		await waitFor(() => expect(titles()).toEqual(["更新順の先頭"]));
+		fireEvent.click(screen.getByRole("button", { name: "もっと見る" }));
+
+		fireEvent.change(screen.getByLabelText("並び順"), { target: { value: "title" } });
+		await waitFor(() => expect(titles()).toEqual(["名前順の先頭"]));
+		releaseMore(json({ pages: [card("u2", "更新順の続き")], total: 2 }));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(titles()).toEqual(["名前順の先頭"]);
 	});
 
 	it("名前を入れて「作る」を押すと、その名前のページへ移る", async () => {

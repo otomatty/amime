@@ -1,6 +1,6 @@
 import { titleOfLine } from "@amime/shared";
 import type { PageCard, PageSort } from "@amime/sync";
-import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { pageHref } from "../editor/links.ts";
 import { listPages } from "../page/api.ts";
 import { PageApiError } from "../page/page-api-error.ts";
@@ -13,7 +13,9 @@ const SORT_LABELS: Readonly<Record<PageSort, string>> = {
 	linked: "リンクされている数が多い順",
 };
 
-const isSort = (value: string | null): value is PageSort => value !== null && value in SORT_LABELS;
+// 定義した並び順だけを認める(in は、toString のような、どのオブジェクトにもある名前も通してしまう)。
+const isSort = (value: string | null): value is PageSort =>
+	value !== null && Object.hasOwn(SORT_LABELS, value);
 
 /** URLに残してある並び順。なければ(知らない値でも)、更新が新しい順。 */
 function sortFromUrl(): PageSort {
@@ -28,7 +30,14 @@ const timeFormat = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeS
 
 type Loaded =
 	| { readonly status: "loading" }
-	| { readonly status: "ready"; readonly pages: readonly PageCard[]; readonly total: number }
+	| {
+			readonly status: "ready";
+			readonly pages: readonly PageCard[];
+			/** サーバーから受け取った件数。続きは、この次から取り出す。 */
+			readonly fetched: number;
+			/** まだ取り出していないページがあるか。 */
+			readonly more: boolean;
+	  }
 	| { readonly status: "error"; readonly kind: PageApiError["kind"] };
 
 type PageListProps = {
@@ -83,14 +92,18 @@ export function PageList({
 	const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
 	const [attempt, setAttempt] = useState(0);
 	const [name, setName] = useState("");
+	// 一覧を取り出し直すたびに進める。前の一覧の続きがあとから届いても、いまの一覧に混ぜない。
+	const generation = useRef(0);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: attempt は、読み込みをやり直すためのきっかけとして使う。
 	useEffect(() => {
 		let cancelled = false;
+		generation.current += 1;
 		setLoaded({ status: "loading" });
 		listPages({ sort, offset: 0 }).then(
-			(list) => {
-				if (!cancelled) setLoaded({ status: "ready", ...list });
+			({ pages, total }) => {
+				if (cancelled) return;
+				setLoaded({ status: "ready", pages, fetched: pages.length, more: pages.length < total });
 			},
 			(error: unknown) => {
 				const kind = error instanceof PageApiError ? error.kind : "failed";
@@ -112,14 +125,19 @@ export function PageList({
 
 	const loadMore = useCallback(async () => {
 		if (loaded.status !== "ready") return;
-		const more = await listPages({ sort, offset: loaded.pages.length }).catch(() => null);
-		if (more === null) return;
+		const started = generation.current;
+		const next = await listPages({ sort, offset: loaded.fetched }).catch(() => null);
+		// 取り出しているあいだに、並び順を変えた(一覧を取り出し直した)。前の並び順の続きは捨てる。
+		if (next === null || generation.current !== started) return;
 		setLoaded((current) => {
 			if (current.status !== "ready") return current;
 			// 取り出しているあいだにページが増えると、続きが前の分と重なることがある。同じページは1度だけ並べる。
 			const known = new Set(current.pages.map((page) => page.id));
-			const added = more.pages.filter((page) => !known.has(page.id));
-			return { status: "ready", pages: [...current.pages, ...added], total: more.total };
+			const added = next.pages.filter((page) => !known.has(page.id));
+			// 続きの位置は、並べた件数ではなく、受け取った件数で数える。1件も返ってこなければ、そこで終わり。
+			const fetched = current.fetched + next.pages.length;
+			const more = next.pages.length > 0 && fetched < next.total;
+			return { status: "ready", pages: [...current.pages, ...added], fetched, more };
 		});
 	}, [loaded, sort]);
 
@@ -180,7 +198,7 @@ export function PageList({
 					))}
 				</ul>
 			)}
-			{loaded.status === "ready" && loaded.pages.length < loaded.total && (
+			{loaded.status === "ready" && loaded.more && (
 				<button className="page-list-more" type="button" onClick={loadMore}>
 					もっと見る
 				</button>

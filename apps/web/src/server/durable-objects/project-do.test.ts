@@ -3,7 +3,7 @@ import { exports } from "cloudflare:workers";
 import type { PageSummary } from "@amime/parser";
 import type { PageId } from "@amime/sync";
 import { describe, expect, it } from "vitest";
-import { MAX_LIST_LIMIT, migrate, PLACEHOLDER_MAX_AGE_MS } from "./project-do.ts";
+import { MAX_LIST_LIMIT, MIGRATIONS, migrate, PLACEHOLDER_MAX_AGE_MS } from "./project-do.ts";
 
 /** テストごとに別のプロジェクト(=別の Durable Object)を使い、状態を共有しない。 */
 const project = (name: string) => exports.ProjectDO.getByName(`test-${name}`);
@@ -417,7 +417,48 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 		});
 	});
 
+	describe("index(台帳への反映)の途中で失敗したとき", () => {
+		it("名前だけが変わって、要約やリンクが古いまま残ることはない(まとめて元に戻る)", async () => {
+			const stub = project("index-atomic");
+			const page = await stub.open("前の名前");
+			await stub.index(page.id, saved("前の名前", 1, { links: ["卵"] }));
+			// リンクを書き込む途中で失敗させる。
+			await runInDurableObject(stub, (_instance, state) => {
+				state.storage.sql.exec("DROP TABLE links");
+			});
+
+			await expect(
+				stub.index(page.id, saved("新しい名前", 2, { links: ["牛乳"] })),
+			).rejects.toThrow();
+
+			expect(await stub.open("前の名前")).toMatchObject({ id: page.id, title: "前の名前" });
+		});
+	});
+
 	describe("保存の形の移行", () => {
+		it("移行の途中で失敗したら、その移行はなかったことになる(やり直せる)", async () => {
+			const stub = project("migrate-atomic");
+			await runInDurableObject(stub, (_instance, state) => {
+				const { sql } = state.storage;
+				const good = "CREATE TABLE extra_a (id TEXT)";
+				const bad = "CREATE TABLE extra_b (id TEXT); CREATE TABLE extra_b (id TEXT);";
+				const applied = () =>
+					sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM schema_version").one().n;
+				const before = applied();
+				const tables = () =>
+					sql
+						.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE name LIKE 'extra_%'")
+						.toArray()
+						.map((row) => row.name);
+
+				expect(() => migrate(state.storage, [...MIGRATIONS, good, bad])).toThrow();
+
+				// 先の移行は済んでいる。失敗した移行は、途中まで作った表ごと、なかったことになる。
+				expect(tables()).toEqual(["extra_a"]);
+				expect(applied()).toBe(before + 1);
+			});
+		});
+
 		it("索引の内容を持たない形で保存された台帳を、いまの形にする。ページは残る", async () => {
 			const stub = project("migrate-v1");
 			await runInDurableObject(stub, (_instance, state) => {
@@ -430,8 +471,8 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				)`);
 				sql.exec("INSERT INTO pages VALUES ('p1', '前からある', '前からある', NULL, 3, 100, 200)");
 
-				migrate(sql);
-				migrate(sql);
+				migrate(state.storage);
+				migrate(state.storage);
 			});
 
 			expect(await stub.list({ sort: "updated" })).toEqual({

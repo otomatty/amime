@@ -53,7 +53,7 @@ const ORDER_BY: Readonly<Record<PageSort, string>> = {
  * 台帳の保存の形。前から順に適用する。適用した数を schema_version に覚えておく。
  * 形を変えるときは、末尾に足す(適用済みのものは書き換えない)。
  */
-const MIGRATIONS: readonly string[] = [
+export const MIGRATIONS: readonly string[] = [
 	// 1: 名前とIDの対応(ADR-0024)。
 	`CREATE TABLE IF NOT EXISTS pages (
 		id TEXT PRIMARY KEY,
@@ -76,13 +76,19 @@ const MIGRATIONS: readonly string[] = [
 	CREATE INDEX links_to ON links (to_lc);`,
 ];
 
-/** 台帳の保存の形を、いまの形にする。何度呼んでもよい。 */
-export function migrate(sql: SqlStorage): void {
+/**
+ * 台帳の保存の形を、いまの形にする。何度呼んでもよい。
+ * 移行は、1つずつまとめて確定する。途中で失敗した移行は、なかったことになり、次に開いたときにやり直す。
+ */
+export function migrate(storage: DurableObjectStorage, migrations = MIGRATIONS): void {
+	const { sql } = storage;
 	sql.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)");
 	const applied = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM schema_version").one().n;
-	MIGRATIONS.slice(applied).forEach((migration, index) => {
-		sql.exec(migration);
-		sql.exec("INSERT INTO schema_version (version) VALUES (?)", applied + index + 1);
+	migrations.slice(applied).forEach((migration, index) => {
+		storage.transactionSync(() => {
+			sql.exec(migration);
+			sql.exec("INSERT INTO schema_version (version) VALUES (?)", applied + index + 1);
+		});
 	});
 }
 
@@ -117,7 +123,7 @@ const PAGE_ID_LENGTH = 32;
 export class ProjectDO extends DurableObject {
 	constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
 		super(ctx, env);
-		migrate(ctx.storage.sql);
+		migrate(ctx.storage);
 	}
 
 	/**
@@ -179,9 +185,12 @@ export class ProjectDO extends DurableObject {
 	 * 一覧とリンクのつながりのための情報(冒頭の本文、画像、リンク先)も、ここで入れ替える(ADR-0025)。
 	 */
 	index(id: PageId, state: PageState): PageInfo {
-		const info = this.#retitle(id, state);
-		this.#summarize(id, state.summary);
-		return info;
+		// 名前・要約・リンク先を、まとめて確定する。途中で失敗して、一部だけが新しくなることがないようにする。
+		return this.ctx.storage.transactionSync(() => {
+			const info = this.#retitle(id, state);
+			this.#summarize(id, state.summary);
+			return info;
+		});
 	}
 
 	/** 冒頭の本文・画像・リンク先を入れ替える。リンク先は、変わった分だけを書き込む。 */
