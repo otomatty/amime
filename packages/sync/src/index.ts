@@ -22,6 +22,7 @@ export {
 	type Session,
 	sameLines,
 	send,
+	splitChanges,
 	withPending,
 } from "./session.ts";
 export type {

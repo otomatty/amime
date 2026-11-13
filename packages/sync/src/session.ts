@@ -74,6 +74,20 @@ function firstCommit(changes: readonly Change[]): readonly Change[] {
 }
 
 /**
+ * 変更の列を、1つのコミットに収まる大きさに、順序を保って分ける。
+ * 端末内に残してあった変更を、画面を通さずにサーバーへ入れるときに使う(ADR-0022)。
+ */
+export function splitChanges(changes: readonly Change[]): (readonly Change[])[] {
+	const parts: (readonly Change[])[] = [];
+	for (let rest = changes; rest.length > 0; ) {
+		const part = firstCommit(rest);
+		parts.push(part);
+		rest = rest.slice(part.length);
+	}
+	return parts;
+}
+
+/**
  * 送信を始める。送る変更は、確定した文書と画面の文書の差分。id は、このコミットのID。
  * 差分が1つのコミットに収まらなければ、収まる分だけを送る(残りは、次の送信で送られる)。
  * 送信中か、送る変更がなければ null。1度に送るコミットは1つだけ。

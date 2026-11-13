@@ -13,6 +13,7 @@ import {
 	resync,
 	type Session,
 	send,
+	splitChanges,
 	withPending,
 } from "./session.ts";
 import type { Change, CommitId, CommitResult, Line, LineId } from "./types.ts";
@@ -302,6 +303,30 @@ describe("receive(他の人のコミットの受け取り)", () => {
 
 	it("あいだのバージョンが抜けていたら、反映せず、読み直しを求める", () => {
 		expect(receive(createSession(snapshot), fromOther(5, insertX))).toBeNull();
+	});
+});
+
+describe("splitChanges(変更の列を、コミットに収まる大きさに分ける)", () => {
+	const deletes = (count: number): Change[] =>
+		Array.from({ length: count }, (_, index) => ({ type: "delete", id: id(`n${index}`) }));
+
+	it("変更がなければ、空", () => {
+		expect(splitChanges([])).toEqual([]);
+	});
+
+	it("1つのコミットに収まるなら、分けない", () => {
+		const changes = deletes(3);
+
+		expect(splitChanges(changes)).toEqual([changes]);
+	});
+
+	it("変更の数が上限を超えるなら、順序を保って分ける", () => {
+		const changes = deletes(MAX_CHANGES * 2 + 1);
+
+		const parts = splitChanges(changes);
+
+		expect(parts.map((part) => part.length)).toEqual([MAX_CHANGES, MAX_CHANGES, 1]);
+		expect(parts.flat()).toEqual(changes);
 	});
 });
 

@@ -5,8 +5,10 @@ import {
 	type PageSnapshot,
 	type PendingEntry,
 	sameLines,
+	splitChanges,
 	withPending,
 } from "@amime/sync";
+import { deriveCommitId } from "./commit-id.ts";
 import { PageApiError } from "./page-api-error.ts";
 import type { PageApi } from "./page-sync.ts";
 
@@ -18,76 +20,49 @@ type Restored = {
 	readonly noticed: boolean;
 };
 
-/**
- * 送り直したコミットの行方。
- * - before: 以前にサーバーに入っていた
- * - now: 今回の送り直しで、サーバーに入った
- * - rejected: サーバーに断られた。サーバーには入っていない
- */
-type Outcome = { readonly kind: "before" | "now" | "rejected"; readonly effective: boolean };
+/** サーバーに入れようとしたコミットの行方。 */
+type Outcome = "applied" | "ineffective" | "rejected";
 
-async function resend(api: Pick<PageApi, "commit">, commit: Commit): Promise<Outcome> {
+/**
+ * コミットをサーバーに入れる。以前に入っていたコミットなら、何も起きない(ADR-0021)。
+ * サーバーに断られたら rejected。通信できなければ、失敗する。
+ */
+async function deliver(api: Pick<PageApi, "commit">, commit: Commit): Promise<Outcome> {
 	try {
 		const result = await api.commit(commit);
-		return {
-			kind: result.duplicate === true ? "before" : "now",
-			effective: result.applied.length > 0,
-		};
+		return result.applied.length > 0 ? "applied" : "ineffective";
 	} catch (error) {
-		if (error instanceof PageApiError && error.kind === "rejected") {
-			return { kind: "rejected", effective: false };
-		}
+		if (error instanceof PageApiError && error.kind === "rejected") return "rejected";
 		throw error;
 	}
 }
 
 /**
- * 読み込んだページに載せる変更を、載せる順に並べる。
- *
- * 記録は古い順に並んでいる。まだ送っていなかった変更は、どれもまだ画面の上にしかないのに、
- * 送信中だったコミットは、先にサーバーに入る。そのまま載せると、古い記録の変更が、新しい記録のコミットに勝ってしまう。
- * そこで、今回の送り直しで入ったコミットは、それより古い記録にまだ送っていなかった変更があれば、そのあとにもう一度載せる。
- * 以前に入っていたコミットは載せない(そのあとに他の人がした変更を、上書きしてしまう)。
- * 本文の書き換えは、もう一度載せない。順序によらず文字単位で統合されるので(ADR-0022)、載せると足した文字が2重になる。
- * 元にした本文を持たない書き換え(以前の形の記録)は、統合されずに置き換わるので、もう一度載せる。
- * 読み込んだページにない行への書き換えも、もう一度載せる。サーバーでは効いていないので、2重にならない
- * (古い記録が、その行を戻していることがある)。
- *
- * サーバーに断られたコミットは、まだ送っていなかった変更として載せる(捨てると、書いたものが黙って消える)。
+ * 記録が残していた変更を、コミットの列にする。
+ * 送信中だったコミットは、そのまま(同じIDで)。まだ送っていなかった変更は、記録の内容から決まるIDを付けて、
+ * コミットに収まる大きさに分ける。復元を途中からやり直しても、同じコミットとして送り直せる。
  */
-function changesToApply(
-	entries: readonly PendingEntry[],
-	outcomes: readonly (Outcome | null)[],
-	loaded: readonly Line[],
-): readonly (readonly Change[])[] {
-	const present = new Set(loaded.map((line) => line.id));
-	/** もう一度載せると、足した文字が2重になる変更か(サーバーで、文字単位で統合されたもの)。 */
-	const merged = (change: Change) =>
-		change.type === "update" && change.base !== undefined && present.has(change.id);
-	const records: (readonly Change[])[] = [];
-	/** ここまでの記録に、まだサーバーに入っていない変更があるか。 */
-	let unsent = false;
-	entries.forEach(({ inflight, changes }, index) => {
-		const kind = outcomes[index]?.kind;
-		if (inflight !== null && kind === "rejected") {
-			records.push(inflight.changes);
-			unsent = true;
-		} else if (inflight !== null && kind === "now" && unsent) {
-			records.push(inflight.changes.filter((change) => !merged(change)));
-		}
-		records.push(changes);
-		unsent = unsent || changes.length > 0;
-	});
-	return records;
+async function commitsOf(entry: PendingEntry, includeUnsent: boolean): Promise<Commit[]> {
+	const commits = entry.inflight === null ? [] : [entry.inflight];
+	if (!includeUnsent) return commits;
+	const source = JSON.stringify(entry);
+	for (const [part, changes] of splitChanges(entry.changes).entries()) {
+		commits.push({ id: await deriveCommitId(source, part), changes });
+	}
+	return commits;
 }
 
 /**
- * ページを開く。端末内に、前回送れなかった変更が残っていたら、復元する(ADR-0020、ADR-0021)。
+ * ページを開く。端末内に、前回送れなかった変更が残っていたら、復元する(ADR-0020、ADR-0021、ADR-0022)。
  *
- * 1. 閉じたタブが残した変更を引き取る。
- * 2. 閉じたタブが送信中だったコミットを、同じIDで送り直す。サーバーに入っていたら、何も起きない。
- * 3. ページを読み込む(送り直したコミットは、もう含まれている)。
- * 4. まだ送っていなかった変更を、読み込んだページに載せる。
+ * 1. 閉じたタブが残した変更を引き取る。記録は、タブごとに1つ。古い順に並んでいる。
+ * 2. 記録を古い順に、1つずつサーバーに入れる。行った順のとおりに入るので、古い記録の変更が、新しい記録の変更に勝つことがない。
+ *    - 送信中だったコミットは、同じIDで送り直す。サーバーに入っていたら、何も起きない。
+ *    - まだ送っていなかった変更も、コミットとして送る。ただし、最後の記録の分は送らない(4 で画面に載せる)。
+ * 3. ページを読み込む(入れたコミットは、もう含まれている)。
+ * 4. 最後の記録のまだ送っていなかった変更を、読み込んだページに載せる。画面に出てから、ふつうの編集と同じように保存される。
+ *
+ * サーバーに断られた変更(1行が長すぎる、など)は、捨てずに 4 で画面に載せる。画面に残り、送れないことが表示される。
  */
 export async function restorePage(
 	api: Pick<PageApi, "load" | "commit">,
@@ -95,14 +70,20 @@ export async function restorePage(
 ): Promise<Restored> {
 	const entries = await pending.adopt();
 
-	const outcomes: (Outcome | null)[] = [];
-	for (const { inflight } of entries) {
-		outcomes.push(inflight === null ? null : await resend(api, inflight));
+	/** サーバーに断られて、入れられなかった変更。 */
+	const rejected: (readonly Change[])[] = [];
+	let applied = false;
+	for (const [index, entry] of entries.entries()) {
+		for (const commit of await commitsOf(entry, index < entries.length - 1)) {
+			const outcome = await deliver(api, commit);
+			if (outcome === "rejected") rejected.push(commit.changes);
+			applied = applied || outcome === "applied";
+		}
 	}
 
 	const snapshot = await api.load();
-	const document = withPending(snapshot.lines, changesToApply(entries, outcomes, snapshot.lines));
+	const unsent = entries.at(-1)?.changes ?? [];
+	const document = withPending(snapshot.lines, [...rejected, unsent]);
 	const restored = sameLines(document, snapshot.lines) ? null : document;
-	const resent = outcomes.some((outcome) => outcome?.effective === true);
-	return { snapshot, restored, noticed: resent || restored !== null };
+	return { snapshot, restored, noticed: applied || restored !== null };
 }

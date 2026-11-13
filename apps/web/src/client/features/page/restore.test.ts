@@ -1,213 +1,136 @@
-import type {
-	Change,
-	Commit,
-	CommitId,
-	CommitResult,
-	Line,
-	LineId,
-	PendingEntry,
+import {
+	applyChanges,
+	type Change,
+	type Commit,
+	type CommitId,
+	type CommitResult,
+	type Line,
+	type LineId,
+	type PendingEntry,
 } from "@amime/sync";
 import { describe, expect, it, vi } from "vitest";
 import { PageApiError } from "./page-api-error.ts";
 import { restorePage } from "./restore.ts";
 
-const line = (id: string, text: string): Line => ({ id: id as LineId, text });
-const update = (id: string, text: string): Change => ({ type: "update", id: id as LineId, text });
-const commit = (id: string, ...changes: Change[]): Commit => ({ id: id as CommitId, changes });
+const id = (value: string) => value as LineId;
+const line = (lineId: string, text: string): Line => ({ id: id(lineId), text });
+/** 本文を置き換える変更。from は、その変更が元にした本文。 */
+const update = (lineId: string, text: string, from?: string): Change =>
+	from === undefined
+		? { type: "update", id: id(lineId), text }
+		: { type: "update", id: id(lineId), text, base: from };
+const remove = (lineId: string): Change => ({ type: "delete", id: id(lineId) });
+const insert = (lineId: string, text: string, after: string | null): Change => ({
+	type: "insert",
+	line: line(lineId, text),
+	after: after === null ? null : id(after),
+	before: null,
+});
+/** 1つのコミットに入れられる変更の数の上限。 */
+const MAX_CHANGES = 2000;
+const commit = (commitId: string, ...changes: Change[]): Commit => ({
+	id: commitId as CommitId,
+	changes,
+});
 
-function setup(entries: PendingEntry[]) {
-	const snapshot = { version: 3, lines: [line("a", "A"), line("b", "B")] };
-	const api = {
-		load: vi.fn(async () => snapshot),
-		commit: vi.fn(
-			async (sent: Commit): Promise<CommitResult> => ({ version: 4, applied: sent.changes }),
-		),
+/**
+ * サーバーの代わり。コミットを受け取った順に適用する。同じIDのコミットは、1度しか適用しない。
+ * known は、以前に受け付けていたコミットのID。
+ */
+function setup(entries: PendingEntry[], known: readonly string[] = []) {
+	let state: { version: number; lines: readonly Line[] } = {
+		version: 3,
+		lines: [line("a", "A"), line("b", "B")],
 	};
-	return { snapshot, api, pending: { adopt: async () => entries } };
+	const seen = new Set<string>(known);
+	const api = {
+		load: vi.fn(async () => state),
+		commit: vi.fn(async (sent: Commit): Promise<CommitResult> => {
+			if (seen.has(sent.id)) return { version: state.version, applied: [], duplicate: true };
+			seen.add(sent.id);
+			const result = applyChanges(state.lines, sent.changes);
+			if (result.applied.length > 0) state = { version: state.version + 1, lines: result.lines };
+			return { version: state.version, applied: result.applied };
+		}),
+	};
+	return {
+		api,
+		pending: { adopt: async () => entries },
+		server: () => state,
+		/** 他の人のコミットを入れる。 */
+		commitFromOther(...changes: Change[]) {
+			state = { version: state.version + 1, lines: applyChanges(state.lines, changes).lines };
+		},
+		sentIds: () => api.commit.mock.calls.map(([sent]) => sent.id),
+	};
 }
 
 describe("restorePage", () => {
 	it("残っている変更がなければ、読み込んだページをそのまま返す", async () => {
-		const { snapshot, api, pending } = setup([]);
+		const { api, pending, server } = setup([]);
 
-		expect(await restorePage(api, pending)).toEqual({ snapshot, restored: null, noticed: false });
+		expect(await restorePage(api, pending)).toEqual({
+			snapshot: server(),
+			restored: null,
+			noticed: false,
+		});
 		expect(api.commit).not.toHaveBeenCalled();
 	});
 
-	it("まだ送っていなかった変更を、読み込んだページに載せる", async () => {
-		const { api, pending } = setup([{ inflight: null, changes: [update("a", "A2")] }]);
+	it("まだ送っていなかった変更を、読み込んだページに載せる(サーバーには、まだ送らない)", async () => {
+		const { api, pending } = setup([{ inflight: null, changes: [update("a", "A2", "A")] }]);
 
 		expect(await restorePage(api, pending)).toMatchObject({
 			restored: [line("a", "A2"), line("b", "B")],
 			noticed: true,
 		});
+		expect(api.commit).not.toHaveBeenCalled();
 	});
 
 	it("閉じたタブが送信中だったコミットは、ページを読み込む前に、同じIDで送り直す", async () => {
-		const inflight = commit("c1", update("a", "A2"));
+		const inflight = commit("c1", update("a", "A2", "A"));
 		const { api, pending } = setup([{ inflight, changes: [] }]);
-		const order: string[] = [];
-		api.commit.mockImplementationOnce(async (sent) => {
-			order.push("commit");
-			return { version: 4, applied: sent.changes };
-		});
-		api.load.mockImplementationOnce(async () => {
-			order.push("load");
-			return { version: 4, lines: [line("a", "A2"), line("b", "B")] };
-		});
 
 		const result = await restorePage(api, pending);
 
 		expect(api.commit).toHaveBeenCalledExactlyOnceWith(inflight);
-		expect(order).toEqual(["commit", "load"]);
+		expect(api.commit.mock.invocationCallOrder[0]).toBeLessThan(
+			api.load.mock.invocationCallOrder[0] ?? 0,
+		);
 		// 送り直したコミットは、読み込んだページに入っている。画面に載せ直す変更はない。
-		expect(result).toMatchObject({ restored: null, noticed: true });
+		expect(result).toMatchObject({
+			snapshot: { version: 4, lines: [line("a", "A2"), line("b", "B")] },
+			restored: null,
+			noticed: true,
+		});
 	});
 
-	it("送り直したコミットが、以前にサーバーに入っていたものなら、復元したとは伝えない", async () => {
-		const { api, pending } = setup([{ inflight: commit("c1", update("a", "A2")), changes: [] }]);
-		api.commit.mockResolvedValueOnce({ version: 3, applied: [], duplicate: true });
+	it("送り直したコミットが、以前にサーバーに入っていたものなら、何も起きない。復元したとは伝えない", async () => {
+		const { api, pending, commitFromOther, server } = setup(
+			[{ inflight: commit("c1", update("a", "A2", "A")), changes: [] }],
+			["c1"],
+		);
+		// コミットが入ったあとで、他の人が同じ行を書き換えていた。その変更は残る。
+		commitFromOther(update("a", "他の人の本文"));
 
 		expect(await restorePage(api, pending)).toMatchObject({ restored: null, noticed: false });
+		expect(server().lines).toEqual([line("a", "他の人の本文"), line("b", "B")]);
 	});
 
-	it("複数の記録は、順に送り直し、順に載せる", async () => {
+	it("送り直しに失敗したら(通信できない)、読み込みの失敗にする", async () => {
 		const { api, pending } = setup([
-			{ inflight: commit("c1", update("a", "1")), changes: [update("b", "1")] },
-			{ inflight: commit("c2", update("a", "2")), changes: [update("b", "2")] },
+			{ inflight: commit("c1", update("a", "A2", "A")), changes: [] },
 		]);
-		api.load.mockResolvedValueOnce({ version: 5, lines: [line("a", "2"), line("b", "B")] });
+		api.commit.mockRejectedValueOnce(new PageApiError("failed"));
 
-		const result = await restorePage(api, pending);
-
-		expect(api.commit.mock.calls.map(([sent]) => sent.id)).toEqual(["c1", "c2"]);
-		expect(result.restored).toEqual([line("a", "2"), line("b", "2")]);
-	});
-
-	describe("記録が複数あるとき、古い記録のまだ送っていなかった変更と、新しい記録の送信中だったコミット", () => {
-		// 古い記録の変更はまだ画面の上にしかないのに、新しい記録のコミットは先にサーバーに入る。
-		// そのまま載せると、古い変更が新しい変更に勝ってしまう。
-		const three = [line("a", "A"), line("b", "B"), line("c", "C")];
-		const cToTop: Change = { type: "move", id: "c" as LineId, after: null, before: "a" as LineId };
-		const cAfterA: Change = {
-			type: "move",
-			id: "c" as LineId,
-			after: "a" as LineId,
-			before: "b" as LineId,
-		};
-
-		it("行の並べ替えは、新しい記録のものが勝つ", async () => {
-			const { api, pending } = setup([
-				{ inflight: null, changes: [cToTop, update("b", "B2")] },
-				{ inflight: commit("c2", cAfterA), changes: [] },
-			]);
-			api.load.mockResolvedValueOnce({
-				version: 4,
-				lines: [line("a", "A"), line("c", "C"), line("b", "B")],
-			});
-
-			expect(await restorePage(api, pending)).toMatchObject({
-				restored: [line("a", "A"), line("c", "C"), line("b", "B2")],
-				noticed: true,
-			});
-		});
-
-		it("載せた結果が読み込んだページと同じなら、載せ直す変更はない", async () => {
-			const { api, pending } = setup([
-				{ inflight: null, changes: [cToTop] },
-				{ inflight: commit("c2", cAfterA), changes: [] },
-			]);
-			api.load.mockResolvedValueOnce({
-				version: 4,
-				lines: [line("a", "A"), line("c", "C"), line("b", "B")],
-			});
-
-			expect(await restorePage(api, pending)).toMatchObject({ restored: null, noticed: true });
-		});
-
-		it("新しい記録のコミットが以前にサーバーに入っていたものなら、古い記録の変更が後になる", async () => {
-			// 以前に入っていたコミットを画面に載せ直すと、そのあとに他の人がした変更を上書きしてしまう。
-			const { api, pending } = setup([
-				{ inflight: null, changes: [update("b", "B2")] },
-				{ inflight: commit("c2", cAfterA), changes: [] },
-			]);
-			api.commit.mockResolvedValueOnce({ version: 9, applied: [], duplicate: true });
-			// コミットが入ったあとで、他の人が c を末尾に戻した。
-			api.load.mockResolvedValueOnce({ version: 9, lines: three });
-
-			expect((await restorePage(api, pending)).restored).toEqual([
-				line("a", "A"),
-				line("b", "B2"),
-				line("c", "C"),
-			]);
-		});
-
-		it("元にした本文を持たない書き換え(以前の形の記録)は、新しい記録のものが勝つ", async () => {
-			// 統合されずに置き換わるので、もう一度載せないと、古い記録の本文が残ってしまう。
-			const { api, pending } = setup([
-				{ inflight: null, changes: [update("a", "古い"), update("b", "B2")] },
-				{ inflight: commit("c2", update("a", "新しい")), changes: [] },
-			]);
-			api.load.mockResolvedValueOnce({ version: 4, lines: [line("a", "新しい"), line("b", "B")] });
-
-			expect((await restorePage(api, pending)).restored).toEqual([
-				line("a", "新しい"),
-				line("b", "B2"),
-			]);
-		});
-
-		it("古い記録が戻した行への書き換えは、もう一度載せる(サーバーには行がなく、効いていない)", async () => {
-			// 古い記録: 消した行 x を、取り消しで戻した(まだ送っていない)。
-			// 新しい記録: その行 x を書き換えた。送り直しても、サーバーには行がないので効かない。
-			const { snapshot, api, pending } = setup([
-				{
-					inflight: null,
-					changes: [
-						{ type: "insert", line: line("x", "元の本文"), after: "b" as LineId, before: null },
-					],
-				},
-				{
-					inflight: commit("c2", {
-						type: "update",
-						id: "x" as LineId,
-						text: "新しい本文",
-						base: "元の本文",
-					}),
-					changes: [],
-				},
-			]);
-			api.commit.mockResolvedValueOnce({ version: 3, applied: [] });
-
-			expect((await restorePage(api, pending)).restored).toEqual([
-				...snapshot.lines,
-				line("x", "新しい本文"),
-			]);
-		});
-
-		it("同じ行の本文の書き換えは、どちらも残る。新しい記録の変更を2重に載せない(ADR-0022)", async () => {
-			const typed = (text: string): Change => ({
-				type: "update",
-				id: "a" as LineId,
-				text,
-				base: "晴れ",
-			});
-			const { api, pending } = setup([
-				{ inflight: null, changes: [typed("晴れです")] },
-				{ inflight: commit("c2", typed("晴れだ")), changes: [] },
-			]);
-			api.load.mockResolvedValueOnce({ version: 4, lines: [line("a", "晴れだ"), line("b", "B")] });
-
-			expect((await restorePage(api, pending)).restored).toEqual([
-				line("a", "晴れだです"),
-				line("b", "B"),
-			]);
-		});
+		await expect(restorePage(api, pending)).rejects.toMatchObject({ kind: "failed" });
+		expect(api.load).not.toHaveBeenCalled();
 	});
 
 	it("サーバーに断られたコミットは、まだ送っていなかった変更として載せる", async () => {
 		// 捨てると、書いたものが黙って消える。載せておけば、画面に残り、送れないことが表示される。
 		const { api, pending } = setup([
-			{ inflight: commit("c1", update("a", "長すぎる")), changes: [update("b", "B2")] },
+			{ inflight: commit("c1", update("a", "長すぎる", "A")), changes: [update("b", "B2", "B")] },
 		]);
 		api.commit.mockRejectedValueOnce(new PageApiError("rejected"));
 
@@ -217,11 +140,139 @@ describe("restorePage", () => {
 		});
 	});
 
-	it("送り直しに失敗したら(通信できない)、読み込みの失敗にする", async () => {
-		const { api, pending } = setup([{ inflight: commit("c1", update("a", "A2")), changes: [] }]);
-		api.commit.mockRejectedValueOnce(new PageApiError("failed"));
+	describe("記録が複数あるとき(いくつものタブが、未送信のまま閉じていた)", () => {
+		it("古い記録から順に、1つずつサーバーに入れる。画面に載せるのは、最後の記録のまだ送っていなかった変更だけ", async () => {
+			const { api, pending, server, sentIds } = setup([
+				{ inflight: commit("c1", update("a", "A1", "A")), changes: [update("b", "B1", "B")] },
+				{ inflight: commit("c2", insert("x", "X", "b")), changes: [update("x", "X2", "X")] },
+			]);
 
-		await expect(restorePage(api, pending)).rejects.toMatchObject({ kind: "failed" });
-		expect(api.load).not.toHaveBeenCalled();
+			const result = await restorePage(api, pending);
+
+			// 1つめの記録の送信中だったコミット、まだ送っていなかった変更、2つめの記録の送信中だったコミット。
+			expect(sentIds()).toEqual(["c1", expect.stringMatching(/^r-[0-9a-f]{40}-0$/), "c2"]);
+			expect(api.commit.mock.calls[1]?.[0].changes).toEqual([update("b", "B1", "B")]);
+			expect(server().lines).toEqual([line("a", "A1"), line("b", "B1"), line("x", "X")]);
+			expect(result).toMatchObject({
+				snapshot: server(),
+				restored: [line("a", "A1"), line("b", "B1"), line("x", "X2")],
+				noticed: true,
+			});
+		});
+
+		it("古い記録の変更が、新しい記録の変更を上書きしない(新しいほうが、あとから入る)", async () => {
+			// どちらも、元にした本文を持たない書き換え(置き換え)。あとから入ったほうが残る。
+			const { api, pending, server } = setup([
+				{ inflight: null, changes: [update("a", "古い"), update("b", "B2")] },
+				{ inflight: commit("c2", update("a", "新しい")), changes: [] },
+			]);
+
+			const result = await restorePage(api, pending);
+
+			expect(server().lines).toEqual([line("a", "新しい"), line("b", "B2")]);
+			expect(result).toMatchObject({ restored: null, noticed: true });
+		});
+
+		it("同じ行の本文の書き換えは、どちらも残る。足した文字は2重にならない(ADR-0022)", async () => {
+			const { api, pending, server } = setup([
+				{ inflight: null, changes: [update("a", "Aです", "A")] },
+				{ inflight: commit("c2", update("a", "Aだ", "A")), changes: [] },
+			]);
+
+			await restorePage(api, pending);
+
+			expect(server().lines).toEqual([line("a", "Aですだ"), line("b", "B")]);
+		});
+
+		it("古い記録が消して、次の記録が戻した行への書き換えも、順に入る", async () => {
+			const { api, pending, server } = setup([
+				{ inflight: null, changes: [remove("a")] },
+				{ inflight: commit("c2", insert("a", "元の本文", null)), changes: [] },
+				{ inflight: commit("c3", update("a", "新しい本文", "元の本文")), changes: [] },
+			]);
+
+			await restorePage(api, pending);
+
+			expect(server().lines).toEqual([line("a", "新しい本文"), line("b", "B")]);
+		});
+
+		it("以前にサーバーに入っていたコミットは、もう一度は入らない。そのあとの他の人の変更は残る", async () => {
+			const { api, pending, server, commitFromOther } = setup(
+				[
+					{ inflight: null, changes: [update("b", "B2", "B")] },
+					{ inflight: commit("c2", update("a", "A2", "A")), changes: [] },
+				],
+				["c2"],
+			);
+			commitFromOther(update("a", "他の人の本文"));
+
+			await restorePage(api, pending);
+
+			expect(server().lines).toEqual([line("a", "他の人の本文"), line("b", "B2")]);
+		});
+
+		it("まだ送っていなかった変更に付けるIDは、記録の内容から決まる。復元をやり直しても、2度は入らない", async () => {
+			const entries: PendingEntry[] = [
+				{ inflight: null, changes: [insert("x", "X", "b")] },
+				{ inflight: null, changes: [update("a", "A2", "A")] },
+			];
+			const first = setup(entries);
+			await restorePage(first.api, first.pending);
+			const [derived] = first.sentIds();
+
+			// 同じ記録を、もう一度復元する(前の復元の途中で、タブが閉じた)。前に入れたコミットは、入っている。
+			const second = setup(entries, derived === undefined ? [] : [derived]);
+			await restorePage(second.api, second.pending);
+
+			expect(second.sentIds()).toEqual([derived]);
+			await expect(second.api.commit.mock.results[0]?.value).resolves.toMatchObject({
+				duplicate: true,
+			});
+			// 重複として扱われ、何も入らない(このサーバーの代わりには、前の復元で入った行を入れていない)。
+			expect(second.server().lines).toEqual([line("a", "A"), line("b", "B")]);
+		});
+
+		it("まだ送っていなかった変更が1つのコミットに収まらなければ、分けて入れる", async () => {
+			const many = Array.from({ length: MAX_CHANGES + 1 }, (_, index) =>
+				insert(`n${index}`, "x", null),
+			);
+			const { api, pending, server, sentIds } = setup([
+				{ inflight: null, changes: many },
+				{ inflight: null, changes: [] },
+			]);
+
+			await restorePage(api, pending);
+
+			expect(sentIds()).toEqual([
+				expect.stringMatching(/^r-[0-9a-f]{40}-0$/),
+				expect.stringMatching(/^r-[0-9a-f]{40}-1$/),
+			]);
+			expect(api.commit.mock.calls.map(([sent]) => sent.changes.length)).toEqual([MAX_CHANGES, 1]);
+			expect(server().lines).toHaveLength(MAX_CHANGES + 3);
+		});
+
+		it("サーバーに断られた変更は、画面に載せて残す。残りの記録は、そのまま入れる", async () => {
+			const { api, pending, server } = setup([
+				{ inflight: null, changes: [update("a", "長すぎる", "A")] },
+				{ inflight: commit("c2", update("b", "B2", "B")), changes: [insert("x", "X", "b")] },
+			]);
+			api.commit.mockRejectedValueOnce(new PageApiError("rejected"));
+
+			const result = await restorePage(api, pending);
+
+			expect(server().lines).toEqual([line("a", "A"), line("b", "B2")]);
+			expect(result.restored).toEqual([line("a", "長すぎる"), line("b", "B2"), line("x", "X")]);
+		});
+
+		it("途中で通信に失敗したら、読み込みの失敗にする(やり直せば、続きから入る)", async () => {
+			const { api, pending } = setup([
+				{ inflight: null, changes: [update("a", "A2", "A")] },
+				{ inflight: commit("c2", update("b", "B2", "B")), changes: [] },
+			]);
+			api.commit.mockRejectedValueOnce(new PageApiError("failed"));
+
+			await expect(restorePage(api, pending)).rejects.toMatchObject({ kind: "failed" });
+			expect(api.load).not.toHaveBeenCalled();
+		});
 	});
 });
