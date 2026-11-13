@@ -296,6 +296,57 @@ describe("PageDO", () => {
 			expect((await read(stub)).version).toBe(3);
 		});
 
+		it("前に書き換えられなかったリンク(書けない名前だった)は、行き先が変わってやり直されたら、元の名前から書き換える", async () => {
+			const stub = page("rewrite-retargeted-unwritten");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳]")]);
+			expect(await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "a]b" }])).toEqual([
+				{ changed: false, remaining: true },
+			]);
+
+			// 応答が届かないうちに、書ける名前に変わった。
+			const results = await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "オーツ" }]);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[オーツ]")]);
+			expect(results).toEqual([{ changed: true, remaining: false }]);
+		});
+
+		it("一部だけ書き換えていたら、行き先が変わったやり直しでは、書き換えた分も、残った分も、いまの行き先にする", async () => {
+			const stub = page("rewrite-retargeted-partial");
+			// 2行目は、長い名前に書き換えると、長さの上限を超える。
+			const long = `[牛乳]${"あ".repeat(MAX_LINE_LENGTH - 6)}`;
+			await commitTo(stub, [
+				insertAfter(null, "a", "題"),
+				insertAfter("a", "b", long),
+				insertAfter("b", "c", "[牛乳]"),
+			]);
+			await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "豆乳ヨーグルト" }]);
+
+			await stub.rewriteLinks([{ id: 5, from: "牛乳", to: "麦" }]);
+
+			expect((await read(stub)).lines).toEqual([
+				line("a", "題"),
+				line("b", `[麦]${"あ".repeat(MAX_LINE_LENGTH - 6)}`),
+				line("c", "[麦]"),
+			]);
+		});
+
+		it("名前を入れ替えたあとのやり直しで行き先が変わっても、もう一方から書き換わったリンクは、巻き込まない", async () => {
+			const stub = page("rewrite-retargeted-swap");
+			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[A] [B]")]);
+			await stub.rewriteLinks([
+				{ id: 5, from: "A", to: "B" },
+				{ id: 6, from: "B", to: "A" },
+			]);
+
+			// 1つめの行き先だけが、C に変わった。
+			await stub.rewriteLinks([
+				{ id: 5, from: "A", to: "C" },
+				{ id: 6, from: "B", to: "A" },
+			]);
+
+			expect((await read(stub)).lines).toEqual([line("a", "題"), line("b", "[C] [A]")]);
+		});
+
 		it("済んだ書き換えの記録は、それより新しい書き換えを受け取ったときに片づける", async () => {
 			const stub = page("rewrite-prune");
 			await commitTo(stub, [insertAfter(null, "a", "題"), insertAfter("a", "b", "[牛乳] [卵]")]);
