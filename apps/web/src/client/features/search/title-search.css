@@ -1,0 +1,56 @@
+/* 名前でページを探す欄(ADR-0029)。 */
+.title-search {
+	position: relative;
+	width: 16rem;
+	max-width: 100%;
+}
+
+.title-search-input {
+	box-sizing: border-box;
+	width: 100%;
+	padding: 0.4rem 0.7rem;
+	border: 1px solid var(--color-border);
+	border-radius: 0.4rem;
+	background: var(--color-paper);
+	color: var(--color-text);
+	font: inherit;
+	font-size: 0.9rem;
+}
+
+.title-search-list,
+.title-search-empty {
+	position: absolute;
+	z-index: 10;
+	top: calc(100% + 0.25rem);
+	right: 0;
+	left: 0;
+	margin: 0;
+	border: 1px solid var(--color-border);
+	border-radius: 0.4rem;
+	background: var(--color-paper);
+	box-shadow: 0 0.25rem 0.75rem rgb(0 0 0 / 12%);
+	font-size: 0.9rem;
+}
+
+.title-search-list {
+	max-height: 20rem;
+	padding: 0.25rem;
+	overflow-y: auto;
+}
+
+.title-search-option {
+	padding: 0.35rem 0.5rem;
+	border-radius: 0.3rem;
+	overflow-wrap: anywhere;
+	cursor: pointer;
+}
+
+.title-search-option[aria-selected="true"],
+.title-search-option:hover {
+	background: var(--color-selection);
+}
+
+.title-search-empty {
+	padding: 0.5rem 0.75rem;
+	color: var(--color-muted);
+}

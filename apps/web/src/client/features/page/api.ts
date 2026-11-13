@@ -11,6 +11,7 @@ import {
 	parsePageInfo,
 	parsePageLinks,
 	parsePageList,
+	parsePageTitles,
 	parseSnapshot,
 } from "@amime/sync";
 import { PageApiError } from "./page-api-error.ts";
@@ -67,6 +68,11 @@ export function listPages({
 	readonly offset: number;
 }): Promise<PageList> {
 	return request(`/api/pages?sort=${sort}&offset=${offset}`, undefined, parsePageList);
+}
+
+/** 名前でページを探す(ADR-0029)。入力に合う名前を、合う順に返す。入力が空なら、更新が新しい順。 */
+export function searchTitles(query: string): Promise<readonly string[]> {
+	return request(`/api/pages/titles?q=${encodeURIComponent(query)}`, undefined, parsePageTitles);
 }
 
 /** ページのつながり(関連するページ、同じリンクを持つページ、まだないページへのリンク)を取り出す。ADR-0027。 */

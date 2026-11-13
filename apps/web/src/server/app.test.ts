@@ -348,6 +348,53 @@ describe("ページのAPI", () => {
 		});
 	});
 
+	describe("GET /api/pages/titles(名前でページを探す。ADR-0029)", () => {
+		/** 保存されたページを作り、台帳への知らせが済むのを待つ。 */
+		async function create(title: string) {
+			const info = (await (
+				await get(`/api/pages/by-title/${encodeURIComponent(title)}`)
+			).json()) as { id: string };
+			await post(`/api/pages/${info.id}/commits`, {
+				id: commitId(),
+				changes: [{ type: "insert", line: { id: "t", text: title }, after: null, before: null }],
+			});
+			await runDurableObjectAlarm(exports.PageDO.getByName(`default/${info.id}`));
+		}
+		const titles = async (query: string) => {
+			const response = await get(`/api/pages/titles${query}`);
+			return { response, body: await response.json() };
+		};
+
+		it("入力に合う名前を、合う順に返す", async () => {
+			await create("さがす 買い物 メモ");
+			await create("さがす 買い物");
+			await create("さがす 旅行");
+
+			const { response, body } = await titles(`?q=${encodeURIComponent("さがす 買物")}`);
+
+			expect(response.status).toBe(200);
+			expect(body).toEqual({ titles: ["さがす 買い物", "さがす 買い物 メモ"] });
+		});
+
+		it("件数を指定できる。入力を省くと、更新が新しい順", async () => {
+			await create("さがす 最後に作った");
+
+			const { body } = await titles("?limit=1");
+
+			expect(body).toEqual({ titles: ["さがす 最後に作った"] });
+		});
+
+		it.each([
+			["数でない件数", "?q=a&limit=many"],
+			["長すぎる入力", `?q=${"a".repeat(201)}`],
+		])("%sは 400 で断る", async (_name, query) => {
+			const { response, body } = await titles(query);
+
+			expect(response.status).toBe(400);
+			expect(body).toEqual({ error: "invalid-query" });
+		});
+	});
+
 	describe("名前を変えたときの、リンクの書き換え(ADR-0028)", () => {
 		it("ページの名前を変えると、リンクしているページの本文が書き換わり、開いている端末に配信される", async () => {
 			const open = async (title: string) =>

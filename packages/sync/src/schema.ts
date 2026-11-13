@@ -181,6 +181,15 @@ export const parsePageTitle = (
 export const parsePageInfo = (input: unknown): Result<PageInfo, "invalid"> =>
 	parse(PageInfoSchema, input);
 
+const PageTitlesSchema = v.pipe(
+	v.object({ titles: v.array(v.string()) }),
+	v.transform(({ titles }): readonly string[] => titles),
+);
+
+/** サーバーから届いた、ページの名前の並び(名前で探した結果)を検査する。 */
+export const parsePageTitles = (input: unknown): Result<readonly string[], "invalid"> =>
+	parse(PageTitlesSchema, input);
+
 /** サーバーから届いた、ページのつながりを検査する。 */
 export const parsePageLinks = (input: unknown): Result<PageLinks, "invalid"> =>
 	parse(PageLinksSchema, input);

@@ -2,6 +2,7 @@ import { Editor } from "../features/editor/editor.tsx";
 import { Page } from "../features/page/page.tsx";
 import { pageNameFromPath } from "../features/page/route.ts";
 import { PageList } from "../features/pages/page-list.tsx";
+import { TitleSearch } from "../features/search/title-search.tsx";
 
 /** 試し書きのページの初期内容。 */
 const SAMPLE_LINES = [
@@ -53,9 +54,12 @@ export function App() {
 	const name = pageNameFromPath(window.location.pathname);
 	return (
 		<main className="app">
-			<h1 className="app-title">
-				<a href="/">Amime</a>
-			</h1>
+			<header className="app-header">
+				<h1 className="app-title">
+					<a href="/">Amime</a>
+				</h1>
+				<TitleSearch />
+			</header>
 			{name === null ? (
 				<Home />
 			) : (

@@ -4,9 +4,11 @@ import type { PageSummary } from "@amime/parser";
 import { type CommitId, type LineId, MAX_LINE_LENGTH, type PageId } from "@amime/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	DEFAULT_TITLES,
 	MAX_GROUP_PAGES,
 	MAX_LIST_LIMIT,
 	MAX_REWRITE_ATTEMPTS,
+	MAX_TITLES,
 	MIGRATIONS,
 	migrate,
 	PLACEHOLDER_MAX_AGE_MS,
@@ -759,6 +761,79 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 
 			expect(await stub.links(here)).toEqual({ missing: [], related: [], hops: [] });
 			expect(await stub.links("unknown" as PageId)).toEqual({ missing: [], related: [], hops: [] });
+		});
+	});
+
+	describe("titles(名前でページを探す。ADR-0029)", () => {
+		/** 保存されたページを作る。あとに作ったものほど、更新が新しい。 */
+		async function add(stub: ReturnType<typeof project>, ...titles: string[]) {
+			for (const [index, title] of titles.entries()) {
+				const { id } = await stub.open(title);
+				await stub.index(id, saved(title, index + 1));
+			}
+		}
+
+		it("入力に合う名前を、合う順に返す。文字が飛び飛びに合う名前も含める", async () => {
+			const stub = project("titles-rank");
+			await add(stub, "買ったあとで見つけた物", "旅行", "買い物 メモ", "お買い物", "買い物");
+
+			expect(await stub.titles("買い物")).toEqual(["買い物", "買い物 メモ", "お買い物"]);
+			expect(await stub.titles("買物")).toEqual([
+				"買い物",
+				"お買い物",
+				"買い物 メモ",
+				"買ったあとで見つけた物",
+			]);
+		});
+
+		it("大文字小文字と、空白かアンダースコアかの違いは区別しない。語が複数あれば、すべてに合うものだけ", async () => {
+			const stub = project("titles-normalized");
+			await add(stub, "Milk Tea", "Milk Bar", "Tea Time");
+
+			expect(await stub.titles("milk_tea")).toEqual(["Milk Tea"]);
+			expect(await stub.titles("TEA milk")).toEqual(["Milk Tea"]);
+		});
+
+		it("LIKE で特別な意味を持つ文字も、そのままの文字として探す", async () => {
+			const stub = project("titles-escape");
+			await add(stub, "100% 果汁", "100点", "a_b", "axb");
+
+			expect(await stub.titles("100%")).toEqual(["100% 果汁"]);
+		});
+
+		it("入力が空なら、更新が新しい順に返す", async () => {
+			const stub = project("titles-recent");
+			await add(stub, "古い", "中くらい", "新しい");
+
+			expect(await stub.titles("")).toEqual(["新しい", "中くらい", "古い"]);
+			expect(await stub.titles("  ")).toEqual(["新しい", "中くらい", "古い"]);
+		});
+
+		it("同じくらい合い、長さも同じ名前は、更新が新しいものを先にする", async () => {
+			const stub = project("titles-tie");
+			await add(stub, "メモ 1", "メモ 2", "メモ 3");
+
+			expect(await stub.titles("メモ")).toEqual(["メモ 3", "メモ 2", "メモ 1"]);
+		});
+
+		it("開いただけのページは含めない", async () => {
+			const stub = project("titles-placeholder");
+			await add(stub, "買い物");
+			await stub.open("買い物 これから");
+
+			expect(await stub.titles("買い物")).toEqual(["買い物"]);
+		});
+
+		it("返す件数には上限がある。指定がなければ、既定の件数まで", async () => {
+			const stub = project("titles-limit");
+			await add(
+				stub,
+				...Array.from({ length: MAX_TITLES + 5 }, (_value, index) => `メモ ${index}`),
+			);
+
+			expect(await stub.titles("メモ", 3)).toHaveLength(3);
+			expect(await stub.titles("メモ")).toHaveLength(DEFAULT_TITLES);
+			expect(await stub.titles("メモ", 1000)).toHaveLength(MAX_TITLES);
 		});
 	});
 

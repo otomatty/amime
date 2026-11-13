@@ -15,6 +15,7 @@ export {
 	parsePageList,
 	parsePageSort,
 	parsePageTitle,
+	parsePageTitles,
 	parsePendingRecord,
 	parseServerMessage,
 	parseSnapshot,

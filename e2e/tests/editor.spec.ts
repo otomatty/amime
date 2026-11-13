@@ -160,8 +160,8 @@ test.describe("エディタ(画面の操作)", () => {
 		await page.keyboard.press("Escape");
 		await page.keyboard.press("Shift+Tab");
 
-		// 編集欄の前にある、フォーカスできる要素は、見出しのリンク(トップへ戻る)。
-		await expect(page.getByRole("link", { name: "Amime" })).toBeFocused();
+		// 編集欄の前にある、フォーカスできる要素は、名前でページを探す欄。
+		await expect(page.getByRole("combobox", { name: "ページを探す" })).toBeFocused();
 		await expect(lines(page).first()).toHaveAttribute("data-text", "はじめに");
 	});
 

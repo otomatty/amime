@@ -83,6 +83,15 @@ const pages = new Hono<AppEnv>()
 		}
 		return c.json(await directory().list({ sort: sort.value, ...limit, ...offset }));
 	})
+	// 名前でページを探す(ADR-0029)。入力に合う名前を、合う順に返す。
+	.get("/titles", async (c) => {
+		const query = c.req.query("q") ?? "";
+		const limit = countQuery(c.req.query("limit"), "limit");
+		if (query.length > MAX_TITLE_LENGTH || limit === null) {
+			return c.json({ error: "invalid-query" }, 400);
+		}
+		return c.json({ titles: await directory().titles(query, limit.limit) });
+	})
 	// 名前からページを引く。まだないページには、IDを決める(本文は、書き込まれるまで作られない)。
 	.get("/by-title/:title", async (c) => {
 		const title = c.req.param("title");

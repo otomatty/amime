@@ -13,6 +13,7 @@ import {
 	parsePageList,
 	parsePageSort,
 	parsePageTitle,
+	parsePageTitles,
 	parsePendingRecord,
 	parseServerMessage,
 	parseSnapshot,
@@ -93,6 +94,23 @@ describe("parsePageInfo", () => {
 		["固定しているかがない", { id: "p1", title: "a", problem: null }],
 	])("%s入力は受け付けない", (_name, input) => {
 		expect(parsePageInfo(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parsePageTitles", () => {
+	it("ページの名前の並びを受け付ける", () => {
+		expect(parsePageTitles({ titles: ["買い物", "旅行"] })).toEqual({
+			ok: true,
+			value: ["買い物", "旅行"],
+		});
+	});
+
+	it.each([
+		["オブジェクトでない", ["買い物"]],
+		["titles がない", {}],
+		["名前が文字列でない", { titles: [1] }],
+	])("%s入力は受け付けない", (_name, input) => {
+		expect(parsePageTitles(input)).toEqual({ ok: false, error: "invalid" });
 	});
 });
 
