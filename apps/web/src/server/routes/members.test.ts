@@ -608,6 +608,38 @@ describe("権限がなくなった人の接続", () => {
 		own.socket.close();
 	});
 
+	it("コミットの本文を送り終える前に外された人のコミットは、通さない(本文を待たせておいても、書き込めない)", async () => {
+		const { path, admin } = await project();
+		const leaving = await member(path, admin);
+		const opened = await call(`${path}/pages/by-title/${encodeURIComponent("会議")}`, {
+			as: admin,
+		});
+		const page = (await opened.json()) as { id: string };
+		let finish: () => void = () => {};
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				finish = () => {
+					const commit = { id: unique("c"), changes: [title] };
+					controller.enqueue(new TextEncoder().encode(JSON.stringify(commit)));
+					controller.close();
+				};
+			},
+		});
+		const pending = app.request(
+			`${ORIGIN}${path}/pages/${page.id}/commits`,
+			{ method: "POST", headers: { cookie: leaving.cookie }, body, duplex: "half" } as RequestInit,
+			env,
+		);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect((await send("DELETE", `${path}/members/${leaving.id}`, admin)).status).toBe(204);
+		finish();
+
+		expect((await pending).status).toBe(404);
+		const saved = await call(`${path}/pages/${page.id}`, { as: admin });
+		expect(await saved.json()).toMatchObject({ version: 0 });
+	});
+
 	it("管理者でなくなった人が、確かめを通ったあとの要求を送り終えても、役割は変わらない", async () => {
 		const { path, admin } = await project();
 		const demoted = await member(path, admin);
