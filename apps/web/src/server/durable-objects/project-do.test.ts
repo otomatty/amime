@@ -4,8 +4,10 @@ import type { PageSummary } from "@amime/parser";
 import { type CommitId, type LineId, MAX_LINE_LENGTH, type PageId } from "@amime/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	DEFAULT_HITS,
 	DEFAULT_TITLES,
 	MAX_GROUP_PAGES,
+	MAX_INDEXED_TEXT,
 	MAX_LIST_LIMIT,
 	MAX_REWRITE_ATTEMPTS,
 	MAX_TITLES,
@@ -19,11 +21,18 @@ import {
 /** テストごとに別のプロジェクト(=別の Durable Object)を使い、状態を共有しない。 */
 const project = (name: string) => exports.ProjectDO.getByName(`test-${name}`);
 /** 保存されたページの状態(1行目と、バージョン)。 */
-const saved = (title: string, version = 1, summary: Partial<PageSummary> = {}) => ({
+const saved = (
+	title: string,
+	version = 1,
+	summary: Partial<PageSummary> = {},
+	/** ページの本文(1行目を含む、すべての行)。 */
+	text = title,
+) => ({
 	title,
 	version,
 	updated: 1000 * version,
 	summary: { links: [], descriptions: [], image: null, ...summary },
+	text,
 });
 
 describe("ProjectDO(プロジェクトのページの台帳)", () => {
@@ -865,6 +874,232 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 		});
 	});
 
+	describe("search(本文を探す。ADR-0031)", () => {
+		/** 本文のあるページを作る。あとに作ったものほど、更新が新しい。 */
+		async function write(stub: ReturnType<typeof project>, pages: readonly string[][]) {
+			const ids: PageId[] = [];
+			for (const [index, lines] of pages.entries()) {
+				const title = lines[0] ?? "";
+				const { id } = await stub.open(title);
+				await stub.index(id, saved(title, index + 1, {}, lines.join("\n")));
+				ids.push(id);
+			}
+			return ids;
+		}
+		const titles = (results: { hits: readonly { title: string }[] }) =>
+			results.hits.map((hit) => hit.title);
+
+		it("すべての語を本文に含むページを返す。語を含む行を、記法の記号を除いて添える", async () => {
+			const stub = project("search-basic");
+			const [shopping] = await write(stub, [
+				["買い物", " [牛乳] を [* 2本] 買う", "関係ない行", "卵も買う"],
+				["旅行", "京都へ行く"],
+				["牛乳だけ", "牛乳を飲む"],
+			]);
+
+			const results = await stub.search("牛乳 買う");
+
+			expect(results).toEqual({
+				hits: [
+					{
+						id: shopping,
+						title: "買い物",
+						updated: 1000,
+						lines: ["牛乳 を 2本 買う", "卵も買う"],
+					},
+				],
+				more: false,
+			});
+		});
+
+		it("大文字と小文字、全角と半角の違いは区別しない", async () => {
+			const stub = project("search-fold");
+			await write(stub, [
+				["メモ", "Ｍｉｌｋ Tea を作る"],
+				["別のメモ", "ｶﾞｲﾄﾞを読む"],
+			]);
+
+			expect(titles(await stub.search("MILK tea"))).toEqual(["メモ"]);
+			expect(titles(await stub.search("ガイド"))).toEqual(["別のメモ"]);
+		});
+
+		it("名前に語があるページを先に、あとは更新が新しい順に並べる", async () => {
+			const stub = project("search-order");
+			await write(stub, [
+				["牛乳 の話", "本文"],
+				["古いメモ", "牛乳を買う"],
+				["新しいメモ", "牛乳を飲む"],
+			]);
+
+			expect(titles(await stub.search("牛乳"))).toEqual(["牛乳 の話", "新しいメモ", "古いメモ"]);
+		});
+
+		it("名前にだけ語があるページも返す(添える行はない)", async () => {
+			const stub = project("search-title-only");
+			await write(stub, [["牛乳 の話", "本文"]]);
+
+			expect((await stub.search("牛乳")).hits).toMatchObject([{ title: "牛乳 の話", lines: [] }]);
+		});
+
+		it("添える行は、1ページに3行まで", async () => {
+			const stub = project("search-lines");
+			await write(stub, [["メモ", "牛乳 1", "牛乳 2", "牛乳 3", "牛乳 4"]]);
+
+			expect((await stub.search("牛乳")).hits[0]?.lines).toEqual(["牛乳 1", "牛乳 2", "牛乳 3"]);
+		});
+
+		it("% や _ も、そのままの文字として探す", async () => {
+			const stub = project("search-literal");
+			await write(stub, [
+				["果汁", "100% のジュース"],
+				["点数", "100点を取る"],
+				["名前", "a_b"],
+				["別名", "axb"],
+			]);
+
+			expect(titles(await stub.search("100%"))).toEqual(["果汁"]);
+			expect(titles(await stub.search("a_b"))).toEqual(["名前"]);
+		});
+
+		it("返す件数には上限がある。ほかにも合うページがあれば、そのことを返す", async () => {
+			const stub = project("search-limit");
+			await write(
+				stub,
+				Array.from({ length: 4 }, (_value, index) => [`メモ ${index}`, "牛乳"]),
+			);
+
+			expect(await stub.search("牛乳", 3)).toMatchObject({ more: true });
+			expect(titles(await stub.search("牛乳", 3))).toEqual(["メモ 3", "メモ 2", "メモ 1"]);
+			expect(await stub.search("牛乳", 4)).toMatchObject({ more: false });
+			expect((await stub.search("牛乳", 1000)).hits).toHaveLength(4);
+		});
+
+		it("既定では、20件まで返す", async () => {
+			const stub = project("search-default");
+			await write(
+				stub,
+				Array.from({ length: DEFAULT_HITS + 1 }, (_value, index) => [`メモ ${index}`, "牛乳"]),
+			);
+
+			const results = await stub.search("牛乳");
+
+			expect(results.hits).toHaveLength(DEFAULT_HITS);
+			expect(results.more).toBe(true);
+		});
+
+		it("語がいくつあっても、すべての語を含むページだけを返す", async () => {
+			const stub = project("search-many-terms");
+			const words = Array.from({ length: 60 }, (_value, index) => `w${index}x`);
+			await write(stub, [
+				["すべてある", words.join(" ")],
+				["最後の語がない", words.slice(0, 59).join(" ")],
+			]);
+
+			expect(titles(await stub.search(words.join(" ")))).toEqual(["すべてある"]);
+			// 同じ語を何度書いても、1つの語として探す。
+			expect(titles(await stub.search(Array.from({ length: 100 }, () => "w0x").join(" ")))).toEqual(
+				["最後の語がない", "すべてある"],
+			);
+		});
+
+		it("語がとても多いときも、件数と「ほかにもある」は、すべての語を含むページで数える", async () => {
+			const stub = project("search-many-terms-limit");
+			const words = Array.from({ length: 41 }, (_value, index) => `w${index}x`);
+			const all = words.join(" ");
+			const withoutLast = words.slice(0, 40).join(" ");
+			// 最後の語がないページのほうが、新しい(先に並ぶ)。
+			await write(stub, [
+				["すべてある 1", all],
+				["すべてある 2", all],
+				["最後の語がない 1", withoutLast],
+				["最後の語がない 2", withoutLast],
+				["最後の語がない 3", withoutLast],
+			]);
+
+			const one = await stub.search(all, 1);
+			expect(titles(one)).toEqual(["すべてある 2"]);
+			expect(one.more).toBe(true);
+			const two = await stub.search(all, 2);
+			expect(titles(two)).toEqual(["すべてある 2", "すべてある 1"]);
+			expect(two.more).toBe(false);
+			// 合うページがなければ、「ほかにもある」とは言わない。
+			expect(await stub.search(`${all} ない語`, 1)).toEqual({ hits: [], more: false });
+		});
+
+		it("語がとても多いときも、名前にすべての語があるページを先に並べる", async () => {
+			const stub = project("search-many-terms-title");
+			const words = Array.from({ length: 41 }, (_value, index) => `w${index}x`);
+			const all = words.join(" ");
+			const withoutLast = words.slice(0, 40).join(" ");
+			await write(stub, [
+				// 名前に、すべての語がある。
+				[all, "中身"],
+				// 名前には最後の語がなく、本文にある。こちらのほうが新しい。
+				[withoutLast, words[40] ?? ""],
+			]);
+
+			const results = await stub.search(all);
+			expect(titles(results)).toEqual([all, withoutLast]);
+			const one = await stub.search(all, 1);
+			expect(titles(one)).toEqual([all]);
+			expect(one.more).toBe(true);
+		});
+
+		it("語がなければ、何も返さない", async () => {
+			const stub = project("search-empty");
+			await write(stub, [["メモ", "牛乳"]]);
+
+			expect(await stub.search("  ")).toEqual({ hits: [], more: false });
+		});
+
+		it("書き換えたページは、新しい本文で探す。前の本文では、見つからない", async () => {
+			const stub = project("search-update");
+			const [id] = await write(stub, [["メモ", "牛乳を買う"]]);
+			if (id === undefined) throw new Error("no page");
+
+			await stub.index(id, saved("メモ", 2, {}, "メモ\n豆乳を買う"));
+
+			expect(titles(await stub.search("牛乳"))).toEqual([]);
+			expect(titles(await stub.search("豆乳"))).toEqual(["メモ"]);
+		});
+
+		it("削除したページは、見つからない。本文も残さない", async () => {
+			const stub = project("search-removed");
+			const [id] = await write(stub, [["メモ", "牛乳を買う"]]);
+			if (id === undefined) throw new Error("no page");
+
+			await stub.remove(id);
+
+			expect(titles(await stub.search("牛乳"))).toEqual([]);
+			await runInDurableObject(stub, (_instance, state) => {
+				expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM texts").one()).toEqual({ n: 0 });
+			});
+		});
+
+		it("照らし合わせるための形にすると長くなる文字が並んでいても、保存できる(上限までにする)", async () => {
+			// 「ﷺ」は、照らし合わせるための形にすると18文字になる。
+			const stub = project("search-expanding");
+			const body = "ﷺ".repeat(MAX_INDEXED_TEXT / 10);
+			await write(stub, [["広がる文字", body]]);
+
+			expect(titles(await stub.search("広がる文字"))).toEqual(["広がる文字"]);
+			await runInDurableObject(stub, (_instance, state) => {
+				const row = state.storage.sql
+					.exec<{ n: number }>("SELECT length(folded) AS n FROM texts")
+					.one();
+				expect(row.n).toBeLessThanOrEqual(MAX_INDEXED_TEXT);
+			});
+		});
+
+		it("非常に長い本文は、上限までを探す対象にする", async () => {
+			const stub = project("search-long");
+			await write(stub, [["長いメモ", "あ".repeat(MAX_INDEXED_TEXT), "上限のあとの牛乳"]]);
+
+			expect(titles(await stub.search("長いメモ"))).toEqual(["長いメモ"]);
+			expect(titles(await stub.search("牛乳"))).toEqual([]);
+		});
+	});
+
 	describe("名前を変えたときの、リンクの書き換え(ADR-0028)", () => {
 		let serial = 0;
 		const nextCommit = () => {
@@ -1351,7 +1586,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				const { sql } = state.storage;
 				// ADR-0024 の時点の形に戻す。
 				sql.exec(
-					"DROP TABLE renames; DROP TABLE rewrites; DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
+					"DROP TABLE texts; DROP TABLE renames; DROP TABLE rewrites; DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
 				);
 				sql.exec(`CREATE TABLE pages (
 					id TEXT PRIMARY KEY, title_lc TEXT NOT NULL UNIQUE, title TEXT NOT NULL, problem TEXT,

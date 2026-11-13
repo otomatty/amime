@@ -12,7 +12,9 @@ import {
 	parsePageLinks,
 	parsePageList,
 	parsePageTitles,
+	parseSearchResults,
 	parseSnapshot,
+	type SearchResults,
 } from "@amime/sync";
 import { PageApiError } from "./page-api-error.ts";
 import { connectPageSocket } from "./page-socket.ts";
@@ -73,6 +75,11 @@ export function listPages({
 /** 名前でページを探す(ADR-0029)。入力に合う名前を、合う順に返す。入力が空なら、更新が新しい順。 */
 export function searchTitles(query: string): Promise<readonly string[]> {
 	return request(`/api/pages/titles?q=${encodeURIComponent(query)}`, undefined, parsePageTitles);
+}
+
+/** 本文を探す(ADR-0031)。すべての語を本文に含むページを、語を含む行と一緒に返す。 */
+export function searchPages(query: string): Promise<SearchResults> {
+	return request(`/api/pages/search?q=${encodeURIComponent(query)}`, undefined, parseSearchResults);
 }
 
 /** ページのつながり(関連するページ、同じリンクを持つページ、まだないページへのリンク)を取り出す。ADR-0027。 */

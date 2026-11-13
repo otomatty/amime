@@ -58,6 +58,47 @@ describe("App", () => {
 		);
 	});
 
+	it("URLに ?q= で語が付いていれば、本文を探した結果を表示する(一覧は読み込まない)", async () => {
+		const fetchMock = vi.fn(async (url: string) =>
+			url.startsWith("/api/pages/search")
+				? new Response(
+						JSON.stringify({
+							hits: [{ id: "p1", title: "買い物", updated: 1000, lines: ["牛乳を買う"] }],
+							more: false,
+						}),
+					)
+				: new Response(JSON.stringify({ titles: [] })),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		window.history.replaceState(null, "", `/?q=${encodeURIComponent(" 牛乳 ")}`);
+
+		render(<App />);
+
+		await waitFor(() => expect(screen.getByRole("link", { name: "買い物" })).toBeDefined());
+		expect(screen.getByRole("heading", { level: 2 }).textContent).toBe(
+			"「牛乳」を本文から探した結果",
+		);
+		expect(screen.queryByRole("region", { name: "ページの一覧" })).toBeNull();
+		expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain(
+			"/api/pages?sort=updated&offset=0",
+		);
+	});
+
+	it("ページのAPIが無効な環境で ?q= の付いたURLを開いたら、トップと同じに、試し書きのページを表示する", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () => new Response(JSON.stringify({ error: "page-api-disabled" }), { status: 403 }),
+			),
+		);
+		window.history.replaceState(null, "", `/?q=${encodeURIComponent("牛乳")}`);
+
+		render(<App />);
+
+		await waitFor(() => expect(screen.getByText(/この画面は試し書き用です/)).toBeDefined());
+		expect(screen.queryByText(/探せませんでした/)).toBeNull();
+	});
+
 	it("URLに ?playground を付けると、試し書きのページを表示する(一覧は読み込まない)", async () => {
 		const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify({ titles: [] })));
 		vi.stubGlobal("fetch", fetchMock);

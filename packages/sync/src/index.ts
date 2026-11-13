@@ -17,6 +17,7 @@ export {
 	parsePageTitle,
 	parsePageTitles,
 	parsePendingRecord,
+	parseSearchResults,
 	parseServerMessage,
 	parseSnapshot,
 } from "./schema.ts";
@@ -56,6 +57,8 @@ export type {
 	PageSort,
 	PendingEntry,
 	PendingRecord,
+	SearchHit,
+	SearchResults,
 	ServerMessage,
 	TitleProblem,
 } from "./types.ts";

@@ -61,6 +61,18 @@ function plainText(raw: string, line: ParsedLine): string {
 	}
 }
 
+/**
+ * ページの行を、読める文字列にする(記法の記号を除く)。行の数と順は、そのまま。
+ * 1行目はタイトルなので、記法として読まない。
+ */
+export function plainLines(lines: readonly string[]): string[] {
+	const roles = classifyLines(lines);
+	return lines.map((raw, index) => {
+		const role = roles[index];
+		return index === 0 || role === undefined ? raw : plainText(raw, parseLine(raw, role));
+	});
+}
+
 /** 長さの上限に収める。文字(サロゲートの組)の途中では切らない。 */
 function clip(text: string): string {
 	if (text.length <= DESCRIPTION_LENGTH) return text;

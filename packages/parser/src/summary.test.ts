@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { MAX_SUMMARY_LINKS, summarizePage } from "./summary.ts";
+import { MAX_SUMMARY_LINKS, plainLines, summarizePage } from "./summary.ts";
+
+describe("plainLines(ページの行を、読める文字列にする)", () => {
+	it("記法の記号と、行頭のインデントを除いた文字列にする。行の数と順は、そのまま", () => {
+		expect(
+			plainLines([
+				"[題] は記法として読まない",
+				" [牛乳] を [* 買う] #買い物",
+				"",
+				"code:memo.js",
+				" const [a] = b;",
+				"table:予定",
+				" 月\t[火]",
+				"> 引用の `code`",
+			]),
+		).toEqual([
+			"[題] は記法として読まない",
+			"牛乳 を 買う #買い物",
+			"",
+			"memo.js",
+			"const [a] = b;",
+			"予定",
+			"月 火",
+			" 引用の code",
+		]);
+	});
+});
 
 describe("summarizePage(一覧やリンクのつながりのために、ページから取り出す情報)", () => {
 	describe("links(ページの中のリンク先)", () => {

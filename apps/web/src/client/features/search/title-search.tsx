@@ -14,6 +14,12 @@ type TitleSearchProps = {
 	readonly navigate?: (href: string) => void;
 };
 
+/** いま開いているURLが、本文を探した結果なら、その語。 */
+const queryFromUrl = (): string => new URLSearchParams(window.location.search).get("q") ?? "";
+
+/** 本文を探した結果のURL(ADR-0031)。 */
+const searchHref = (query: string): string => `/?q=${encodeURIComponent(query)}`;
+
 type Found = {
 	/** 何を入力したときの候補か。 */
 	readonly query: string;
@@ -28,7 +34,7 @@ type Found = {
 export function TitleSearch({
 	navigate = (href) => window.location.assign(href),
 }: TitleSearchProps) {
-	const [query, setQuery] = useState("");
+	const [query, setQuery] = useState(queryFromUrl);
 	// 探す欄を出すか。ページのAPIが使えると分かるまでは、出さない。
 	const [available, setAvailable] = useState(false);
 	const [found, setFound] = useState<Found>({ query: "", titles: [] });
@@ -69,11 +75,14 @@ export function TitleSearch({
 
 	// いまの入力への候補だけを見せる(前の入力への候補を、いまの入力の候補として見せない)。
 	const titles = found.query === query ? found.titles : [];
-	const shown = open && titles.length > 0;
-	const empty = open && query !== "" && found.query === query && titles.length === 0;
+	// 入力があるあいだは、名前の候補のあとに「本文から探す」の項目を出す(ADR-0031)。
+	const words = query.trim();
+	const hrefs = [...titles.map(pageHref), ...(words === "" ? [] : [searchHref(words)])];
+	const shown = open && hrefs.length > 0;
+	const empty = open && words !== "" && found.query === query && titles.length === 0;
 	const optionId = (index: number) => `${listId}-${index}`;
-	const go = (title: string | undefined) => {
-		if (title !== undefined) navigate(pageHref(title));
+	const go = (href: string | undefined) => {
+		if (href !== undefined) navigate(href);
 	};
 
 	const handleKeyDown = (event: KeyboardEvent) => {
@@ -87,10 +96,10 @@ export function TitleSearch({
 		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
 			event.preventDefault();
 			const step = event.key === "ArrowDown" ? 1 : -1;
-			setActive((current) => (current + step + titles.length) % titles.length);
+			setActive((current) => (current + step + hrefs.length) % hrefs.length);
 		} else if (event.key === "Enter") {
 			event.preventDefault();
-			go(titles[active]);
+			go(hrefs[active]);
 		}
 	};
 
@@ -110,44 +119,46 @@ export function TitleSearch({
 				value={query}
 				onChange={(event) => {
 					setQuery(event.target.value);
+					// 入力が変わると、候補も変わる。前の候補での位置を、持ち越さない。
+					setActive(0);
 					setOpen(true);
 				}}
 				onFocus={() => setOpen(true)}
 				onBlur={() => setOpen(false)}
 				onKeyDown={handleKeyDown}
 			/>
-			<div
-				className="title-search-list"
-				id={listId}
-				role="listbox"
-				aria-label="ページの候補"
-				hidden={!shown}
-			>
-				{shown &&
-					titles.map((title, index) => (
-						<div
-							className="title-search-option"
-							id={optionId(index)}
-							key={title}
-							role="option"
-							aria-selected={index === active}
-							// フォーカスは欄に置いたまま、選んでいる候補を aria-activedescendant で伝える。
-							tabIndex={-1}
-							// 押しても、欄からフォーカスを外さない(外れると、押し終える前に候補が閉じる)。
-							onMouseDown={(event) => {
-								event.preventDefault();
-								go(title);
-							}}
-						>
-							{title}
-						</div>
-					))}
+			<div className="title-search-popup" hidden={!shown}>
+				{empty && (
+					<p className="title-search-empty" role="status">
+						合う名前のページはありません
+					</p>
+				)}
+				<div className="title-search-list" id={listId} role="listbox" aria-label="ページの候補">
+					{shown &&
+						hrefs.map((href, index) => {
+							const title = titles[index];
+							return (
+								<div
+									className="title-search-option"
+									id={optionId(index)}
+									key={href}
+									role="option"
+									aria-selected={index === active}
+									data-kind={title === undefined ? "text" : "title"}
+									// フォーカスは欄に置いたまま、選んでいる候補を aria-activedescendant で伝える。
+									tabIndex={-1}
+									// 押しても、欄からフォーカスを外さない(外れると、押し終える前に候補が閉じる)。
+									onMouseDown={(event) => {
+										event.preventDefault();
+										go(href);
+									}}
+								>
+									{title ?? `「${words}」を本文から探す`}
+								</div>
+							);
+						})}
+				</div>
 			</div>
-			{empty && (
-				<p className="title-search-empty" role="status">
-					合う名前のページはありません
-				</p>
-			)}
 		</div>
 	);
 }

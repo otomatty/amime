@@ -15,6 +15,7 @@ import {
 	parsePageTitle,
 	parsePageTitles,
 	parsePendingRecord,
+	parseSearchResults,
 	parseServerMessage,
 	parseSnapshot,
 } from "./schema.ts";
@@ -94,6 +95,25 @@ describe("parsePageInfo", () => {
 		["固定しているかがない", { id: "p1", title: "a", problem: null }],
 	])("%s入力は受け付けない", (_name, input) => {
 		expect(parsePageInfo(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parseSearchResults", () => {
+	const hit = { id: "p1", title: "買い物", updated: 2000, lines: ["牛乳を買う"] };
+
+	it("本文を探した結果を受け付ける", () => {
+		const results = { hits: [hit, { ...hit, id: "p2", lines: [] }], more: true };
+
+		expect(parseSearchResults(results)).toEqual({ ok: true, value: results });
+	});
+
+	it.each([
+		["オブジェクトでない", [hit]],
+		["more がない", { hits: [] }],
+		["ページのIDの形が違う", { hits: [{ ...hit, id: "a b" }], more: false }],
+		["行が文字列でない", { hits: [{ ...hit, lines: [1] }], more: false }],
+	])("%s入力は受け付けない", (_name, input) => {
+		expect(parseSearchResults(input)).toEqual({ ok: false, error: "invalid" });
 	});
 });
 

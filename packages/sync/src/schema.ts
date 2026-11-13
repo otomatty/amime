@@ -15,6 +15,7 @@ import type {
 	PageSnapshot,
 	PageSort,
 	PendingRecord,
+	SearchResults,
 	ServerMessage,
 } from "./types.ts";
 
@@ -180,6 +181,22 @@ export const parsePageTitle = (
 /** サーバーから届いた、ページの情報を検査する。 */
 export const parsePageInfo = (input: unknown): Result<PageInfo, "invalid"> =>
 	parse(PageInfoSchema, input);
+
+const SearchResultsSchema = v.object({
+	hits: v.array(
+		v.object({
+			id: PageIdSchema,
+			title: v.string(),
+			updated: TimeSchema,
+			lines: v.array(v.string()),
+		}),
+	),
+	more: v.boolean(),
+});
+
+/** サーバーから届いた、本文を探した結果を検査する。 */
+export const parseSearchResults = (input: unknown): Result<SearchResults, "invalid"> =>
+	parse(SearchResultsSchema, input);
 
 const PageTitlesSchema = v.pipe(
 	v.object({ titles: v.array(v.string()) }),
