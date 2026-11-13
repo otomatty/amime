@@ -113,6 +113,9 @@ const REWRITE_RETRY_MS = 30_000;
 export const RENAME_MEMORY_MS = 60 * 60 * 1000;
 
 /** まだ済んでいない、リンクの書き換え。page_id のページの中の、old_lc へのリンクを、new_title へのリンクにする。 */
+/** 本文を探して見つかったページ(本文は含めない)。 */
+type FoundPage = { id: string; title: string; updated: number };
+
 type RewriteRow = {
 	seq: number;
 	page_id: string;
@@ -340,37 +343,59 @@ export class ProjectDO extends DurableObject {
 		const terms = textTerms(query);
 		const count = Math.min(Math.max(limit, 0), MAX_HITS);
 		if (terms.length === 0) return { hits: [], more: false };
-		// 1つの問い合わせに書ける条件の数には、限りがある。語がとても多いときは、残りの語を、取り出したあとで確かめる。
-		const inSql = terms.slice(0, MAX_SQL_TERMS);
-		const rest = terms.slice(MAX_SQL_TERMS);
-		const inText = inSql.map(() => "instr(t.folded, ?) > 0").join(" AND ");
-		const inTitle = inSql.map(() => `instr(${FOLDED_TITLE}, ?) > 0`).join(" AND ");
-		// ほかにも合うページがあるかを知るために、1件多く取り出す。
-		const rows = this.ctx.storage.sql
-			.exec<{ id: string; title: string; updated: number; body: string }>(
-				`SELECT p.id, p.title, p.updated, t.body FROM texts t JOIN pages p ON p.id = t.id
-				WHERE p.version > 0 AND ${inText}
-				ORDER BY (${inTitle}) DESC, p.updated DESC, p.title_lc LIMIT ?`,
-				...inSql,
-				...inSql,
-				count + 1,
-			)
-			.toArray();
-		const matched =
-			rest.length === 0
-				? rows
-				: rows.filter(({ body }) => {
-						const folded = foldText(body);
-						return rest.every((term) => folded.includes(term));
-					});
-		const hits = matched.slice(0, count).map(({ id, title, updated, body }) => ({
+		// ほかにも合うページがあるかを知るために、1件多く探す。
+		const found = this.#findText(terms, count + 1);
+		const hits = found.slice(0, count).map(({ id, title, updated }) => ({
 			id: id as PageId,
 			title,
 			updated,
 			// 1行目は名前なので、添える行には含めない。
-			lines: matchingLines(plainLines(body.split("\n")).slice(1), terms, MAX_HIT_LINES),
+			lines: matchingLines(
+				plainLines(this.#text(id, "body").split("\n")).slice(1),
+				terms,
+				MAX_HIT_LINES,
+			),
 		}));
-		return { hits, more: rows.length > count };
+		return { hits, more: found.length > count };
+	}
+
+	/**
+	 * すべての語を本文に含む、保存されたページを、並べる順に、max 件まで返す。
+	 * 1つの問い合わせに書ける条件の数には、限りがある。語がとても多いときは、
+	 * 書けるだけの語で絞った候補を、残りの語で1ページずつ確かめる(件数は、確かめたあとで数える)。
+	 */
+	#findText(terms: readonly string[], max: number): FoundPage[] {
+		const inSql = terms.slice(0, MAX_SQL_TERMS);
+		const rest = terms.slice(MAX_SQL_TERMS);
+		const inText = inSql.map(() => "instr(t.folded, ?) > 0").join(" AND ");
+		const inTitle = inSql.map(() => `instr(${FOLDED_TITLE}, ?) > 0`).join(" AND ");
+		// 残りの語がなければ、件数は問い合わせで絞れる。あれば、候補をすべて取り出す(本文は、ここでは取り出さない)。
+		const limited = rest.length === 0;
+		const candidates = this.ctx.storage.sql
+			.exec<FoundPage>(
+				`SELECT p.id, p.title, p.updated FROM texts t JOIN pages p ON p.id = t.id
+				WHERE p.version > 0 AND ${inText}
+				ORDER BY (${inTitle}) DESC, p.updated DESC, p.title_lc${limited ? " LIMIT ?" : ""}`,
+				...inSql,
+				...inSql,
+				...(limited ? [max] : []),
+			)
+			.toArray();
+		if (limited) return candidates;
+		const found: FoundPage[] = [];
+		for (const candidate of candidates) {
+			if (found.length >= max) break;
+			const folded = this.#text(candidate.id, "folded");
+			if (rest.every((term) => folded.includes(term))) found.push(candidate);
+		}
+		return found;
+	}
+
+	/** 台帳に写した、ページの本文(body)か、照らし合わせるための形(folded)。 */
+	#text(id: string, column: "body" | "folded"): string {
+		return this.ctx.storage.sql
+			.exec<{ text: string }>(`SELECT ${column} AS text FROM texts WHERE id = ?`, id)
+			.one().text;
 	}
 
 	/** いちばん新しい、リンクの書き換えの番号。まだ1つもなければ 0。 */

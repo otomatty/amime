@@ -1002,6 +1002,30 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			);
 		});
 
+		it("語がとても多いときも、件数と「ほかにもある」は、すべての語を含むページで数える", async () => {
+			const stub = project("search-many-terms-limit");
+			const words = Array.from({ length: 41 }, (_value, index) => `w${index}x`);
+			const all = words.join(" ");
+			const withoutLast = words.slice(0, 40).join(" ");
+			// 最後の語がないページのほうが、新しい(先に並ぶ)。
+			await write(stub, [
+				["すべてある 1", all],
+				["すべてある 2", all],
+				["最後の語がない 1", withoutLast],
+				["最後の語がない 2", withoutLast],
+				["最後の語がない 3", withoutLast],
+			]);
+
+			const one = await stub.search(all, 1);
+			expect(titles(one)).toEqual(["すべてある 2"]);
+			expect(one.more).toBe(true);
+			const two = await stub.search(all, 2);
+			expect(titles(two)).toEqual(["すべてある 2", "すべてある 1"]);
+			expect(two.more).toBe(false);
+			// 合うページがなければ、「ほかにもある」とは言わない。
+			expect(await stub.search(`${all} ない語`, 1)).toEqual({ hits: [], more: false });
+		});
+
 		it("語がなければ、何も返さない", async () => {
 			const stub = project("search-empty");
 			await write(stub, [["メモ", "牛乳"]]);

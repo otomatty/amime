@@ -40,7 +40,7 @@ function Playground() {
 /**
  * トップ。ページの一覧を表示する(ADR-0025)。
  * URLに ?q= で語が付いていれば、本文を探した結果を表示する(ADR-0031)。
- * ページのAPIが無効な環境と、URLに ?playground を付けたときは、試し書きのページを表示する。
+ * ページのAPIが無効な環境(?q= が付いていても)と、URLに ?playground を付けたときは、試し書きのページを表示する。
  */
 function Home() {
 	const playground = (
@@ -51,7 +51,7 @@ function Home() {
 	const params = new URLSearchParams(window.location.search);
 	if (params.has("playground")) return playground;
 	const query = params.get("q")?.trim() ?? "";
-	if (query !== "") return <SearchResults query={query} />;
+	if (query !== "") return <SearchResults query={query} whenDisabled={playground} />;
 	return <PageList whenDisabled={playground} />;
 }
 

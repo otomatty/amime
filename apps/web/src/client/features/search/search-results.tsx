@@ -1,8 +1,9 @@
 import { highlight, textTerms } from "@amime/shared";
 import type { SearchResults as Results } from "@amime/sync";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { pageHref } from "../editor/links.ts";
 import { searchPages } from "../page/api.ts";
+import { PageApiError } from "../page/page-api-error.ts";
 import "./search-results.css";
 
 const timeFormat = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" });
@@ -10,7 +11,15 @@ const timeFormat = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeS
 type Loaded =
 	| { readonly status: "loading" }
 	| { readonly status: "ready"; readonly results: Results }
-	| { readonly status: "error" };
+	| { readonly status: "error" }
+	| { readonly status: "disabled" };
+
+type SearchResultsProps = {
+	/** 探す語(空ではない)。 */
+	readonly query: string;
+	/** ページのAPIが無効な環境(公開環境)で、代わりに表示するもの。 */
+	readonly whenDisabled?: ReactNode;
+};
 
 /** 語に合うところに印を付けた文字列。 */
 function Marked({ text, terms }: { readonly text: string; readonly terms: readonly string[] }) {
@@ -29,7 +38,7 @@ function Marked({ text, terms }: { readonly text: string; readonly terms: readon
  * 本文を探した結果(ADR-0031)。見つかったページを、語を含む行と一緒に並べる。
  * 名前に語があるページが先、あとは更新が新しい順(並べるのはサーバー)。
  */
-export function SearchResults({ query }: { readonly query: string }) {
+export function SearchResults({ query, whenDisabled = null }: SearchResultsProps) {
 	const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
 	const [attempt, setAttempt] = useState(0);
 	const terms = useMemo(() => textTerms(query), [query]);
@@ -42,8 +51,10 @@ export function SearchResults({ query }: { readonly query: string }) {
 			(results) => {
 				if (!cancelled) setLoaded({ status: "ready", results });
 			},
-			() => {
-				if (!cancelled) setLoaded({ status: "error" });
+			(error: unknown) => {
+				if (cancelled) return;
+				const disabled = error instanceof PageApiError && error.kind === "disabled";
+				setLoaded({ status: disabled ? "disabled" : "error" });
 			},
 		);
 		return () => {
@@ -51,6 +62,7 @@ export function SearchResults({ query }: { readonly query: string }) {
 		};
 	}, [query, attempt]);
 
+	if (loaded.status === "disabled") return whenDisabled;
 	return (
 		<section className="search-results" aria-labelledby="search-results-title">
 			<h2 className="search-results-title" id="search-results-title">

@@ -102,6 +102,16 @@ describe("SearchResults(本文を探した結果)", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
 	});
 
+	it("ページのAPIが無効な環境では、代わりの内容を表示する(探せなかった、とは言わない)", async () => {
+		stubSearch(() => json({ error: "page-api-disabled" }, 403));
+
+		render(<SearchResults query="牛乳" whenDisabled={<p>代わりの内容</p>} />);
+
+		await waitFor(() => expect(screen.getByText("代わりの内容")).toBeDefined());
+		expect(screen.queryByText(/探せませんでした/)).toBeNull();
+		expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
+	});
+
 	it("探す語が変わったら、探し直す。あとから届いた前の結果は、使わない", async () => {
 		let releaseOld: (response: Response) => void = () => {};
 		stubSearch((query) =>
