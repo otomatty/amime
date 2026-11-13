@@ -80,10 +80,39 @@ export function rankTitles(query: string, titles: readonly string[], limit: numb
 }
 
 /**
+ * SQL の LIKE の型の、長さの上限(バイト)。Cloudflare の SQLite(D1、Durable Objects)の制限。
+ * 超えると、問い合わせが失敗する。
+ */
+export const MAX_LIKE_PATTERN_BYTES = 50;
+
+/** 文字(コードポイント1つ)の、UTF-8 でのバイト数。 */
+function utf8Bytes(character: string): number {
+	const code = Number(character.codePointAt(0));
+	return [0x80, 0x800, 0x10000].filter((limit) => code >= limit).length + 1;
+}
+
+/**
  * 語の文字が順に出てくる文字列を探す、SQL の LIKE の型。エスケープの文字は `\`。
  * 候補を絞るために使う(合う順は、scoreTitle で決める)。
+ * 型の長さには上限があるので、長い語は、いくつかの型に分ける。すべての型に合うものを、候補にする
+ * (分けた型どうしの順は確かめないので、合わないものも候補に混ざる。scoreTitle が取り除く)。
  */
-export function likePattern(term: string): string {
-	const characters = Array.from(term, (character) => character.replace(/[\\%_]/, "\\$&"));
-	return `%${characters.join("%")}%`;
+export function likePatterns(term: string): string[] {
+	const patterns: string[] = [];
+	// 型は「%」で始まり、文字ごとに「文字%」が続く。
+	let pattern = "%";
+	let bytes = 1;
+	for (const character of term) {
+		const escaped = `${character.replace(/[\\%_]/, "\\$&")}%`;
+		// エスケープの文字と「%」は、1バイトずつ。
+		const added = utf8Bytes(character) + escaped.length - character.length;
+		if (bytes + added > MAX_LIKE_PATTERN_BYTES) {
+			patterns.push(pattern);
+			pattern = "%";
+			bytes = 1;
+		}
+		pattern += escaped;
+		bytes += added;
+	}
+	return pattern === "%" ? patterns : [...patterns, pattern];
 }

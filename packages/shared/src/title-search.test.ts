@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-	likePattern,
+	likePatterns,
+	MAX_LIKE_PATTERN_BYTES,
 	MAX_SEARCH_TERMS,
 	rankTitles,
 	scoreTitle,
@@ -95,16 +96,52 @@ describe("rankTitles(名前を、合う順に並べる)", () => {
 	});
 });
 
-describe("likePattern(文字が順に出てくる名前を探す、LIKE の型)", () => {
+describe("likePatterns(文字が順に出てくる名前を探す、LIKE の型)", () => {
+	/** UTF-8 でのバイト数。 */
+	const bytes = (text: string) => encodeURIComponent(text).replace(/%[0-9A-F]{2}/g, "x").length;
+
 	it("語の文字のあいだに、何文字あってもよい型にする", () => {
-		expect(likePattern("買物")).toBe("%買%物%");
+		expect(likePatterns("買物")).toEqual(["%買%物%"]);
 	});
 
 	it("LIKE で特別な意味を持つ文字は、そのままの文字として探す", () => {
-		expect(likePattern("5%_\\")).toBe("%5%\\%%\\_%\\\\%");
+		expect(likePatterns("5%_\\")).toEqual(["%5%\\%%\\_%\\\\%"]);
 	});
 
 	it("2つの符号単位で表す文字を、途中で切らない", () => {
-		expect(likePattern("🍎a")).toBe("%🍎%a%");
+		expect(likePatterns("🍎a")).toEqual(["%🍎%a%"]);
+	});
+
+	it("型の長さには上限がある(SQLite の制限)。長い語は、上限に収まる型に分ける", () => {
+		const patterns = likePatterns("あ".repeat(30));
+
+		expect(patterns.length).toBeGreaterThan(1);
+		expect(patterns.every((pattern) => bytes(pattern) <= MAX_LIKE_PATTERN_BYTES)).toBe(true);
+		// 分けても、語のすべての文字を、順に含む。
+		expect(patterns.join("").replaceAll("%", "")).toBe("あ".repeat(30));
+	});
+
+	it.each([
+		["1バイトの文字", "a", "a", 24],
+		["2バイトの文字", "é", "é", 16],
+		["3バイトの文字", "あ", "あ", 12],
+		["4バイトの文字", "🍎", "🍎", 9],
+		["エスケープする文字", "%", "\\%", 16],
+	])("%sは、上限に収まる数までを、1つの型に入れる", (_name, character, written, count) => {
+		const [first, ...rest] = likePatterns(character.repeat(count + 1));
+
+		expect(first).toBe(`%${`${written}%`.repeat(count)}`);
+		expect(bytes(first ?? "")).toBeLessThanOrEqual(MAX_LIKE_PATTERN_BYTES);
+		expect(rest).toEqual([`%${written}%`]);
+	});
+
+	it("上限ちょうどまでは、1つの型にする", () => {
+		// 「%a%a…%」は、文字数の2倍 + 1 バイト。24文字で 49 バイト、25文字で 51 バイト。
+		expect(likePatterns("a".repeat(24))).toHaveLength(1);
+		expect(likePatterns("a".repeat(25))).toHaveLength(2);
+	});
+
+	it("語が空なら、型はない", () => {
+		expect(likePatterns("")).toEqual([]);
 	});
 });

@@ -801,6 +801,23 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			expect(await stub.titles("100%")).toEqual(["100% 果汁"]);
 		});
 
+		it("長い語でも探せる(LIKE の型の長さの上限を超えない)", async () => {
+			const stub = project("titles-long");
+			const ascii = `e2e-${"0123456789abcdef".repeat(2)}`;
+			const japanese = "とても長い名前のページをここに書いておきますのでさがしてください";
+			await add(stub, ascii, japanese, "関係ないページ");
+
+			expect(await stub.titles(ascii)).toEqual([ascii]);
+			expect(await stub.titles(japanese)).toEqual([japanese]);
+			// 文字が飛び飛びでも合う。型を分けても、文字の順は確かめる。
+			expect(await stub.titles("とても長い名前ページここ書いておきますさがしてください")).toEqual([
+				japanese,
+			]);
+			expect(
+				await stub.titles("くださいさがしてとても長い名前のページをここに書いておきますので"),
+			).toEqual([]);
+		});
+
 		it("入力が空なら、更新が新しい順に返す", async () => {
 			const stub = project("titles-recent");
 			await add(stub, "古い", "中くらい", "新しい");

@@ -1,7 +1,7 @@
 import { DurableObject, exports } from "cloudflare:workers";
 import type { PageSummary } from "@amime/parser";
 import {
-	likePattern,
+	likePatterns,
 	MAX_TITLE_LENGTH,
 	rankTitles,
 	searchTerms,
@@ -471,12 +471,13 @@ export class ProjectDO extends DurableObject {
 		const terms = searchTerms(query);
 		// 候補を、SQL で絞る(語の文字が、順に出てくる名前)。合う順は、そのあとで決める。
 		// 名前は、空白をアンダースコアにして保存してある。語は、空白もアンダースコアも含まない。
-		const conditions = terms.map(() => " AND title_lc LIKE ? ESCAPE '\\'").join("");
+		const patterns = terms.flatMap(likePatterns);
+		const conditions = patterns.map(() => " AND title_lc LIKE ? ESCAPE '\\'").join("");
 		const candidates = this.ctx.storage.sql
 			.exec<{ title: string }>(
 				`SELECT title FROM pages WHERE version > 0${conditions}
 				ORDER BY updated DESC, title_lc LIMIT ${MAX_TITLE_CANDIDATES}`,
-				...terms.map(likePattern),
+				...patterns,
 			)
 			.toArray()
 			.map((row) => row.title);
