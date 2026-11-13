@@ -168,6 +168,18 @@ describe("parsePendingRecord", () => {
 		expect(parsePendingRecord(JSON.stringify(record))).toEqual({ ok: true, value: record });
 	});
 
+	it("変更を残した端末の識別子(origin)を持てる", () => {
+		const record = { savedAt: 1, entries: [{ ...entry, origin: "tab-1" }] };
+
+		expect(parsePendingRecord(JSON.stringify(record))).toEqual({ ok: true, value: record });
+	});
+
+	it("変更を残した端末の識別子に使えない文字があれば、受け付けない", () => {
+		const record = { savedAt: 1, entries: [{ ...entry, origin: "a b" }] };
+
+		expect(parsePendingRecord(JSON.stringify(record))).toEqual({ ok: false, error: "invalid" });
+	});
+
 	it("送れない長さの本文も受け付ける(復元して、直してもらうため)", () => {
 		const long = "a".repeat(MAX_LINE_LENGTH + 1);
 		const changes = [{ type: "update", id: "a", text: long, base: `${long}b` }];

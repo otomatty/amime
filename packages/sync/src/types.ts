@@ -97,6 +97,11 @@ export type ServerMessage =
 
 /** まだサーバーに入っていない(かもしれない)自分の変更。 */
 export type PendingEntry = {
+	/**
+	 * この変更を残した端末(タブ)。端末内に残すときに添える。
+	 * 復元のときに、内容が同じ別の変更と区別するために使う(ADR-0022)。
+	 */
+	readonly origin?: ClientId | undefined;
 	/** 送信して、応答を受け取っていないコミット。同じIDで送り直せば、二重に適用されない。 */
 	readonly inflight: Commit | null;
 	/** まだ送っていない変更。送信中のコミットが入ったあとの文書に対する変更。 */

@@ -1,6 +1,7 @@
 import {
 	applyChanges,
 	type Change,
+	type ClientId,
 	type Commit,
 	type CommitId,
 	type CommitResult,
@@ -230,6 +231,46 @@ describe("restorePage", () => {
 			});
 			// 重複として扱われ、何も入らない(このサーバーの代わりには、前の復元で入った行を入れていない)。
 			expect(second.server().lines).toEqual([line("a", "A"), line("b", "B")]);
+		});
+
+		it("内容が同じでも、残した端末が違えば、別の変更として入れる", async () => {
+			// 2つのタブが、それぞれ同じ行を足して消した…のではなく、たまたま同じ内容の変更を残した。
+			const changes = [update("a", "A!", "A")];
+			const { api, pending, sentIds } = setup([
+				{ origin: "tab-1" as ClientId, inflight: null, changes },
+				{ origin: "tab-2" as ClientId, inflight: null, changes },
+				{ inflight: null, changes: [] },
+			]);
+
+			await restorePage(api, pending);
+
+			const [first, second] = sentIds();
+			expect(first).toMatch(/^r-[0-9a-f]{40}-0$/);
+			expect(second).toMatch(/^r-[0-9a-f]{40}-0$/);
+			expect(second).not.toBe(first);
+		});
+
+		it("記録のコミットがサーバーに断られたら、その記録の残りの変更は送らずに、順のまま画面に載せる", async () => {
+			// 断られたコミットが足した行 x を、同じ記録のあとの変更が書き換えている。
+			// あとの変更だけを送ると、サーバーには行 x がないので効かず、書き換えが失われる。
+			const { api, pending, server, sentIds } = setup([
+				{
+					inflight: commit("c1", insert("x", "元の本文", "b"), update("a", "長すぎる", "A")),
+					changes: [update("x", "新しい本文", "元の本文")],
+				},
+				{ inflight: commit("c2", update("b", "B2", "B")), changes: [] },
+			]);
+			api.commit.mockRejectedValueOnce(new PageApiError("rejected"));
+
+			const result = await restorePage(api, pending);
+
+			expect(sentIds()).toEqual(["c1", "c2"]);
+			expect(server().lines).toEqual([line("a", "A"), line("b", "B2")]);
+			expect(result.restored).toEqual([
+				line("a", "長すぎる"),
+				line("b", "B2"),
+				line("x", "新しい本文"),
+			]);
 		});
 
 		it("まだ送っていなかった変更が1つのコミットに収まらなければ、分けて入れる", async () => {

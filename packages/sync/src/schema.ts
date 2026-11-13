@@ -84,6 +84,7 @@ const PendingRecordSchema = v.object({
 	savedAt: v.pipe(v.number(), v.minValue(0)),
 	entries: v.array(
 		v.object({
+			origin: v.optional(ClientIdSchema),
 			inflight: v.nullable(v.object({ id: CommitIdSchema, changes: StoredChangesSchema })),
 			changes: StoredChangesSchema,
 		}),

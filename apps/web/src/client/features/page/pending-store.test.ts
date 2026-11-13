@@ -60,7 +60,15 @@ describe("createPendingStore", () => {
 	it("未送信の変更を残すと、別のタブ(次に開いたとき)から引き取れる", async () => {
 		expect(storeFor("old").save(unsent(update("A2")))).toBe(true);
 
-		expect(await storeFor("new").adopt()).toEqual([unsent(update("A2"))]);
+		expect(await storeFor("new").adopt()).toMatchObject([unsent(update("A2"))]);
+	});
+
+	it("残した変更には、残した端末(タブ)の識別子を添える。引き取っても、そのまま残る", async () => {
+		// 復元のときに、内容が同じ別の変更と区別するために使う(ADR-0022)。
+		storeFor("old").save(unsent(update("A2")));
+
+		expect(await storeFor("new").adopt()).toEqual([{ ...unsent(update("A2")), origin: "old" }]);
+		expect(await storeFor("third").adopt()).toEqual([{ ...unsent(update("A2")), origin: "old" }]);
 	});
 
 	it("引き取った変更は、引き取った側の記録になる(引き取った直後に閉じても失われない)", async () => {
@@ -69,7 +77,7 @@ describe("createPendingStore", () => {
 		await storeFor("new").adopt();
 
 		expect(window.localStorage).toHaveLength(1);
-		expect(await storeFor("third").adopt()).toEqual([unsent(update("A2"))]);
+		expect(await storeFor("third").adopt()).toMatchObject([unsent(update("A2"))]);
 		expect(window.localStorage).toHaveLength(1);
 	});
 
@@ -87,7 +95,7 @@ describe("createPendingStore", () => {
 		storeFor("later", { now: 2000 }).save(unsent(update("あと")));
 		storeFor("earlier", { now: 1000 }).save(unsent(update("さき")));
 
-		expect(await storeFor("new", { now: 3000 }).adopt()).toEqual([
+		expect(await storeFor("new", { now: 3000 }).adopt()).toMatchObject([
 			unsent(update("さき")),
 			unsent(update("あと")),
 		]);
@@ -98,13 +106,17 @@ describe("createPendingStore", () => {
 		storeFor("other", { page: "別のページ" }).save(unsent(update("別")));
 
 		expect(await storeFor("me").adopt()).toEqual([]);
-		expect(await storeFor("x", { page: "別のページ" }).adopt()).toEqual([unsent(update("別"))]);
+		expect(await storeFor("x", { page: "別のページ" }).adopt()).toMatchObject([
+			unsent(update("別")),
+		]);
 	});
 
 	it("空白と大文字小文字の違いは、同じページとして扱う(サーバーと同じ)", async () => {
 		storeFor("old", { page: "My Page" }).save(unsent(update("A2")));
 
-		expect(await storeFor("new", { page: "my_page" }).adopt()).toEqual([unsent(update("A2"))]);
+		expect(await storeFor("new", { page: "my_page" }).adopt()).toMatchObject([
+			unsent(update("A2")),
+		]);
 	});
 
 	it("古すぎる記録と、読めない記録は、引き取らずに消す", async () => {
@@ -118,7 +130,7 @@ describe("createPendingStore", () => {
 	it("期限ちょうどの記録は引き取る", async () => {
 		storeFor("old", { now: 0 }).save(unsent(update("A2")));
 
-		expect(await storeFor("new", { now: PENDING_MAX_AGE_MS }).adopt()).toEqual([
+		expect(await storeFor("new", { now: PENDING_MAX_AGE_MS }).adopt()).toMatchObject([
 			unsent(update("A2")),
 		]);
 		expect(PENDING_MAX_AGE_MS).toBe(30 * DAY);
@@ -154,8 +166,10 @@ describe("createPendingStore", () => {
 			},
 		});
 
-		expect(await storeFor("new", { storage: readOnly }).adopt()).toEqual([unsent(update("A2"))]);
-		expect(await storeFor("third").adopt()).toEqual([unsent(update("A2"))]);
+		expect(await storeFor("new", { storage: readOnly }).adopt()).toMatchObject([
+			unsent(update("A2")),
+		]);
+		expect(await storeFor("third").adopt()).toMatchObject([unsent(update("A2"))]);
 	});
 
 	it("移せなかった元の記録は、未送信の変更がなくなったときに消す(次に開いたときに、古い変更を載せ直さない)", async () => {
@@ -199,7 +213,9 @@ describe("createPendingStore", () => {
 			},
 		});
 
-		expect(await storeFor("new", { storage: racing }).adopt()).toEqual([unsent(update("A2"))]);
+		expect(await storeFor("new", { storage: racing }).adopt()).toMatchObject([
+			unsent(update("A2")),
+		]);
 
 		expect(JSON.parse(String(window.localStorage.getItem(key))).entries).toEqual([
 			unsent(update("A3")),
@@ -214,7 +230,10 @@ describe("createPendingStore", () => {
 		// 内容は前と同じでも、記録がなくなっているので書き直す。
 		store.save(unsent(update("A2")));
 
-		expect(await storeFor("third").adopt()).toEqual([unsent(update("A2")), unsent(update("A2"))]);
+		expect(await storeFor("third").adopt()).toMatchObject([
+			unsent(update("A2")),
+			unsent(update("A2")),
+		]);
 	});
 
 	it("送信中のコミットも、IDと一緒に残す。まだ送っていない変更がなくても、記録は消さない", async () => {
@@ -223,7 +242,7 @@ describe("createPendingStore", () => {
 
 		store.save({ inflight, changes: [] });
 
-		expect(await storeFor("new").adopt()).toEqual([{ inflight, changes: [] }]);
+		expect(await storeFor("new").adopt()).toMatchObject([{ inflight, changes: [] }]);
 	});
 
 	describe("開いているタブの記録", () => {
@@ -239,7 +258,7 @@ describe("createPendingStore", () => {
 
 			close();
 			await Promise.resolve();
-			expect(await storeFor("third", { locks }).adopt()).toEqual([unsent(update("A2"))]);
+			expect(await storeFor("third", { locks }).adopt()).toMatchObject([unsent(update("A2"))]);
 		});
 
 		it("閉じたタブの記録を、2つのタブが同時に引き取ろうとしても、片方だけが引き取る", async () => {
@@ -254,7 +273,7 @@ describe("createPendingStore", () => {
 
 			const adopted = await Promise.all([second.adopt(), third.adopt()]);
 
-			expect(adopted.flat()).toEqual([unsent(update("A2"))]);
+			expect(adopted.flat()).toMatchObject([unsent(update("A2"))]);
 			expect(window.localStorage).toHaveLength(1);
 		});
 
@@ -274,7 +293,7 @@ describe("createPendingStore", () => {
 				},
 			});
 			const restoring = storeFor("restoring", { storage: flaky, locks });
-			expect(await restoring.adopt()).toEqual([unsent(update("A2"))]);
+			expect(await restoring.adopt()).toMatchObject([unsent(update("A2"))]);
 
 			// 復元したタブが送り終えるまで、元の記録は残っているが、他のタブは引き取れない。
 			expect(await storeFor("third", { locks }).adopt()).toEqual([]);
@@ -299,7 +318,7 @@ describe("createPendingStore", () => {
 			await Promise.resolve();
 
 			// 引き取った記録は、元の時刻のまま。新しいほうより先に載る。
-			expect(await storeFor("later", { now: 4000, locks }).adopt()).toEqual([
+			expect(await storeFor("later", { now: 4000, locks }).adopt()).toMatchObject([
 				unsent(update("古い")),
 				unsent(update("新しい")),
 			]);
@@ -312,7 +331,7 @@ describe("createPendingStore", () => {
 			const first = await store.adopt();
 
 			expect(await store.adopt()).toBe(first);
-			expect(first).toEqual([unsent(update("A2"))]);
+			expect(first).toMatchObject([unsent(update("A2"))]);
 		});
 
 		it("ロックが使えない環境では、hold は何もしない", () => {

@@ -41,6 +41,7 @@ async function deliver(api: Pick<PageApi, "commit">, commit: Commit): Promise<Ou
  * 記録が残していた変更を、コミットの列にする。
  * 送信中だったコミットは、そのまま(同じIDで)。まだ送っていなかった変更は、記録の内容から決まるIDを付けて、
  * コミットに収まる大きさに分ける。復元を途中からやり直しても、同じコミットとして送り直せる。
+ * 記録には、残した端末の識別子が入っている。内容が同じ変更を、別の端末が残していても、別のIDになる。
  */
 async function commitsOf(entry: PendingEntry, includeUnsent: boolean): Promise<Commit[]> {
 	const commits = entry.inflight === null ? [] : [entry.inflight];
@@ -63,6 +64,7 @@ async function commitsOf(entry: PendingEntry, includeUnsent: boolean): Promise<C
  * 4. 最後の記録のまだ送っていなかった変更を、読み込んだページに載せる。画面に出てから、ふつうの編集と同じように保存される。
  *
  * サーバーに断られた変更(1行が長すぎる、など)は、捨てずに 4 で画面に載せる。画面に残り、送れないことが表示される。
+ * 同じ記録の、それよりあとの変更も、送らずに画面に載せる。
  */
 export async function restorePage(
 	api: Pick<PageApi, "load" | "commit">,
@@ -74,9 +76,13 @@ export async function restorePage(
 	const rejected: (readonly Change[])[] = [];
 	let applied = false;
 	for (const [index, entry] of entries.entries()) {
+		// 記録のコミットが断られたら、その記録の残りは送らない。断られた変更に続く変更かもしれない
+		// (断られたコミットが足した行を、書き換えている)。順のまま、画面に載せる。
+		let held = false;
 		for (const commit of await commitsOf(entry, index < entries.length - 1)) {
-			const outcome = await deliver(api, commit);
+			const outcome: Outcome = held ? "rejected" : await deliver(api, commit);
 			if (outcome === "rejected") rejected.push(commit.changes);
+			held = held || outcome === "rejected";
 			applied = applied || outcome === "applied";
 		}
 	}
