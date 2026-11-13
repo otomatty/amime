@@ -283,9 +283,11 @@ export function Editor({
 
 	/** 書いている途中のリンクを、選んだ名前で補完する。 */
 	const pickTitle = (title: string) => {
-		if (completion !== null) {
-			run((current) => completeLink(current, completion.link, title, cursorRole));
-		}
+		if (completion === null) return;
+		run((current) => completeLink(current, completion.link, title, cursorRole));
+		// タグは、補完したあともカーソルがタグの中に残る。候補を出したままにしない
+		// (出したままだと、次の Enter が、また補完になる)。
+		dismiss();
 	};
 
 	/**

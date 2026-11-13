@@ -900,6 +900,37 @@ describe("Editor", () => {
 			expect(caret()).toEqual({ line: 1, column: 3 });
 		});
 
+		it("タグを補完したら、カーソルがタグの中に残っていても、候補を閉じる(探し直して、また出さない)", async () => {
+			const titles = vi.fn(search);
+			render(<Editor initialLines={["題", ""]} completeTitles={titles} />);
+			focusEditor();
+			press("ArrowDown");
+			type("#旅");
+			await waitFor(() => expect(options()).toEqual(["旅行"]));
+
+			press("ArrowDown");
+			press("Enter");
+			// 補完したあとの名前で探し直すのを、待つ。
+			await waitFor(() => expect(titles).toHaveBeenCalledWith("旅行"));
+			await act(async () => {});
+
+			expect(lines()).toEqual(["題", "#旅行"]);
+			expect(options()).toEqual([]);
+		});
+
+		it("タグが、もう候補の名前と同じでも、補完したら候補を閉じる。次の Enter は、改行する", async () => {
+			await typeOnBody("#旅行");
+			await waitFor(() => expect(options()).toEqual(["旅行"]));
+
+			press("ArrowDown");
+			press("Enter");
+
+			expect(lines()).toEqual(["題", "#旅行"]);
+			expect(options()).toEqual([]);
+			press("Enter");
+			expect(lines()).toEqual(["題", "#旅行", ""]);
+		});
+
 		it("Esc で候補を閉じる。そのあとの矢印キーは、カーソルを動かす。続けて Tab を押しても、編集欄から抜けない", async () => {
 			await typeOnBody("[買い");
 			await waitFor(() => expect(options()).toHaveLength(2));
