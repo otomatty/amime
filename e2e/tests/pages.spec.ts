@@ -30,7 +30,8 @@ async function createPage(page: Page, name: string, ...body: string[]) {
  */
 async function showAllCards(page: Page) {
 	const more = page.getByRole("button", { name: "もっと見る" });
-	await cards(page).first().waitFor();
+	// 一覧を読み込み終えるのを待つ。ページが1つもないときは、カードの代わりに案内が出る。
+	await cards(page).first().or(page.getByText("まだページがありません")).waitFor();
 	while (await more.isVisible()) {
 		const count = await cards(page).count();
 		await more.click();
