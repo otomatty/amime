@@ -95,7 +95,7 @@ const WS_POLICY_VIOLATION = 1008;
 const VIEWER_TAG = "access:read";
 /** メンバーの接続に付けるタグの先頭。あとに、利用者のIDが続く。 */
 const USER_TAG = "user:";
-/** 接続を受け付けた時刻を入れるタグの先頭。あとに、時刻(ミリ秒)が続く。 */
+/** その接続の権限を確かめた時刻を入れるタグの先頭。あとに、時刻(ミリ秒)が続く。 */
 const ACCEPTED_TAG = "at:";
 /** ログインの状態が切れる時刻を入れるタグの先頭。あとに、時刻(ミリ秒)が続く。 */
 const EXPIRES_TAG = "exp:";
@@ -160,9 +160,11 @@ export class PageDO extends DurableObject {
 		const client = query.get("client") ?? "";
 		// 読むだけの人(公開のプロジェクトを見ている、メンバーでない人)の接続か。Worker が付けた印で決まる。
 		const viewer = query.get("access") === "read";
-		// だれの接続か(メンバーのID)と、いつ受け付けたか。権限がなくなったあとで、接続を閉じるために使う。
+		// だれの接続か(メンバーのID)と、いつ権限を確かめたか。権限がなくなったあとで、接続を閉じるために使う。
 		const owner = viewer ? VIEWER_TAG : `${USER_TAG}${query.get("user") ?? ""}`;
-		const tags = [client, `${ACCEPTED_TAG}${Date.now()}`, owner];
+		// 時刻は、Worker が、権限を確かめ始めたときのもの(なければ、いま)。
+		const authorizedAt = Number(query.get("at") ?? "") || Date.now();
+		const tags = [client, `${ACCEPTED_TAG}${authorizedAt}`, owner];
 		// ログインの状態が切れる時刻(ログインしていない人の接続には、ない)。
 		const expires = Number(query.get("expires") ?? "");
 		if (expires > 0) tags.push(`${EXPIRES_TAG}${expires}`);

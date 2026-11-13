@@ -467,6 +467,56 @@ describe("権限がなくなった人の接続", () => {
 		kept.socket.close();
 	});
 
+	it("権限を確かめたあと、接続を受け付けるまでのあいだに外された人の接続も、閉じる(確かめる前の時刻で、比べる)", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const start = Date.parse("2026-06-01T00:00:00Z");
+		vi.setSystemTime(start);
+		const { path, admin } = await project();
+		const leaving = await member(path, admin);
+		const opened = await call(`${path}/pages/by-title/${encodeURIComponent("会議")}`, {
+			as: admin,
+		});
+		const page = (await opened.json()) as { id: string };
+		// 権限を確かめる問い合わせから、接続を受け付けるまでに、5秒かかる。
+		let slowed = false;
+		const slow = {
+			...env,
+			DB: {
+				exec: (query: string) => env.DB.exec(query),
+				batch: (statements: D1PreparedStatement[]) => env.DB.batch(statements),
+				prepare(query: string) {
+					if (!slowed && query.includes("FROM projects p LEFT JOIN members")) {
+						slowed = true;
+						vi.setSystemTime(start + 5_000);
+					}
+					return env.DB.prepare(query);
+				},
+			} as D1Database,
+		};
+		const response = await app.request(
+			`${ORIGIN}${path}/pages/${page.id}/socket?client=leaving`,
+			{ headers: { Upgrade: "websocket", cookie: leaving.cookie } },
+			slow,
+		);
+		const closes: number[] = [];
+		const received: { type: string }[] = [];
+		response.webSocket?.accept();
+		response.webSocket?.addEventListener("close", ({ code }) => closes.push(code));
+		response.webSocket?.addEventListener("message", ({ data }) =>
+			received.push(JSON.parse(String(data))),
+		);
+		expect(slowed).toBe(true);
+
+		// その5秒のあいだ(1秒後)に、外されていた。
+		vi.setSystemTime(start + 1_000);
+		expect((await send("DELETE", `${path}/members/${leaving.id}`, admin)).status).toBe(204);
+		vi.setSystemTime(start + 6_000);
+		expect((await commit(path, page.id, admin)).status).toBe(200);
+
+		await vi.waitFor(() => expect(closes).toEqual([4001]));
+		expect(commits(received)).toEqual([]);
+	});
+
 	it("同じ時刻(ミリ秒)に受け付けた接続も、閉じる", async () => {
 		vi.useFakeTimers({ toFake: ["Date"] });
 		vi.setSystemTime(new Date("2026-05-01T00:00:00Z"));

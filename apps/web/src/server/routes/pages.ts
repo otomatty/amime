@@ -165,6 +165,9 @@ export const pages = new Hono<AppEnv>()
 		// 印は、ここで付け直す。要求に付いてきたものは、使わない。
 		const url = new URL(c.req.url);
 		url.searchParams.set("access", canWrite(c) ? "write" : "read");
+		// 権限を確かめ始めた時刻も、付ける。確かめたあと、接続を受け付けるまでのあいだに権限がなくなっても、
+		// この時刻で比べれば、閉じられる。
+		url.searchParams.set("at", String(c.var.authorizedAt));
 		// だれの接続かも、ここで付ける(権限がなくなったときに、その人の接続を閉じるため)。
 		url.searchParams.set("user", c.var.user?.id ?? "");
 		// ログインの状態が切れる時刻も、付ける(切れたあとは、変更を配らない)。

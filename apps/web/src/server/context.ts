@@ -19,6 +19,11 @@ export type AppEnv = {
 	Bindings: Cloudflare.Env;
 	Variables: {
 		user: Account | null;
+		/**
+		 * この要求の、ログインの状態と権限を確かめ始めた時刻(ミリ秒)。
+		 * 確かめたあとで権限がなくなった接続を閉じるときに、この時刻で比べる(ADR-0034)。
+		 */
+		authorizedAt: number;
 		/** ログインの状態が切れる時刻(ミリ秒)。ログインしていなければ null。 */
 		sessionExpires: number | null;
 		project: ProjectAccess;

@@ -38,6 +38,8 @@ export const session: MiddlewareHandler<AppEnv> = async (c, next) => {
 		return c.json({ error: "cross-origin" }, 403);
 	}
 	c.header("cache-control", "no-store");
+	// ログインの状態と権限を確かめる前の時刻を、覚えておく。
+	c.set("authorizedAt", Date.now());
 	await ready(c.env.DB);
 	const token = getCookie(c, SESSION_COOKIE);
 	const found = token === undefined ? null : await findSession(c.env.DB, token, Date.now());
