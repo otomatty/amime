@@ -59,6 +59,12 @@ export function TitleSearch({
 		return () => clearTimeout(timer);
 	}, [query]);
 
+	// 矢印キーで選んだ候補を、候補の一覧の見えるところに入れる。フォーカスは欄に置いたままなので、
+	// ブラウザは、自動ではスクロールしない。
+	useEffect(() => {
+		if (open) document.getElementById(`${listId}-${active}`)?.scrollIntoView({ block: "nearest" });
+	}, [open, active, listId]);
+
 	if (!available) return null;
 
 	// いまの入力への候補だけを見せる(前の入力への候補を、いまの入力の候補として見せない)。

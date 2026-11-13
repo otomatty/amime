@@ -88,6 +88,21 @@ describe("TitleSearch(名前でページを探す)", () => {
 		expect(navigate).toHaveBeenCalledExactlyOnceWith(`./${encodeURIComponent("二")}`);
 	});
 
+	it("矢印キーで選んだ候補が、候補の一覧の見えるところに入るように、スクロールする", async () => {
+		// 候補が多いと、一覧はスクロールする。フォーカスは欄にあるので、選んだ候補は、自動では見えるところに来ない。
+		stubTitles(() => json({ titles: ["一", "二", "三"] }));
+		await renderSearch();
+		typeQuery("x");
+		await waitFor(() => expect(options()).toHaveLength(3));
+		const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+
+		fireEvent.keyDown(input(), { key: "ArrowDown" });
+
+		expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+		expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getByRole("option", { name: "二" }));
+		scrollIntoView.mockRestore();
+	});
+
 	it("候補を押すと、そのページを開く", async () => {
 		stubTitles(() => json({ titles: ["買い物", "旅行"] }));
 		const navigate = await renderSearch();

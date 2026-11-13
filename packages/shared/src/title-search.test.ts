@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
 	likePatterns,
 	MAX_LIKE_PATTERN_BYTES,
-	MAX_SEARCH_TERMS,
 	rankTitles,
 	scoreTitle,
 	searchTerms,
@@ -18,11 +17,10 @@ describe("searchTerms(検索の語)", () => {
 		expect(searchTerms(" _ ")).toEqual([]);
 	});
 
-	it("語の数と長さには、上限がある", () => {
-		const terms = searchTerms(`${"あ".repeat(80)} ${"b ".repeat(20)}`);
+	it("語の数や長さで、入力を切り捨てない(切り捨てると、合わない名前が候補に出てしまう)", () => {
+		const long = "あ".repeat(80);
 
-		expect(terms).toHaveLength(MAX_SEARCH_TERMS);
-		expect(terms[0]).toBe("あ".repeat(50));
+		expect(searchTerms(`${long} b c d e f g`)).toEqual([long, "b", "c", "d", "e", "f", "g"]);
 	});
 });
 
@@ -50,6 +48,14 @@ describe("scoreTitle(名前が、検索の語にどれだけ合うか。小さ�
 		expect(scores.every((value) => value !== null)).toBe(true);
 		expect([...scores].sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual(scores);
 		expect(new Set(scores).size).toBe(scores.length);
+	});
+
+	it("同じ文字が繰り返し出てくる名前では、いちばんまとまって合うところで比べる", () => {
+		// 「a123aXb」は、後ろの「aXb」で合う(あいだは1文字)。先頭の a から数えない。
+		expect(score("ab", "a123aXb") ?? 0).toBeLessThan(score("ab", "a123b") ?? 0);
+		expect(score("abc", "a1b1c abXc")).toBe(score("abc", "abXc"));
+		// 途中まで合って、続きが出てこない始まりは、数えない。
+		expect(score("abc", "ab abXc a")).toBe(score("abc", "abXc"));
 	});
 
 	it("文字が飛び飛びに合うときは、まとまっているほうが合う", () => {
@@ -89,6 +95,10 @@ describe("rankTitles(名前を、合う順に並べる)", () => {
 			"新しいページ",
 			"古い",
 		]);
+	});
+
+	it("語がいくつあっても、すべての語が合う名前だけを返す", () => {
+		expect(rankTitles("a b c d e f", ["a b c d e", "a b c d e f"], 10)).toEqual(["a b c d e f"]);
 	});
 
 	it("件数の上限まで返す", () => {

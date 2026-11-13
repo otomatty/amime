@@ -818,6 +818,17 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			).toEqual([]);
 		});
 
+		it("語がいくつあっても、すべての語が合う名前だけを返す", async () => {
+			const stub = project("titles-many-terms");
+			await add(stub, "a b c d e f g", "a b c d e");
+
+			expect(await stub.titles("a b c d e f g")).toEqual(["a b c d e f g"]);
+			expect(await stub.titles("a b c d e f g h")).toEqual([]);
+			// 1文字ずつの語が、とても多い入力でも、探せる。
+			const many = Array.from({ length: 100 }, () => "a").join(" ");
+			expect(await stub.titles(many)).toEqual(["a b c d e", "a b c d e f g"]);
+		});
+
 		it("入力が空なら、更新が新しい順に返す", async () => {
 			const stub = project("titles-recent");
 			await add(stub, "古い", "中くらい", "新しい");

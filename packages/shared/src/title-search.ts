@@ -1,37 +1,62 @@
-/** 検索の語の数の上限。 */
-export const MAX_SEARCH_TERMS = 5;
-/** 検索の語1つの長さの上限(文字数)。 */
-const MAX_TERM_LENGTH = 50;
 /** 文字が飛び飛びに合うときの、あいだの文字数として数える上限。 */
 const MAX_GAP = 99;
 
 /** 照らし合わせるための形にする。大文字小文字と、空白かアンダースコアかの違いをなくす。 */
 const normalize = (text: string): string => text.replaceAll("_", " ").toLowerCase();
 
-/**
- * 入力を、検索の語に分ける。空白(とアンダースコア)で区切り、小文字にそろえる。
- * 語の数と長さは、上限までにする。
- */
+/** 入力を、検索の語に分ける。空白(とアンダースコア)で区切り、小文字にそろえる。 */
 export function searchTerms(query: string): string[] {
 	return normalize(query)
 		.split(/\s+/)
-		.filter((term) => term !== "")
-		.slice(0, MAX_SEARCH_TERMS)
-		.map((term) => Array.from(term).slice(0, MAX_TERM_LENGTH).join(""));
+		.filter((term) => term !== "");
 }
 
-/** term の文字が、haystack の中に順に出てくるなら、最初の文字から最後の文字までの長さ。出てこなければ null。 */
+/** from から後ろへ、wanted の文字を順に探す。すべて見つかったら、最後の文字の位置。見つからなければ -1。 */
+function matchForward(
+	wanted: readonly string[],
+	characters: readonly string[],
+	from: number,
+): number {
+	let matched = 0;
+	for (let position = from; position < characters.length; position += 1) {
+		if (characters[position] !== wanted[matched]) continue;
+		matched += 1;
+		if (matched === wanted.length) return position;
+	}
+	return -1;
+}
+
+/** end から前へ、wanted の文字を後ろから順に探す。すべて見つかった位置(最初の文字の位置)を返す。 */
+function matchBackward(
+	wanted: readonly string[],
+	characters: readonly string[],
+	end: number,
+): number {
+	let left = wanted.length;
+	let position = end;
+	// end までに、wanted の文字が順に出てくることは、分かっている。
+	for (; left > 0; position -= 1) {
+		if (characters[position] === wanted[left - 1]) left -= 1;
+	}
+	return position + 1;
+}
+
+/**
+ * term の文字が、haystack の中に順に出てくるなら、最初の文字から最後の文字までの長さ。出てこなければ null。
+ * 合うところがいくつもあれば、いちばん短いものの長さ。
+ */
 function scatteredSpan(term: string, haystack: string): number | null {
 	const wanted = Array.from(term);
-	let matched = 0;
-	let first = 0;
-	for (const [position, character] of Array.from(haystack).entries()) {
-		if (character !== wanted[matched]) continue;
-		if (matched === 0) first = position;
-		matched += 1;
-		if (matched === wanted.length) return position - first + 1;
+	const characters = Array.from(haystack);
+	let shortest: number | null = null;
+	// 前から合わせて終わりを決め、そこから後ろへ合わせ直して、始まりをできるだけ後ろに寄せる。
+	for (let from = 0; ; ) {
+		const end = matchForward(wanted, characters, from);
+		if (end === -1) return shortest;
+		const start = matchBackward(wanted, characters, end);
+		shortest = Math.min(shortest ?? Number.POSITIVE_INFINITY, end - start + 1);
+		from = start + 1;
 	}
-	return null;
 }
 
 /** 1つの語が、名前(正規化したもの)にどれだけ合うか。小さいほど合う。合わなければ null。 */
