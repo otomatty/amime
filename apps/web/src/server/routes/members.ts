@@ -59,7 +59,7 @@ export const members = new Hono<AppEnv>()
 		const change = () => setVisibility(c.env.DB, c.var.project.id, visibility as Visibility, actor);
 		// 非公開にするときは、メンバーでない人がつないだままの接続を、閉じさせる。
 		const changed = await (visibility === "private"
-			? revoking([directory(c)], "*", change)
+			? revoking([directory(c)], "*", change, (done) => done)
 			: change());
 		if (!changed) return notAdmin(c);
 		const { name, role } = c.var.project;
@@ -95,8 +95,12 @@ export const members = new Hono<AppEnv>()
 		const allowed = await canRemove(c.env.DB, id, user, actor);
 		if (allowed !== "ok") return refused(c, allowed);
 		// 外す人がつないだままの接続を、閉じさせる。
-		const result = await revoking([directory(c)], user, () =>
-			removeMember(c.env.DB, id, user, actor),
+		// 確かめたあとで事情が変わって、外せなかったときは、取り上げなかったことにする。
+		const result = await revoking(
+			[directory(c)],
+			user,
+			() => removeMember(c.env.DB, id, user, actor),
+			(outcome) => outcome === "removed",
 		);
 		return result === "removed" ? c.body(null, 204) : refused(c, result);
 	})

@@ -39,8 +39,14 @@ type SettingsProps = {
 };
 
 type Actions = {
-	/** 変える操作を行い、成功したら一覧を読み直す。失敗したら、案内を出す。 */
-	readonly run: (action: () => Promise<string | null>) => Promise<boolean>;
+	/**
+	 * 変える操作を行い、一覧を読み直す。失敗したら、案内を出す。
+	 * applied は、成功したときに、読み直す前の一覧に、その変更を写す(読み直せなくても、変更が画面に出る)。
+	 */
+	readonly run: (
+		action: () => Promise<string | null>,
+		applied?: (members: readonly Member[]) => readonly Member[],
+	) => Promise<boolean>;
 };
 
 function MemberRow({
@@ -59,7 +65,11 @@ function MemberRow({
 }) {
 	const self = member.id === me;
 	const remove = async () => {
-		if ((await run(() => removeMember(project, member.id))) && self) onLeft();
+		const removed = await run(
+			() => removeMember(project, member.id),
+			(members) => members.filter((other) => other.id !== member.id),
+		);
+		if (removed && self) onLeft();
 	};
 	return (
 		<li>
@@ -81,7 +91,11 @@ function MemberRow({
 					value={member.role}
 					onChange={(event) => {
 						const role: Role = event.target.value === "admin" ? "admin" : "member";
-						void run(() => setRole(project, member.id, role));
+						void run(
+							() => setRole(project, member.id, role),
+							(members) =>
+								members.map((other) => (other.id === member.id ? { ...other, role } : other)),
+						);
 					}}
 				>
 					<option value="admin">{ROLE_LABELS.admin}</option>
@@ -122,7 +136,10 @@ function Invites({
 	};
 	const revoke = async (id: string) => {
 		// 無効にできたときにだけ、表示を消す(できなかったリンクは、まだ使える)。
-		if ((await run(() => revokeInvite(project, id))) && created?.id === id) setCreated(null);
+		// 待っているあいだに、別のリンクを作っていたら、そのリンクは消さない。
+		if (await run(() => revokeInvite(project, id))) {
+			setCreated((current) => (current?.id === id ? null : current));
+		}
 	};
 	return (
 		<section aria-labelledby="settings-invites">
@@ -188,9 +205,19 @@ export function ProjectSettings({
 		void reload();
 	}, [reload]);
 	const run = useCallback(
-		async (action: () => Promise<string | null>) => {
+		async (
+			action: () => Promise<string | null>,
+			applied?: (members: readonly Member[]) => readonly Member[],
+		) => {
 			const reason = await action();
 			setFailure(reason === null ? null : failureText(reason));
+			if (reason === null && applied !== undefined) {
+				setList((current) =>
+					current === null || current === "failed"
+						? current
+						: { ...current, members: [...applied(current.members)] },
+				);
+			}
 			await reload();
 			return reason === null;
 		},

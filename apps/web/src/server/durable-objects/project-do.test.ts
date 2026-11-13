@@ -60,20 +60,27 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			vi.useRealTimers();
 		});
 
-		it("取り上げ始めたときは、1分先の時刻を覚える(権限を変え終わるまでにつないだ接続も、閉じられるように)。相手ごとに、いちばん新しい時刻を覚える", async () => {
+		/** 取り上げている途中として覚えている数。 */
+		const pending = (stub: ReturnType<typeof project>) =>
+			runInDurableObject(
+				stub,
+				(_, state) =>
+					state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM revoking").one().n,
+			);
+
+		it("取り上げ始めたら、1分先の時刻までにつないだ接続を、閉じさせる(権限を変え終わるまでにつないだ接続も、閉じられるように)", async () => {
 			vi.useFakeTimers({ toFake: ["Date"] });
 			vi.setSystemTime(5_000);
 			const stub = project("revoke");
 
 			expect(await stub.revocations()).toEqual([]);
-			expect(await stub.revoke("u1")).toBe(65_000);
-			expect(await stub.revoke("*")).toBe(65_000);
-			vi.setSystemTime(9_000);
-			expect(await stub.revoke("u1")).toBe(69_000);
+			const first = await stub.revoke("u1");
+			const second = await stub.revoke("*");
 
+			expect(second).not.toBe(first);
 			expect(await stub.revocations()).toEqual([
 				{ subject: "*", at: 65_000 },
-				{ subject: "u1", at: 69_000 },
+				{ subject: "u1", at: 65_000 },
 			]);
 		});
 
@@ -81,45 +88,73 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			vi.useFakeTimers({ toFake: ["Date"] });
 			vi.setSystemTime(5_000);
 			const stub = project("settle");
-			const pending = await stub.revoke("u1");
+			const operation = await stub.revoke("u1");
 			vi.setSystemTime(5_200);
 
-			await stub.settle("u1", pending);
+			await stub.settle("u1", operation, true);
 
 			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 5_200 }]);
+			expect(await pending(stub)).toBe(0);
 		});
 
-		it("同じ相手から、重ねて取り上げているあいだは、最後の1つが終わるまで、先の時刻のままにする", async () => {
+		it("権限を変えなかった(断った)ときは、取り上げなかったことにする。前に取り上げた時刻は、そのまま", async () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			vi.setSystemTime(5_000);
+			const stub = project("settle-cancel");
+
+			await stub.settle("u1", await stub.revoke("u1"), false);
+			expect(await stub.revocations()).toEqual([]);
+
+			await stub.settle("u1", await stub.revoke("u1"), true);
+			vi.setSystemTime(9_000);
+			await stub.settle("u1", await stub.revoke("u1"), false);
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 5_000 }]);
+		});
+
+		it("同じ相手から、重ねて取り上げているあいだは、どれも終わるまで、先の時刻のままにする(終わる順番によらない)", async () => {
 			vi.useFakeTimers({ toFake: ["Date"] });
 			vi.setSystemTime(5_000);
 			const stub = project("settle-overlap");
 			const first = await stub.revoke("u1");
 			vi.setSystemTime(6_000);
 			const second = await stub.revoke("u1");
-			vi.setSystemTime(7_000);
 
-			await stub.settle("u1", first);
-			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 66_000 }]);
+			// あとから始めたほうが、先に終わる。先に始めたほうは、まだ終わっていない。
+			vi.setSystemTime(7_000);
+			await stub.settle("u1", second, true);
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 65_000 }]);
 
 			vi.setSystemTime(8_000);
-			await stub.settle("u1", second);
+			await stub.settle("u1", first, true);
 			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 8_000 }]);
 		});
 
-		it("あとから始めたほうが先に終わっても、先に始めたほうが終わった時刻より、前には戻さない", async () => {
+		it("取り上げ終えたことを知らされないままのものは、1分先の時刻のまま残る。1分が過ぎたら、途中としては覚えておかない", async () => {
 			vi.useFakeTimers({ toFake: ["Date"] });
 			vi.setSystemTime(5_000);
-			const stub = project("settle-order");
-			const first = await stub.revoke("u1");
-			vi.setSystemTime(6_000);
-			const second = await stub.revoke("u1");
-			vi.setSystemTime(7_000);
-			await stub.settle("u1", second);
-			vi.setSystemTime(8_000);
+			const stub = project("settle-lost");
+			const lost = await stub.revoke("u1");
+			const cancelled = await stub.revoke("u2");
+			vi.setSystemTime(100_000);
 
-			await stub.settle("u1", first);
+			const next = await stub.revoke("u3");
 
-			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 8_000 }]);
+			expect(await pending(stub)).toBe(1);
+			expect(await stub.revocations()).toEqual([
+				{ subject: "u1", at: 65_000 },
+				{ subject: "u2", at: 65_000 },
+				{ subject: "u3", at: 160_000 },
+			]);
+			// 遅れて知らされたとき。変えていたなら、その時刻に直す。変えていなくても、前には戻さない。
+			vi.setSystemTime(101_000);
+			await stub.settle("u1", lost, true);
+			await stub.settle("u2", cancelled, false);
+			await stub.settle("u3", next, true);
+			expect(await stub.revocations()).toEqual([
+				{ subject: "u1", at: 101_000 },
+				{ subject: "u2", at: 65_000 },
+				{ subject: "u3", at: 101_000 },
+			]);
 		});
 	});
 
@@ -1683,7 +1718,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 				const { sql } = state.storage;
 				// ADR-0024 の時点の形に戻す。
 				sql.exec(
-					"DROP TABLE revocations; DROP TABLE texts; DROP TABLE renames; DROP TABLE rewrites; DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
+					"DROP TABLE revoking; DROP TABLE revocations; DROP TABLE texts; DROP TABLE renames; DROP TABLE rewrites; DROP TABLE removed; DROP TABLE links; DROP TABLE pages; DROP TABLE schema_version;",
 				);
 				sql.exec(`CREATE TABLE pages (
 					id TEXT PRIMARY KEY, title_lc TEXT NOT NULL UNIQUE, title TEXT NOT NULL, problem TEXT,

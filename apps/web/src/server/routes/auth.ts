@@ -128,10 +128,15 @@ export const auth = new Hono<AppEnv>()
 		const user = c.var.user;
 		const joined = user === null ? [] : await listProjectIds(c.env.DB, user.id);
 		const directories = joined.map((id) => exports.ProjectDO.getByName(id));
-		await revoking(directories, user?.id ?? "", async () => {
-			const token = getCookie(c, SESSION_COOKIE);
-			if (token !== undefined) await endSession(c.env.DB, token);
-		});
+		await revoking(
+			directories,
+			user?.id ?? "",
+			async () => {
+				const token = getCookie(c, SESSION_COOKIE);
+				if (token !== undefined) await endSession(c.env.DB, token);
+			},
+			() => true,
+		);
 		clearSessionCookie(c);
 		return c.body(null, 204);
 	});

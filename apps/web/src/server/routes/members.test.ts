@@ -423,14 +423,16 @@ describe("権限がなくなった人の接続", () => {
 	async function replace<Name extends "revocations" | "revoke" | "settle">(
 		path: string,
 		method: Name,
-		replacement: () => Promise<never[]> | never[],
+		/** proceed は、もとのメソッドを呼ぶ。 */
+		replacement: (proceed: () => unknown) => unknown,
 	) {
 		const stub = exports.ProjectDO.getByName(await projectId(path));
 		await runInDurableObject(stub, (instance) => {
 			const prototype = Object.getPrototypeOf(instance);
 			const original = prototype[method];
 			vi.spyOn(prototype, method).mockImplementation(function (this: unknown, ...args: unknown[]) {
-				return this === instance ? replacement() : original.apply(this, args);
+				const proceed = () => original.apply(this, args);
+				return this === instance ? replacement(proceed) : proceed();
 			});
 		});
 	}
@@ -566,6 +568,30 @@ describe("権限がなくなった人の接続", () => {
 		expect(own.closes).toEqual([]);
 		expect(other.closes).toEqual([]);
 		for (const { socket } of [own, other]) socket.close();
+	});
+
+	it("外せるかを確かめたあとで、ほかの管理者が抜けて、断ることになったときも、その人の接続を閉じない", async () => {
+		const { path, admin } = await project();
+		const second = await member(path, admin);
+		await send("PUT", `${path}/members/${second.id}`, admin, { role: "admin" });
+		const own = await watch(path, second, "second-1");
+		const id = await projectId(path);
+		// 台帳に覚えさせているあいだに、もう1人の管理者が抜ける。
+		await replace(path, "revoke", async (proceed) => {
+			await env.DB.prepare("DELETE FROM members WHERE project = ? AND user = ?")
+				.bind(id, admin.id)
+				.run();
+			return proceed();
+		});
+
+		expect((await send("DELETE", `${path}/members/${second.id}`, second)).status).toBe(409);
+		vi.restoreAllMocks();
+
+		expect(await exports.ProjectDO.getByName(id).revocations()).toEqual([]);
+		expect((await commit(path, own.id, second)).status).toBe(200);
+		await vi.waitFor(() => expect(commits(own.messages)).toHaveLength(1));
+		expect(own.closes).toEqual([]);
+		own.socket.close();
 	});
 
 	it("コミットがなくても、カーソルを配る前に、権限のなくなった人の接続を閉じる", async () => {

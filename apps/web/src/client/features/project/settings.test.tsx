@@ -22,7 +22,7 @@ const team = { name: "team", visibility: "private", role: "admin" } as const;
 
 type Server = {
 	members: unknown;
-	replies: Record<string, () => Response>;
+	replies: Record<string, () => Response | Promise<Response>>;
 	requests: { url: string; method: string; body: unknown }[];
 };
 
@@ -248,6 +248,59 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 
 			await screen.findByRole("alert");
 			expect(screen.getByRole("textbox", { name: /新しい招待リンク/ })).toBeDefined();
+		});
+
+		it("リンクを無効にしているあいだに、別のリンクを作ったら、無効にし終えても、新しいリンクは表示したままにする", async () => {
+			const server = stubServer({ members: [admin], invites: [invite] });
+			server.replies["POST /api/projects/team/invites"] = () =>
+				Response.json({ ...invite, token: "old" }, { status: 201 });
+			let finish: (response: Response) => void = () => {};
+			server.replies["DELETE /api/projects/team/invites/i1"] = () =>
+				new Promise<Response>((resolve) => {
+					finish = resolve;
+				});
+			renderSettings();
+			fireEvent.click(await screen.findByRole("button", { name: "招待リンクを作る" }));
+			await screen.findByDisplayValue("https://amime.example/invite/old");
+			fireEvent.click(screen.getByRole("button", { name: "無効にする" }));
+
+			server.replies["POST /api/projects/team/invites"] = () =>
+				Response.json({ ...invite, id: "i2", token: "new" }, { status: 201 });
+			fireEvent.click(screen.getByRole("button", { name: "招待リンクを作る" }));
+			await screen.findByDisplayValue("https://amime.example/invite/new");
+			finish(new Response(null, { status: 204 }));
+
+			await waitFor(() => expect(server.requests).toHaveLength(3));
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(screen.getByDisplayValue("https://amime.example/invite/new")).toBeDefined();
+		});
+
+		it("自分をメンバーに戻したあとで、一覧を読み直せなくても、管理者だけの操作を出すのをやめる", async () => {
+			const second = { ...taro, role: "admin" };
+			const server = stubServer({ members: [admin, second], invites: [invite] });
+			renderSettings();
+			const role = await screen.findByRole("combobox", { name: "花子 の役割" });
+
+			server.members = null;
+			fireEvent.change(role, { target: { value: "member" } });
+
+			await waitFor(() =>
+				expect(screen.queryByRole("combobox", { name: "花子 の役割" })).toBeNull(),
+			);
+			expect(screen.queryByRole("heading", { name: "招待リンク" })).toBeNull();
+			expect(screen.queryByRole("button", { name: "太郎 を外す" })).toBeNull();
+		});
+
+		it("メンバーを外したあとで、一覧を読み直せなくても、外した人は一覧から消す", async () => {
+			const server = stubServer();
+			renderSettings();
+			const remove = await screen.findByRole("button", { name: "太郎 を外す" });
+
+			server.members = null;
+			fireEvent.click(remove);
+
+			await waitFor(() => expect(screen.queryByRole("button", { name: "太郎 を外す" })).toBeNull());
+			expect(await memberItems()).toHaveLength(1);
 		});
 
 		it("自分をメンバーに戻したら、管理者だけの操作(役割の変更、招待リンク)を出すのをやめる", async () => {

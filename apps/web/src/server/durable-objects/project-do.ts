@@ -127,7 +127,7 @@ type Revocation = { subject: string; at: number };
 
 /**
  * 権限を取り上げ始めてから、変え終わるまでにかかってもよい長さ(ミリ秒)。
- * 取り上げ終えたことを覚えられなかったときは、この長さのあいだにつないだ接続も、閉じる。
+ * 取り上げ終えたことを知らされなかったときは、この長さのあいだにつないだ接続も、閉じる。
  */
 const REVOKE_MARGIN_MS = 60_000;
 
@@ -206,9 +206,15 @@ export const MIGRATIONS: readonly string[] = [
 		folded TEXT NOT NULL
 	);`,
 	// 7: 権限を取り上げた相手と、その時刻(ADR-0034)。subject は、利用者のID。「*」は、メンバーでない人すべて。
+	// revoking は、取り上げている途中のもの。until(少し先の時刻)までにつないだ接続を、閉じさせる。
 	`CREATE TABLE revocations (
 		subject TEXT PRIMARY KEY,
 		at INTEGER NOT NULL
+	);
+	CREATE TABLE revoking (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		subject TEXT NOT NULL,
+		until INTEGER NOT NULL
 	);`,
 ];
 
@@ -278,43 +284,65 @@ export class ProjectDO extends DurableObject {
 
 	/**
 	 * 権限を取り上げ始めることを覚える(ADR-0034)。権限を変える前に呼ぶ。subject は、外すメンバーのID。
-	 * 「*」は、メンバーでない人すべて(プロジェクトを、非公開に変える)。
-	 * ページ(PageDO)が、これを見て、覚えた時刻までにその相手がつないだ接続を閉じる。
+	 * 「*」は、メンバーでない人すべて(プロジェクトを、非公開に変える)。返した番号は、settle に渡す。
 	 *
-	 * 覚えるのは、少し先の時刻。権限を変え終わるまでのあいだにつないだ接続も、閉じられるようにする
-	 * (変え終えたあとで、もう一度ここに来られなくても、残さない)。返した値は、settle に渡す。
+	 * 取り上げている途中のあいだ、ページ(PageDO)は、少し先の時刻までにその相手がつないだ接続を閉じる。
+	 * 権限を変え終わるまでのあいだにつないだ接続も、閉じられる(変え終えたあとで、ここに知らされなくても、残さない)。
 	 */
 	revoke(subject: string): number {
+		const now = Date.now();
+		this.#foldRevoking(now);
 		return this.ctx.storage.sql
-			.exec<{ at: number }>(
-				`INSERT INTO revocations (subject, at) VALUES (?, ?)
-				ON CONFLICT (subject) DO UPDATE SET at = max(at, excluded.at) RETURNING at`,
+			.exec<{ id: number }>(
+				"INSERT INTO revoking (subject, until) VALUES (?, ?) RETURNING id",
 				subject,
-				Date.now() + REVOKE_MARGIN_MS,
+				now + REVOKE_MARGIN_MS,
 			)
-			.one().at;
+			.one().id;
 	}
 
 	/**
-	 * 権限を取り上げ終えたことを覚える。権限を変えたあとに呼ぶ。pending は、revoke が返した値。
-	 * 覚えた時刻を、いまの時刻に直す(このあとで、権限を確かめ直してつないだ接続は、閉じない)。
-	 * 同じ相手から、ほかの要求も取り上げている途中なら(覚えている時刻が、pending と違う)、前には戻さない。
+	 * 権限を取り上げ終えたことを覚える。権限を変えたあとに呼ぶ。operation は、revoke が返した番号。
+	 * applied は、権限を変えたか。変えたなら、いまの時刻までにつないだ接続を、閉じさせる
+	 * (このあとで、権限を確かめ直してつないだ接続は、閉じない)。変えなかった(断った)なら、取り上げなかったことにする。
+	 * 同じ相手から、ほかの要求も取り上げている途中なら、そちらが終わるまで、先の時刻のままになる。
 	 */
-	settle(subject: string, pending: number): void {
-		const now = Date.now();
-		this.ctx.storage.sql.exec(
-			"UPDATE revocations SET at = CASE WHEN at = ? THEN ? ELSE max(at, ?) END WHERE subject = ?",
-			pending,
-			now,
-			now,
+	settle(subject: string, operation: number, applied: boolean): void {
+		const sql = this.ctx.storage.sql;
+		sql.exec("DELETE FROM revoking WHERE id = ? AND subject = ?", operation, subject);
+		if (!applied) return;
+		sql.exec(
+			`INSERT INTO revocations (subject, at) VALUES (?, ?)
+			ON CONFLICT (subject) DO UPDATE SET at = max(at, excluded.at)`,
 			subject,
+			Date.now(),
 		);
 	}
 
-	/** 権限を取り上げた相手と、その時刻。 */
+	/**
+	 * 終えたことを知らされないまま、先の時刻を過ぎたものは、その時刻に取り上げたものとして覚え直す
+	 * (途中のものが、たまり続けないようにする。閉じる接続は、変わらない)。
+	 */
+	#foldRevoking(now: number): void {
+		const sql = this.ctx.storage.sql;
+		sql.exec(
+			`INSERT INTO revocations (subject, at)
+			SELECT subject, max(until) FROM revoking WHERE until < ? GROUP BY subject
+			ON CONFLICT (subject) DO UPDATE SET at = max(at, excluded.at)`,
+			now,
+		);
+		sql.exec("DELETE FROM revoking WHERE until < ?", now);
+	}
+
+	/** 権限を取り上げた相手と、その時刻(取り上げている途中の相手は、先の時刻)。 */
 	revocations(): Revocation[] {
 		return this.ctx.storage.sql
-			.exec<Revocation>("SELECT subject, at FROM revocations ORDER BY subject")
+			.exec<Revocation>(
+				`SELECT subject, max(at) AS at FROM (
+					SELECT subject, at FROM revocations
+					UNION ALL SELECT subject, until AS at FROM revoking
+				) GROUP BY subject ORDER BY subject`,
+			)
 			.toArray();
 	}
 
