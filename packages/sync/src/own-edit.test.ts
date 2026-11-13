@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { applyChanges } from "./changes.ts";
 import { reapplyEdit, recordEdit, revertEdit } from "./own-edit.ts";
+import { MAX_LINE_LENGTH } from "./schema.ts";
 import type { Change, Line, LineId } from "./types.ts";
 
 const id = (value: string): LineId => value as LineId;
@@ -70,6 +71,14 @@ describe("revertEdit(自分の編集を打ち消す)", () => {
 			const current = afterRemote([line("a", "B2")], update("a", "他の人の本文"));
 
 			expect(revertEdit(current, replaced)).toBe(current);
+		});
+
+		it("打ち消すと行が長さの上限を超えるなら、その行は打ち消さない(送れない行を作らない)", () => {
+			const half = "あ".repeat(MAX_LINE_LENGTH / 2);
+			const deleted = recordEdit([line("a", half + half)], [line("a", half)]);
+			const current = afterRemote([line("a", half)], update("a", `${half}!`));
+
+			expect(revertEdit(current, deleted)).toBe(current);
 		});
 
 		it("元にした本文を持たない変更は、そのまま置き換える", () => {

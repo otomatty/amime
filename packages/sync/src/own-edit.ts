@@ -1,5 +1,6 @@
 import { applyChanges, diffLines } from "./changes.ts";
 import { mergeText } from "./merge-text.ts";
+import { MAX_LINE_LENGTH } from "./schema.ts";
 import type { Change, Line, LineId } from "./types.ts";
 
 /**
@@ -37,6 +38,7 @@ function writtenTexts(changes: readonly Change[]): Map<LineId, string> {
  *   他の人がその行を書き換えていたら、その人の書いたものごと消してしまうので、行を残す。
  * - 行の本文を置き換える変更は、他の人がその行を書き換えていたら、自分の変更だけを文字単位で適用する(ADR-0022)。
  *   ただし、自分が置き換えた文字を他の人がすべて書き換えていたら、置き換える前の文字は戻さない。
+ *   統合した本文が1行の長さの上限を超えるなら、その行は変えない。
  */
 function applyKeepingOthers(
 	document: readonly Line[],
@@ -53,6 +55,8 @@ function applyKeepingOthers(
 		// 行がなくなっていたら、適用しても何も起きない。元にした本文がなければ、そのまま置き換える。
 		if (text === undefined || change.base === undefined) return [change];
 		const merged = mergeText(change.base, text, change.text, { mode: "yield" });
+		// 他の人が書き足した分と合わせると、1行の長さの上限を超える。送れない行になるので、この行は変えない。
+		if (merged.length > MAX_LINE_LENGTH) return [];
 		return [{ type: "update", id: change.id, text: merged }];
 	});
 	return applyChanges(document, applicable).lines;
