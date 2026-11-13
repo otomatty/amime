@@ -1,6 +1,6 @@
 import type { Role, Visibility } from "@amime/shared";
 import type { Member, NewInvite, ProjectInfo, ProjectMembers, UserId } from "@amime/sync";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAccount } from "../account/account.tsx";
 import {
 	createInvite,
@@ -195,8 +195,13 @@ export function ProjectSettings({
 		list === null || list === "failed" ? undefined : list.members.find((m) => m.id === me);
 	const admin = (mine?.role ?? project.role) === "admin";
 	const [failure, setFailure] = useState<string | null>(null);
+	// いちばん新しい読み直しの番号。前に始めた読み直しが、あとから届いても、使わない。
+	const latest = useRef(0);
 	const reload = useCallback(async () => {
+		latest.current += 1;
+		const request = latest.current;
 		const loaded = await loadMembers(project.name);
+		if (request !== latest.current) return;
 		// 読み直しに失敗しても、前に読み込んだ一覧があれば、それを出したままにする
 		// (作ったばかりの招待リンクの表示を、消さない)。
 		setList((current) => loaded ?? (current === null ? "failed" : current));

@@ -122,14 +122,19 @@ type FoundPage = {
 	titled: number;
 };
 
-/** 権限を取り上げた相手(利用者のID。「*」は、メンバーでない人すべて)と、その時刻。 */
-type Revocation = { subject: string; at: number };
+/**
+ * 権限を取り上げた相手(利用者のID。「*」は、メンバーでない人すべて)と、その時刻。
+ * pending は、取り上げている途中か(時刻は、少し先。変更が断られたら、取り上げなかったことになる)。
+ */
+type Revocation = { subject: string; at: number; pending: boolean };
 
 /**
  * 権限を取り上げ始めてから、変え終わるまでにかかってもよい長さ(ミリ秒)。
  * 取り上げ終えたことを知らされなかったときは、この長さのあいだにつないだ接続も、閉じる。
+ * あいだにあるのは、D1 への1度の書き込みだけ。その上限(1つの問い合わせは30秒まで)の10倍をとる。
+ * 長くしても、ふつうの(知らされた)ときに閉じる接続は、変わらない。
  */
-const REVOKE_MARGIN_MS = 60_000;
+const REVOKE_MARGIN_MS = 5 * 60_000;
 
 type RewriteRow = {
 	seq: number;
@@ -337,13 +342,14 @@ export class ProjectDO extends DurableObject {
 	/** 権限を取り上げた相手と、その時刻(取り上げている途中の相手は、先の時刻)。 */
 	revocations(): Revocation[] {
 		return this.ctx.storage.sql
-			.exec<Revocation>(
-				`SELECT subject, max(at) AS at FROM (
-					SELECT subject, at FROM revocations
-					UNION ALL SELECT subject, until AS at FROM revoking
+			.exec<{ subject: string; at: number; pending: number }>(
+				`SELECT subject, max(at) AS at, max(pending) AS pending FROM (
+					SELECT subject, at, 0 AS pending FROM revocations
+					UNION ALL SELECT subject, until AS at, 1 AS pending FROM revoking
 				) GROUP BY subject ORDER BY subject`,
 			)
-			.toArray();
+			.toArray()
+			.map(({ subject, at, pending }) => ({ subject, at, pending: pending === 1 }));
 	}
 
 	/** 台帳に、そのIDのページがあるか(開いただけのページも含む)。 */

@@ -68,7 +68,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 					state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM revoking").one().n,
 			);
 
-		it("取り上げ始めたら、1分先の時刻までにつないだ接続を、閉じさせる(権限を変え終わるまでにつないだ接続も、閉じられるように)", async () => {
+		it("取り上げ始めたら、5分先の時刻までにつないだ接続を、閉じさせる(権限を変え終わるまでにつないだ接続も、閉じられるように)", async () => {
 			vi.useFakeTimers({ toFake: ["Date"] });
 			vi.setSystemTime(5_000);
 			const stub = project("revoke");
@@ -79,8 +79,8 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 
 			expect(second).not.toBe(first);
 			expect(await stub.revocations()).toEqual([
-				{ subject: "*", at: 65_000 },
-				{ subject: "u1", at: 65_000 },
+				{ subject: "*", at: 305_000, pending: true },
+				{ subject: "u1", at: 305_000, pending: true },
 			]);
 		});
 
@@ -93,7 +93,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 
 			await stub.settle("u1", operation, true);
 
-			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 5_200 }]);
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 5_200, pending: false }]);
 			expect(await pending(stub)).toBe(0);
 		});
 
@@ -108,7 +108,7 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			await stub.settle("u1", await stub.revoke("u1"), true);
 			vi.setSystemTime(9_000);
 			await stub.settle("u1", await stub.revoke("u1"), false);
-			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 5_000 }]);
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 5_000, pending: false }]);
 		});
 
 		it("同じ相手から、重ねて取り上げているあいだは、どれも終わるまで、先の時刻のままにする(終わる順番によらない)", async () => {
@@ -122,38 +122,38 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			// あとから始めたほうが、先に終わる。先に始めたほうは、まだ終わっていない。
 			vi.setSystemTime(7_000);
 			await stub.settle("u1", second, true);
-			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 65_000 }]);
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 305_000, pending: true }]);
 
 			vi.setSystemTime(8_000);
 			await stub.settle("u1", first, true);
-			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 8_000 }]);
+			expect(await stub.revocations()).toEqual([{ subject: "u1", at: 8_000, pending: false }]);
 		});
 
-		it("取り上げ終えたことを知らされないままのものは、1分先の時刻のまま残る。1分が過ぎたら、途中としては覚えておかない", async () => {
+		it("取り上げ終えたことを知らされないままのものは、5分先の時刻のまま残る。5分が過ぎたら、途中としては覚えておかない", async () => {
 			vi.useFakeTimers({ toFake: ["Date"] });
 			vi.setSystemTime(5_000);
 			const stub = project("settle-lost");
 			const lost = await stub.revoke("u1");
 			const cancelled = await stub.revoke("u2");
-			vi.setSystemTime(100_000);
+			vi.setSystemTime(400_000);
 
 			const next = await stub.revoke("u3");
 
 			expect(await pending(stub)).toBe(1);
 			expect(await stub.revocations()).toEqual([
-				{ subject: "u1", at: 65_000 },
-				{ subject: "u2", at: 65_000 },
-				{ subject: "u3", at: 160_000 },
+				{ subject: "u1", at: 305_000, pending: false },
+				{ subject: "u2", at: 305_000, pending: false },
+				{ subject: "u3", at: 700_000, pending: true },
 			]);
 			// 遅れて知らされたとき。変えていたなら、その時刻に直す。変えていなくても、前には戻さない。
-			vi.setSystemTime(101_000);
+			vi.setSystemTime(401_000);
 			await stub.settle("u1", lost, true);
 			await stub.settle("u2", cancelled, false);
 			await stub.settle("u3", next, true);
 			expect(await stub.revocations()).toEqual([
-				{ subject: "u1", at: 101_000 },
-				{ subject: "u2", at: 65_000 },
-				{ subject: "u3", at: 101_000 },
+				{ subject: "u1", at: 401_000, pending: false },
+				{ subject: "u2", at: 305_000, pending: false },
+				{ subject: "u3", at: 401_000, pending: false },
 			]);
 		});
 	});

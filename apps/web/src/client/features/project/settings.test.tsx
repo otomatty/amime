@@ -21,19 +21,23 @@ const invite = { id: "i1", created: Date.UTC(2026, 0, 1), expires: Date.UTC(2026
 const team = { name: "team", visibility: "private", role: "admin" } as const;
 
 type Server = {
+	/** 次の読み込みに、1度だけ使う応答(あれば、members より先に使う)。 */
+	loads: (() => Promise<Response>)[];
 	members: unknown;
 	replies: Record<string, () => Response | Promise<Response>>;
 	requests: { url: string; method: string; body: unknown }[];
 };
 
 function stubServer(members: unknown = { members: [admin, taro], invites: [invite] }): Server {
-	const server: Server = { members, replies: {}, requests: [] };
+	const server: Server = { loads: [], members, replies: {}, requests: [] };
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (url: string, init?: RequestInit) => {
 			const method = init?.method ?? "GET";
 			if (url === "/api/me") return Response.json({ user: hanako, login: ["google"] });
 			if (method === "GET") {
+				const load = server.loads.shift();
+				if (load !== undefined) return load();
 				return server.members === null
 					? new Response("x", { status: 500 })
 					: Response.json(server.members);
@@ -289,6 +293,38 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			);
 			expect(screen.queryByRole("heading", { name: "招待リンク" })).toBeNull();
 			expect(screen.queryByRole("button", { name: "太郎 を外す" })).toBeNull();
+		});
+
+		it("前に始めた読み直しが、あとから届いても、新しい一覧を古い一覧で上書きしない", async () => {
+			const second = { ...taro, role: "admin" };
+			const before = { members: [admin, second], invites: [invite] };
+			const server = stubServer(before);
+			renderSettings();
+			const role = await screen.findByRole("combobox", { name: "花子 の役割" });
+			// 招待リンクを作ったあとの読み直しが、遅れる。
+			let deliver: () => void = () => {};
+			server.loads.push(
+				() =>
+					new Promise<Response>((resolve) => {
+						deliver = () => resolve(Response.json(before));
+					}),
+			);
+			server.replies["POST /api/projects/team/invites"] = () =>
+				Response.json({ ...invite, id: "i2", token: "tok" }, { status: 201 });
+			fireEvent.click(screen.getByRole("button", { name: "招待リンクを作る" }));
+			await waitFor(() => expect(server.loads).toHaveLength(0));
+
+			// そのあいだに、自分をメンバーに戻す(こちらの読み直しは、すぐに届く)。
+			server.members = { members: [{ ...admin, role: "member" }, second], invites: [] };
+			fireEvent.change(role, { target: { value: "member" } });
+			await waitFor(() =>
+				expect(screen.queryByRole("combobox", { name: "花子 の役割" })).toBeNull(),
+			);
+			deliver();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			expect(screen.queryByRole("combobox", { name: "花子 の役割" })).toBeNull();
+			expect(screen.queryByRole("heading", { name: "招待リンク" })).toBeNull();
 		});
 
 		it("メンバーを外したあとで、一覧を読み直せなくても、外した人は一覧から消す", async () => {

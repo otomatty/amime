@@ -272,7 +272,10 @@ export class PageDO extends DurableObject {
 		const [project = ""] = (this.ctx.id.name ?? "").split("/");
 		try {
 			const list = await exports.ProjectDO.getByName(project).revocations();
-			this.#revocations = { checked: now, list };
+			// 取り上げている途中の答えは、使い回さない(次の配信で、聞き直す)。
+			// 変更が断られたあとも、先の時刻のまま、つなぎ直した接続を閉じ続けないように。
+			const checked = list.some((item) => item.pending) ? Number.NEGATIVE_INFINITY : now;
+			this.#revocations = { checked, list };
 		} catch {
 			this.#revocations = null;
 		}

@@ -594,6 +594,36 @@ describe("権限がなくなった人の接続", () => {
 		own.socket.close();
 	});
 
+	it("取り上げている途中に、ページが台帳に聞いていても、断ったあとでつなぎ直した接続は、閉じない(途中の答えは、使い回さない)", async () => {
+		const { path, admin } = await project();
+		const second = await member(path, admin);
+		await send("PUT", `${path}/members/${second.id}`, admin, { role: "admin" });
+		const first = await watch(path, second, "second-1");
+		const id = await projectId(path);
+		// 台帳に覚えさせたあと、権限を変える前に、ページが台帳に聞く(コミットを配る)。そのあとで、もう1人の管理者が抜ける。
+		await replace(path, "revoke", async (proceed) => {
+			const operation = await proceed();
+			expect((await commit(path, first.id, admin)).status).toBe(200);
+			await env.DB.prepare("DELETE FROM members WHERE project = ? AND user = ?")
+				.bind(id, admin.id)
+				.run();
+			return operation;
+		});
+
+		expect((await send("DELETE", `${path}/members/${second.id}`, second)).status).toBe(409);
+		vi.restoreAllMocks();
+		// 途中に聞かれたので、そのときの接続は、1度閉じられる(変える前に覚えさせる以上、避けられない)。
+		await vi.waitFor(() => expect(first.closes).toEqual([4001]));
+
+		const again = await watch(path, second, "second-2");
+		const change = { type: "update", id: "t", text: "つなぎ直したあと" };
+		expect((await commit(path, again.id, second, change)).status).toBe(200);
+
+		await vi.waitFor(() => expect(commits(again.messages)).toHaveLength(1));
+		expect(again.closes).toEqual([]);
+		again.socket.close();
+	});
+
 	it("コミットがなくても、カーソルを配る前に、権限のなくなった人の接続を閉じる", async () => {
 		const { path, admin } = await project();
 		const leaving = await member(path, admin);
@@ -714,7 +744,7 @@ describe("権限がなくなった人の接続", () => {
 		expect((await call(`${path}/pages/${other.id}`, { as: admin })).status).toBe(410);
 	});
 
-	it("権限を取り上げ終えたことを、台帳に覚えさせられなくても、変更は成り立つ。接続は、1分の余裕をもって閉じる", async () => {
+	it("権限を取り上げ終えたことを、台帳に覚えさせられなくても、変更は成り立つ。接続は、5分の余裕をもって閉じる", async () => {
 		vi.useFakeTimers({ toFake: ["Date"] });
 		vi.setSystemTime(new Date("2026-07-01T00:00:00Z"));
 		const { path, admin } = await project("public");
@@ -729,11 +759,11 @@ describe("権限がなくなった人の接続", () => {
 		expect(removed.status).toBe(204);
 		expect(closed.status).toBe(200);
 		vi.restoreAllMocks();
-		const at = Date.parse("2026-07-01T00:01:00Z");
+		const at = Date.parse("2026-07-01T00:05:00Z");
 		const stub = exports.ProjectDO.getByName(await projectId(path));
 		expect(await stub.revocations()).toEqual([
-			{ subject: "*", at },
-			{ subject: leaving.id, at },
+			{ subject: "*", at, pending: true },
+			{ subject: leaving.id, at, pending: true },
 		]);
 	});
 
