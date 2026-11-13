@@ -301,4 +301,40 @@ describe("CompletionList(名前の候補の一覧)", () => {
 		// 既定の動作(フォーカスの移動)も止める。
 		expect(picked).toBe(false);
 	});
+
+	/** 内側の幅が 100px(それより右はスクロールバー)の一覧を、押したことを数える要素の中に出す。 */
+	function renderScrollable() {
+		const onPick = vi.fn();
+		const onOuterMouseDown = vi.fn();
+		render(
+			// biome-ignore lint/a11y/noStaticElementInteractions: 外側へ伝わらないことを確かめるための要素。
+			<div onMouseDown={onOuterMouseDown}>
+				<CompletionList id="list" titles={["買い物", "旅行"]} active={-1} onPick={onPick} />
+			</div>,
+		);
+		const list = screen.getByRole("listbox");
+		Object.defineProperty(list, "clientWidth", { value: 100 });
+		return { list, onPick, onOuterMouseDown };
+	}
+
+	it("一覧のスクロールバーを押しても、編集欄のカーソルは動かさない。スクロールは、ブラウザに任せる", () => {
+		const { list, onPick, onOuterMouseDown } = renderScrollable();
+
+		const allowed = fireEvent.mouseDown(list, { clientX: 104 });
+
+		expect(onOuterMouseDown).not.toHaveBeenCalled();
+		expect(onPick).not.toHaveBeenCalled();
+		// 既定の動作(スクロールバーをつかむ)は止めない。
+		expect(allowed).toBe(true);
+	});
+
+	it("一覧の余白を押しても、編集欄のカーソルは動かさず、フォーカスも外さない", () => {
+		const { list, onPick, onOuterMouseDown } = renderScrollable();
+
+		const allowed = fireEvent.mouseDown(list, { clientX: 2 });
+
+		expect(onOuterMouseDown).not.toHaveBeenCalled();
+		expect(onPick).not.toHaveBeenCalled();
+		expect(allowed).toBe(false);
+	});
 });

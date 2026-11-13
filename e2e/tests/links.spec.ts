@@ -148,4 +148,31 @@ test.describe("リンクでつながる", () => {
 		await expect(options).toHaveCount(0);
 		await expect(status(page)).toHaveText("保存済み");
 	});
+
+	test("候補の一覧の余白を押しても、候補は閉じない。編集欄のカーソルは、書いていたところから動かない", async ({
+		page,
+	}) => {
+		const token = randomUUID().slice(0, 8);
+		await createPage(page, `${token}_候補`, "中身");
+		// 候補の一覧が、下の行に重なるようにする(一覧を押したことが編集欄に伝わると、カーソルが下の行へ移る)。
+		await createPage(page, newPageName(), "", "下の行1", "下の行2", "下の行3");
+		await clickLineEnd(page, 1);
+		const list = page.getByRole("listbox", { name: "ページの名前の候補" });
+
+		await page.keyboard.type(`[${token} 候`);
+		await expect(async () => {
+			await page.keyboard.press("Backspace");
+			await page.keyboard.type("候");
+			await expect(list.getByRole("option")).toHaveCount(1, { timeout: 1000 });
+		}).toPass();
+		const box = await list.boundingBox();
+		if (!box) throw new Error("the list is not visible");
+		// 枠のすぐ内側(候補のない余白)を押す。
+		await page.mouse.click(box.x + 2, box.y + box.height / 2);
+
+		await expect(list).toBeVisible();
+		await page.keyboard.type("補");
+		await expect(page.getByTestId("line").nth(1)).toHaveAttribute("data-text", `[${token} 候補`);
+		await expect(page.getByTestId("line").nth(2)).toHaveAttribute("data-text", "下の行1");
+	});
 });

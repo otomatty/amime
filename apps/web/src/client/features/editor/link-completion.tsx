@@ -126,6 +126,12 @@ type CompletionListProps = {
 	readonly ref?: Ref<HTMLDivElement>;
 };
 
+/** 一覧のスクロールバーの上を押したか(内側の幅より右を押した)。 */
+function onScrollbar(list: HTMLElement, clientX: number): boolean {
+	const inner = list.getBoundingClientRect().left + list.clientLeft;
+	return clientX >= inner + list.clientWidth;
+}
+
 /** 名前の候補の一覧。フォーカスは編集欄に置いたまま、選んでいる候補を示す。 */
 export function CompletionList({ id, titles, active, onPick, ref }: CompletionListProps) {
 	// 選んでいる候補を、一覧の見えるところに入れる。フォーカスは編集欄に置いたままなので、
@@ -135,7 +141,19 @@ export function CompletionList({ id, titles, active, onPick, ref }: CompletionLi
 			document.getElementById(`${id}-${active}`)?.scrollIntoView({ block: "nearest" });
 	}, [id, active]);
 	return (
-		<div className="completion" id={id} ref={ref} role="listbox" aria-label="ページの名前の候補">
+		<div
+			className="completion"
+			id={id}
+			ref={ref}
+			role="listbox"
+			aria-label="ページの名前の候補"
+			onMouseDown={(event) => {
+				// 候補のほか(余白やスクロールバー)を押しても、編集欄のカーソルは動かさない。
+				event.stopPropagation();
+				// スクロールバーは、ブラウザに任せる(つかんで動かせる)。余白では、編集欄からフォーカスを外さない。
+				if (!onScrollbar(event.currentTarget, event.clientX)) event.preventDefault();
+			}}
+		>
 			{titles.map((title, index) => (
 				<div
 					className="completion-option"
