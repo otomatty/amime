@@ -105,7 +105,7 @@ function MemberRow({
 				<span className="project-visibility">{ROLE_LABELS[member.role]}</span>
 			)}
 			{(admin || self) && (
-				<button type="button" onClick={() => void remove()}>
+				<button type="button" className="danger" onClick={() => void remove()}>
 					{self ? "このプロジェクトから抜ける" : `${member.name} を外す`}
 				</button>
 			)}
@@ -157,7 +157,7 @@ function Invites({
 			<p>
 				リンクを受け取った人は、ログインすると、メンバーとして参加できます。リンクは、7日で使えなくなります。
 			</p>
-			<button type="button" disabled={creating} onClick={() => void create()}>
+			<button type="button" className="primary" disabled={creating} onClick={() => void create()}>
 				招待リンクを作る
 			</button>
 			{created !== null && (

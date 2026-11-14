@@ -1,39 +1,175 @@
+/*
+ * 見た目の方針は「静かな紙」(ADR-0036)。紙の色の地に、1段組み。色は、リンクの青緑を1つだけ使う。
+ * 色、角の丸み、部品の高さは、ここの変数から取る。
+ */
 :root {
 	--color-bg: #f4f1ea;
 	--color-paper: #fffdf8;
 	--color-text: #2b2a27;
-	--color-muted: #8a857a;
+	/* 補助の文字。紙の色の上で、読み取れる濃さ(コントラスト比 4.5 以上)にする。 */
+	--color-muted: #6b665c;
 	--color-link: #1f6f8b;
+	--color-link-strong: #16566d;
+	--color-on-link: #ffffff;
 	--color-code-bg: #efeae0;
 	--color-quote-bg: #f1eee6;
 	--color-label-bg: #57534a;
 	--color-label-text: #fffdf8;
+	/* 入力欄やボタンの枠。 */
 	--color-border: #d9d3c5;
+	/* 区切りの線と、カードの枠(枠より、少し薄い)。 */
+	--color-line: #e2dccf;
 	--color-selection: #bfdcf2;
 	--color-warning: #a4491f;
 	--color-mark: #f6e3a1;
 	--font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 	--indent-width: 1.5em;
+	--radius-control: 0.5rem;
+	--radius-card: 0.625rem;
+	--radius-sheet: 0.75rem;
+	/* ボタンと入力欄の高さ。小さいほうは、本文のそばに置く控えめなボタン。 */
+	--control-height: 2.5rem;
+	--control-height-small: 2.25rem;
+	/* 一覧の幅と、紙(本文、設定)の幅。 */
+	--content-width: 65rem;
+	--sheet-width: 50rem;
+	--gutter: 1.5rem;
 	color-scheme: light;
 	font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+}
+
+/* 狭い画面(スマートフォン)。指で押すので、部品を高くする。 */
+@media (max-width: 40rem) {
+	:root {
+		--control-height: 2.75rem;
+		--control-height-small: 2.75rem;
+		--gutter: 1rem;
+	}
 }
 
 body {
 	margin: 0;
 	background: var(--color-bg);
 	color: var(--color-text);
+	line-height: 1.7;
 }
 
-.app {
-	max-width: 48rem;
-	margin: 0 auto;
-	padding: 2rem 1rem;
+a {
+	color: var(--color-link);
+	text-decoration: none;
 }
 
-.page {
+a:hover {
+	color: var(--color-link-strong);
+	text-decoration: underline;
+	text-underline-offset: 0.2em;
+}
+
+/* 文の中のリンクは、色だけに頼らず、下線でも示す。 */
+.page-message a {
+	text-decoration: underline;
+	text-underline-offset: 0.2em;
+}
+
+:focus-visible {
+	outline: 2px solid var(--color-link);
+	outline-offset: 2px;
+}
+
+button,
+input,
+select {
+	box-sizing: border-box;
+	min-height: var(--control-height);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-control);
 	background: var(--color-paper);
-	border-radius: 0.5rem;
-	padding: 1.5rem 2rem;
+	color: var(--color-text);
+	font: inherit;
+	font-size: 0.875rem;
+}
+
+input,
+select {
+	max-width: 100%;
+	padding: 0 0.75rem;
+}
+
+input:focus-visible,
+select:focus-visible {
+	border-color: var(--color-link);
+	outline-offset: 0;
+}
+
+button {
+	padding: 0 0.9rem;
+	cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+	border-color: var(--color-link);
+	color: var(--color-link);
+}
+
+button:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
+/* その画面の、主な操作(作る、保存する、参加する)。 */
+button[type="submit"],
+button.primary {
+	border-color: var(--color-link);
+	background: var(--color-link);
+	color: var(--color-on-link);
+	font-weight: 700;
+}
+
+button[type="submit"]:hover:not(:disabled),
+button.primary:hover:not(:disabled) {
+	border-color: var(--color-link-strong);
+	background: var(--color-link-strong);
+	color: var(--color-on-link);
+}
+
+/* 元に戻せない操作(削除、メンバーを外す)。 */
+button.danger {
+	border-color: var(--color-warning);
+	color: var(--color-warning);
+}
+
+button.danger:hover:not(:disabled) {
+	border-color: var(--color-warning);
+	background: var(--color-warning);
+	color: var(--color-on-link);
+}
+
+/* 紙。ページの本文を載せる。 */
+.page {
+	padding: 1.75rem clamp(1.25rem, 5vw, 3.5rem) 3rem;
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-sheet);
+	background: var(--color-paper);
+	font-size: 1rem;
+}
+
+/* 画面の枠。ヘッダーは、端から端まで。中身は、幅を決めて、まんなかに置く。 */
+.app {
+	min-height: 100vh;
+	padding: 0 var(--gutter) 4rem;
+	font-size: 0.9375rem;
+}
+
+.app > :not(.app-header) {
+	box-sizing: border-box;
+	max-width: var(--content-width);
+	margin-right: auto;
+	margin-left: auto;
+}
+
+.app > .page,
+.app > .project-home {
+	max-width: var(--sheet-width);
 }
 
 .app-header {
@@ -41,15 +177,43 @@ body {
 	flex-wrap: wrap;
 	gap: 0.5rem 1rem;
 	align-items: center;
-	justify-content: space-between;
-	margin-bottom: 1rem;
+	/* ログインの状態は、あとから出る。出たときに、下の中身が動かないように、高さを先に取っておく。 */
+	box-sizing: border-box;
+	min-height: calc(var(--control-height) + 1.5rem + 1px);
+	margin: 0 calc(var(--gutter) * -1) 2rem;
+	padding: 0.75rem var(--gutter);
+	border-bottom: 1px solid var(--color-line);
 }
 
+/* 「Amime / プロジェクト」。左は名前、右はいま開いているプロジェクト。 */
 .app-title {
+	display: flex;
+	gap: 0.6rem;
+	align-items: baseline;
+	min-width: 0;
 	margin: 0;
+	color: var(--color-muted);
+	font-size: 1.0625rem;
+	font-weight: 400;
+	line-height: 1.4;
 }
 
 .app-title a {
-	color: inherit;
+	color: var(--color-text);
+	font-weight: 700;
+	letter-spacing: 0.04em;
 	text-decoration: none;
+	overflow-wrap: anywhere;
+}
+
+.app-title a + a {
+	font-size: 0.9375rem;
+	font-weight: 500;
+	letter-spacing: 0;
+}
+
+/* 紙に載せた文の中のリンクも、下線で示す。 */
+.project-home p a {
+	text-decoration: underline;
+	text-underline-offset: 0.2em;
 }
