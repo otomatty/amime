@@ -3,7 +3,9 @@
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.5rem 0.75rem;
+	flex: none;
 	align-items: center;
+	max-width: 100%;
 	margin-left: auto;
 	font-size: 0.875rem;
 }
@@ -19,8 +21,13 @@
 	align-items: center;
 }
 
+/* 長い表示名は、途中で切る(ヘッダーを、折り返させない)。 */
 .account-user a {
+	max-width: 10rem;
+	overflow: hidden;
 	color: var(--color-text);
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .account-picture {
@@ -119,6 +126,10 @@
 @media (max-width: 40rem) {
 	.account {
 		gap: 0.25rem;
+	}
+
+	.account-user a {
+		max-width: 6rem;
 	}
 
 	.title-search + .account {

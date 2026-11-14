@@ -54,7 +54,14 @@ test.describe("画面の配置(ADR-0036)", () => {
 		await expectNoSidewaysScroll(page);
 
 		await page.goto("/e2e/");
-		await expect(page.getByRole("region", { name: "ページの一覧" })).toBeVisible();
+		// 一覧を読み込み終えて、幅の広いページのカードが並んでから測る(保存してから一覧に載るまで、少し間がある)。
+		const list = page.getByRole("region", { name: "ページの一覧" });
+		await expect(async () => {
+			await page.reload();
+			await expect(list.getByRole("link", { name: new RegExp(title) })).toBeVisible({
+				timeout: 1000,
+			});
+		}).toPass();
 		await expectNoSidewaysScroll(page);
 
 		await page.goto(`/e2e/${title}`);
@@ -82,29 +89,39 @@ test.describe("画面の配置(ADR-0036)", () => {
 		expect(header?.height).toBeLessThan(72);
 	});
 
-	test("ログインの状態が出る前と後で、ヘッダーの高さが変わらない(下の中身が、動かない)", async ({
-		page,
-	}) => {
-		await page.setViewportSize(DESKTOP);
-		// ログインの状態の応答を、止めておく。
-		let release: () => void = () => {};
-		const held = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		await page.route("**/api/me", async (route) => {
-			await held;
-			await route.continue();
-		});
-		await page.goto("/?playground");
-		await expect(page.getByTestId("line").first()).toBeVisible();
-		const before = await page.locator(".app-header").boundingBox();
+	for (const [name, viewport] of [
+		["パソコンの幅", DESKTOP],
+		["スマートフォンの幅", PHONE],
+	] as const) {
+		test(`ログインの状態が出る前と後で、ヘッダーの高さが変わらない(下の中身が、動かない。名前が長くても。${name})`, async ({
+			page,
+		}) => {
+			// 名前の長さの上限(40文字)のプロジェクト。
+			const project = `p${randomUUID()}xyz`;
+			const created = await page.request.post("/api/projects", { data: { name: project } });
+			expect(created.status()).toBe(201);
+			await page.setViewportSize(viewport);
+			// ログインの状態の応答を、止めておく。
+			let release: () => void = () => {};
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			await page.route("**/api/me", async (route) => {
+				await held;
+				await route.continue();
+			});
+			await page.goto(`/${project}/`);
+			await expect(page.getByRole("link", { name: project })).toBeVisible();
+			const before = await page.locator(".app-header").boundingBox();
 
-		release();
-		await expect(page.getByRole("button", { name: "ログアウト" })).toBeVisible();
+			release();
+			await expect(page.getByRole("button", { name: "ログアウト" })).toBeVisible();
 
-		const after = await page.locator(".app-header").boundingBox();
-		expect(after?.height).toBe(before?.height);
-	});
+			const after = await page.locator(".app-header").boundingBox();
+			expect(after?.height).toBe(before?.height);
+			await expectNoSidewaysScroll(page);
+		});
+	}
 
 	test("ボタンと入力欄は、押しやすい高さにする(パソコンで36px以上、スマートフォンの幅で44px以上)", async ({
 		page,

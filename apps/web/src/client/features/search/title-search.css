@@ -2,8 +2,14 @@
 .title-search {
 	position: relative;
 	flex: 1 1 15rem;
+	min-width: 8rem;
 	max-width: 24rem;
 	margin-left: auto;
+}
+
+/* 探せるかが分かるまでの、場所だけの枠。欄と同じ高さにする。 */
+.title-search[data-pending] {
+	min-height: var(--control-height);
 }
 
 /* 左に、虫めがねの印を置く。 */

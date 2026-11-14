@@ -53,6 +53,33 @@ describe("TitleSearch(名前でページを探す)", () => {
 		expect(screen.queryByRole("combobox")).toBeNull();
 	});
 
+	it("探せるかが分かるまでは、欄の場所だけを取っておく(あとから出て、下の中身を動かさない)", async () => {
+		let answer: (response: Response) => void = () => {};
+		stubTitles(
+			() =>
+				new Promise<Response>((resolve) => {
+					answer = resolve;
+				}),
+		);
+
+		const { container } = render(<TitleSearch />);
+
+		await waitFor(() => expect(container.querySelector(".title-search")).not.toBeNull());
+		expect(screen.queryByRole("combobox")).toBeNull();
+		answer(json({ titles: [] }));
+		expect(await screen.findByRole("combobox")).toBeDefined();
+		expect(container.querySelectorAll(".title-search")).toHaveLength(1);
+	});
+
+	it("探せないと分かったら、取っておいた場所も、なくす", async () => {
+		stubTitles(() => json({ error: "unknown-project" }, 404));
+
+		const { container } = render(<TitleSearch />);
+
+		await waitFor(() => expect(container.querySelector(".title-search")).toBeNull());
+		expect(screen.queryByRole("combobox")).toBeNull();
+	});
+
 	it("入力するたびに、合う名前の候補を出す。いちばん合う候補を選んだ状態にする", async () => {
 		stubTitles((query) => json({ titles: query === "買" ? ["買い物", "買い物 メモ"] : [] }));
 		await renderSearch();

@@ -39,8 +39,8 @@ export function TitleSearch({
 	navigate = (href) => window.location.assign(href),
 }: TitleSearchProps) {
 	const [query, setQuery] = useState(queryFromUrl);
-	// 探す欄を出すか。ページのAPIが使えると分かるまでは、出さない。
-	const [available, setAvailable] = useState(false);
+	// 探す欄を出すか。ページのAPIが使えるかが分かるまでは、null(欄の場所だけを取っておく)。
+	const [available, setAvailable] = useState<boolean | null>(null);
 	const [found, setFound] = useState<Found>({ query: "", titles: [] });
 	const [open, setOpen] = useState(false);
 	const [active, setActive] = useState(0);
@@ -62,7 +62,7 @@ export function TitleSearch({
 				(error: unknown) => {
 					// 探せないプロジェクト(権限がない、ない)でなければ、欄は出す。
 					// 探すのに失敗しただけなら、次の入力でまた探す。
-					if (!(error instanceof PageApiError && UNSEARCHABLE.has(error.kind))) setAvailable(true);
+					setAvailable(!(error instanceof PageApiError && UNSEARCHABLE.has(error.kind)));
 				},
 			);
 		// 最初(何も入力していないとき)は、待たずに探す。ページのAPIが使えるかも、ここで分かる。
@@ -76,6 +76,8 @@ export function TitleSearch({
 		if (open) document.getElementById(`${listId}-${active}`)?.scrollIntoView({ block: "nearest" });
 	}, [open, active, listId]);
 
+	// 分かるまでは、欄と同じ大きさの場所を取っておく。あとから欄が出て、下の中身を動かさない(ADR-0036)。
+	if (available === null) return <div className="title-search" data-pending />;
 	if (!available) return null;
 
 	// いまの入力への候補だけを見せる(前の入力への候補を、いまの入力の候補として見せない)。

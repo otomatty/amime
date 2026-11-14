@@ -174,10 +174,12 @@ button.danger:hover:not(:disabled) {
 
 .app-header {
 	display: flex;
-	flex-wrap: wrap;
 	gap: 0.5rem 1rem;
 	align-items: center;
-	/* ログインの状態は、あとから出る。出たときに、下の中身が動かないように、高さを先に取っておく。 */
+	/*
+	 * ログインの状態は、あとから出る。出たときに、下の中身が動かないようにする。
+	 * 高さを先に取っておき、段を折り返さない(長い名前は、途中で切って「…」にする)。
+	 */
 	box-sizing: border-box;
 	min-height: calc(var(--control-height) + 1.5rem + 1px);
 	margin: 0 calc(var(--gutter) * -1) 2rem;
@@ -188,6 +190,7 @@ button.danger:hover:not(:disabled) {
 /* 「Amime / プロジェクト」。左は名前、右はいま開いているプロジェクト。 */
 .app-title {
 	display: flex;
+	flex: 0 1 auto;
 	gap: 0.6rem;
 	align-items: baseline;
 	min-width: 0;
@@ -203,13 +206,32 @@ button.danger:hover:not(:disabled) {
 	font-weight: 700;
 	letter-spacing: 0.04em;
 	text-decoration: none;
-	overflow-wrap: anywhere;
+	white-space: nowrap;
 }
 
+/* プロジェクトの名前。長ければ、途中で切る。 */
 .app-title a + a {
+	min-width: 0;
+	overflow: hidden;
 	font-size: 0.9375rem;
 	font-weight: 500;
 	letter-spacing: 0;
+	text-overflow: ellipsis;
+}
+
+/*
+ * 狭い画面では、2段にする。上の段に、名前とログインの状態。下の段に、探す欄。
+ * 上の段の高さは、ログインの状態が出る前から、部品の高さにそろえておく。
+ */
+@media (max-width: 40rem) {
+	.app-header {
+		flex-wrap: wrap;
+	}
+
+	.app-title {
+		flex: 1 1 0;
+		line-height: var(--control-height);
+	}
 }
 
 /* 紙に載せた文の中のリンクも、下線で示す。 */
