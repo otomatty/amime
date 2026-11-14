@@ -1,12 +1,12 @@
 name: CI
 
+# PRごとに、検査を一通り行う。main に入ったあとの検査は、Deploy(deploy.yml)が、このファイルを呼んで行う。
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -93,14 +93,15 @@ jobs:
       # 開発用のログインを使えるE2E用のビルド(--mode e2e)を作ってから実行する。
       - run: pnpm test:e2e
 
-  # 以下の2つは、リポジトリ変数 DEPLOY_ENABLED が "true" のときだけ動く。
-  # 有効にする手順は docs/deploy.md を参照。
+  # PRの内容を、プレビュー環境(ブランチ名のURL)に出す。リポジトリ変数 PREVIEW_ENABLED が "true" のときだけ動く。
+  # 既定では、動かさない(docs/deploy.md の 5)。フォークと Dependabot のPRには、シークレットが渡らないので、対象にしない。
   preview:
     name: プレビュー環境へデプロイ
     if: >-
       github.event_name == 'pull_request' &&
-      vars.DEPLOY_ENABLED == 'true' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      vars.PREVIEW_ENABLED == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
     needs: [static, unit, server, build, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -109,39 +110,5 @@ jobs:
       - uses: ./.github/actions/setup
       - run: pnpm --filter @amime/web exec cf previews deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-  deploy:
-    name: 本番へデプロイ
-    if: >-
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      vars.DEPLOY_ENABLED == 'true'
-    needs: [static, unit, server, build, e2e]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment: production
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-      - run: pnpm build
-      # ログインとプロジェクトの設定を、シークレットのファイルにする(docs/deploy.md の 3)。
-      # 登録していない値は、空になる(その機能は、使えないままになる)。
-      - name: シークレットのファイルを用意
-        run: |
-          jq -n --arg id "$GOOGLE_CLIENT_ID" --arg secret "$GOOGLE_CLIENT_SECRET" --arg creators "$PROJECT_CREATORS" \
-            '{ GOOGLE_CLIENT_ID: $id, GOOGLE_CLIENT_SECRET: $secret, PROJECT_CREATORS: $creators }' > "$SECRETS_FILE"
-        env:
-          SECRETS_FILE: ${{ runner.temp }}/secrets.json
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          PROJECT_CREATORS: ${{ secrets.PROJECT_CREATORS }}
-      - run: pnpm --filter @amime/web exec cf deploy --prebuilt --mode production --secrets-file "$SECRETS_FILE"
-        env:
-          SECRETS_FILE: ${{ runner.temp }}/secrets.json
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
