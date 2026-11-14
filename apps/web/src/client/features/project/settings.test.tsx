@@ -104,6 +104,22 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 	});
 
 	describe("管理者", () => {
+		it("主な操作(招待リンクを作る)と、元に戻せない操作(外す、抜ける)を、見分けられるようにする(ADR-0036)", async () => {
+			stubServer();
+			renderSettings();
+
+			const create = await screen.findByRole("button", { name: "招待リンクを作る" });
+			const remove = screen.getByRole("button", { name: "太郎 を外す" });
+			const leave = screen.getByRole("button", { name: "このプロジェクトから抜ける" });
+
+			expect(create.classList.contains("primary")).toBe(true);
+			expect(remove.classList.contains("danger")).toBe(true);
+			expect(leave.classList.contains("danger")).toBe(true);
+			// 招待リンクを無効にするのは、ふつうの操作(作り直せる)。
+			const revoke = screen.queryByRole("button", { name: "無効にする" });
+			expect(revoke?.classList.contains("danger") ?? false).toBe(false);
+		});
+
 		it("公開範囲を変えられる", async () => {
 			const server = stubServer();
 			renderSettings();

@@ -46,6 +46,15 @@ function renderInvite() {
 }
 
 describe("InvitePage(招待リンクを開いたときの画面)", () => {
+	it("「参加する」は、この画面の主な操作として見せる(ADR-0036)", async () => {
+		stubServer();
+		renderInvite();
+
+		const join = await screen.findByRole("button", { name: "参加する" });
+
+		expect(join.classList.contains("primary")).toBe(true);
+	});
+
 	it("招待先を確かめて、だれとして参加するかを示す。参加すると、プロジェクトへ移る", async () => {
 		const requests = stubServer();
 		const navigate = renderInvite();
