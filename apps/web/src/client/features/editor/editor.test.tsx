@@ -525,6 +525,62 @@ describe("Editor", () => {
 			expect(lines()).toEqual([" abc"]);
 		});
 
+		describe("入力を受け取る欄の位置(変換候補を、カーソルの近くに出す)", () => {
+			/** カーソルと編集欄の、画面の上での位置を決める(jsdom は、配置を計算しない)。 */
+			function placeAt(
+				caret: { top: number; left: number },
+				editor: { top: number; left: number },
+			) {
+				vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+					this: Element,
+				) {
+					const at = this.classList.contains("caret")
+						? { ...caret, width: 0, height: 16 }
+						: this.classList.contains("editor")
+							? { ...editor, width: 600, height: 400 }
+							: { top: 0, left: 0, width: 0, height: 0 };
+					return { ...at, x: at.left, y: at.top, right: at.left, bottom: at.top } as DOMRect;
+				});
+			}
+			it("カーソルの、画面に見えている位置に重ねる(表の中で横に動かしたぶんも、数える)", () => {
+				render(<Editor initialLines={["abc"]} />);
+				// 編集欄は (100, 50) にあり、カーソルは、その 30px 下、20px 右に見えている。
+				placeAt({ top: 80, left: 120 }, { top: 50, left: 100 });
+
+				clickChar(0, 1);
+
+				expect(input().style.top).toBe("30px");
+				expect(input().style.left).toBe("20px");
+			});
+
+			it("編集欄の中で、何かが横や縦に動かされたら(幅の広い表)、重ね直す", () => {
+				render(<Editor initialLines={["abc"]} />);
+				placeAt({ top: 80, left: 120 }, { top: 50, left: 100 });
+				clickChar(0, 1);
+
+				// 表が左へ 70px 動いて、カーソルも、そのぶん左に見える。
+				placeAt({ top: 80, left: 50 }, { top: 50, left: 100 });
+				fireEvent.scroll(screen.getByTestId("line"));
+
+				expect(input().style.left).toBe("-50px");
+			});
+
+			it("先に、カーソルが見える位置までスクロールしてから、位置を測る", () => {
+				render(<Editor initialLines={["abc"]} />);
+				clickChar(0, 0);
+				placeAt({ top: 80, left: 120 }, { top: 50, left: 100 });
+				// スクロールすると、カーソルの見える位置が変わる。
+				vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {
+					placeAt({ top: 60, left: 110 }, { top: 50, left: 100 });
+				});
+
+				press("ArrowRight");
+
+				expect(input().style.top).toBe("10px");
+				expect(input().style.left).toBe("10px");
+			});
+		});
+
 		it("キー操作のあと、カーソルが見える位置までスクロールする", () => {
 			const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
 			render(<Editor initialLines={["abc"]} />);

@@ -134,6 +134,40 @@ test.describe("画面の配置(ADR-0036)", () => {
 		}
 	});
 
+	test("幅の広い表を横に動かしても、入力を受け取る欄は、カーソルに重なっている(変換候補が、離れた所に出ない)", async ({
+		page,
+	}) => {
+		const title = await createWidePage(page);
+		await page.setViewportSize(PHONE);
+		await page.goto(`/e2e/${title}`);
+		const row = page.getByTestId("line").nth(4);
+		await expect(row).toBeVisible();
+		const table = page.locator(".table-block");
+		/** カーソルと、入力を受け取る欄の、横の位置の差。 */
+		const gap = async () => {
+			const caret = await page.getByTestId("caret").boundingBox();
+			const input = await page.getByLabel("ページの本文").boundingBox();
+			if (!caret || !input) throw new Error("the caret is not shown");
+			return Math.abs(input.x - caret.x);
+		};
+
+		// 最初のセルを押してから、行末(右端のセル)へ移る。表が、その枠の中で、右へ動く。
+		const box = await row.boundingBox();
+		if (!box) throw new Error("the row is not visible");
+		await page.mouse.click(box.x + 40, box.y + box.height / 2);
+		await page.keyboard.press("End");
+
+		await expect.poll(() => table.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+		expect(await gap()).toBeLessThan(4);
+
+		// 表を、手で左端へ戻す。カーソルは右へ隠れるが、欄は、カーソルに付いていく。
+		await table.evaluate((element) => {
+			element.scrollLeft = 0;
+		});
+
+		await expect.poll(gap).toBeLessThan(4);
+	});
+
 	test("ページでは、保存の状態と、ページの操作が、本文の上の1段に並ぶ", async ({ page }) => {
 		const title = await createWidePage(page);
 		await page.setViewportSize(DESKTOP);
