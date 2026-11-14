@@ -20,6 +20,7 @@ import {
 	type CompositionEvent,
 	type KeyboardEvent,
 	type MouseEvent,
+	useCallback,
 	useEffect,
 	useId,
 	useLayoutEffect,
@@ -196,27 +197,50 @@ export function Editor({
 		dispatch({ type: "edit", command, group, at: Date.now() });
 	};
 
-	useLayoutEffect(() => {
-		const input = inputRef.current;
-		const caret = rootRef.current?.querySelector<HTMLElement>(".caret");
-		if (!input || !caret) return;
-		// 変換候補のウィンドウがカーソルの近くに出るよう、textarea をカーソルの位置に重ねる。
-		input.style.top = `${caret.offsetTop}px`;
-		input.style.left = `${caret.offsetLeft}px`;
-		// 名前の候補は、カーソルのすぐ下に出す。編集欄の右端からは、はみ出させない。
-		const list = completionRef.current;
+	/**
+	 * 入力を受け取る欄(textarea)と、名前の候補を、カーソルの位置に重ねる。
+	 * 位置は、画面に見えているカーソルと、編集欄の左上との差で測る。幅の広い表は、表の枠の中で横に動く(ADR-0036)。
+	 * その動いたぶんは、画面の上での位置には入っているが、offsetLeft には入らない。
+	 */
+	const placeOverlays = useCallback(() => {
 		const root = rootRef.current;
-		if (list && root) {
+		const input = inputRef.current;
+		const caret = root?.querySelector<HTMLElement>(".caret");
+		if (!root || !input || !caret) return;
+		const at = caret.getBoundingClientRect();
+		const base = root.getBoundingClientRect();
+		const top = at.top - base.top;
+		const left = at.left - base.left;
+		// 変換候補のウィンドウがカーソルの近くに出るよう、textarea をカーソルの位置に重ねる。
+		input.style.top = `${top}px`;
+		input.style.left = `${left}px`;
+		// 名前の候補は、カーソルのすぐ下に出す。編集欄の左右の端からは、はみ出させない。
+		const list = completionRef.current;
+		if (list) {
 			const room = Math.max(root.clientWidth - list.offsetWidth, 0);
-			list.style.top = `${caret.offsetTop + caret.offsetHeight}px`;
-			list.style.left = `${Math.min(caret.offsetLeft, room)}px`;
+			list.style.top = `${top + at.height}px`;
+			list.style.left = `${Math.min(Math.max(left, 0), room)}px`;
 		}
+	}, []);
+
+	useLayoutEffect(() => {
+		const caret = rootRef.current?.querySelector<HTMLElement>(".caret");
 		// キー操作は既定の動作を止めているため、ブラウザは自動でスクロールしない。代わりに行う。
-		if (focused && revealCaret.current) {
+		// 位置を測るより、先に行う(スクロールすると、カーソルの見える位置が変わる)。
+		if (caret && focused && revealCaret.current) {
 			caret.scrollIntoView({ block: "nearest", inline: "nearest" });
 		}
 		revealCaret.current = false;
+		placeOverlays();
 	});
+
+	// 編集欄の中で、何か(幅の広い表)が動かされたら、重ね直す。scroll は親へ伝わらないので、伝わる前の段階で受ける。
+	useEffect(() => {
+		const root = rootRef.current;
+		if (!root) return;
+		root.addEventListener("scroll", placeOverlays, true);
+		return () => root.removeEventListener("scroll", placeOverlays, true);
+	}, [placeOverlays]);
 
 	// 画面から外れるときに、ドラッグの監視が残らないようにする。
 	useEffect(() => () => stopDrag.current?.(), []);

@@ -357,23 +357,26 @@ function PageEditor({
 
 	return (
 		<>
-			{!readOnly && !WITHOUT_TOOLS.has(status) && (
-				<PageTools id={info.id} pinned={pinned} onPinned={setPinned} />
-			)}
-			{/* 削除されたことは、読むだけの表示でも伝える(本文は、最後の写しとして残っている)。 */}
-			{readOnly && status !== "deleted" ? (
-				<p className="page-status" role="status" data-status="read-only">
-					読むだけの表示です。書き込めるのは、このプロジェクトのメンバーだけです
+			{/* 本文の上の1段。左に、保存の状態と接続の状態。右に、ページの操作(ADR-0036)。 */}
+			<div className="page-bar">
+				{/* 削除されたことは、読むだけの表示でも伝える(本文は、最後の写しとして残っている)。 */}
+				{readOnly && status !== "deleted" ? (
+					<p className="page-status" role="status" data-status="read-only">
+						読むだけの表示です。書き込めるのは、このプロジェクトのメンバーだけです
+					</p>
+				) : (
+					<p className="page-status" role="status" data-status={status}>
+						{STATUS_LABELS[status]}
+					</p>
+				)}
+				{/* 保存の状態とは別に示す。切れていても、書いたものは端末内に残り、つながったら送られる。 */}
+				<p className="page-connection" data-testid="connection" data-connection={connection}>
+					{CONNECTION_LABELS[connection]}
 				</p>
-			) : (
-				<p className="page-status" role="status" data-status={status}>
-					{STATUS_LABELS[status]}
-				</p>
-			)}
-			{/* 保存の状態(上)とは別に示す。切れていても、書いたものは端末内に残り、つながったら送られる。 */}
-			<p className="page-connection" data-testid="connection" data-connection={connection}>
-				{CONNECTION_LABELS[connection]}
-			</p>
+				{!readOnly && !WITHOUT_TOOLS.has(status) && (
+					<PageTools id={info.id} pinned={pinned} onPinned={setPinned} />
+				)}
+			</div>
 			{named.problem !== null && (
 				<p className="page-notice" role="note" data-testid="title-problem">
 					{TITLE_PROBLEMS[named.problem]}

@@ -79,7 +79,7 @@ export function InvitePage({
 			) : (
 				<>
 					<p>{user.name} として、このプロジェクトに参加します。</p>
-					<button type="button" onClick={() => void join()}>
+					<button type="button" className="primary" onClick={() => void join()}>
 						参加する
 					</button>
 				</>

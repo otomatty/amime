@@ -540,6 +540,34 @@ describe("Page", () => {
 		});
 	});
 
+	describe("本文の上の段(ADR-0036)", () => {
+		it("保存の状態、接続の状態、ページの操作を、1つのまとまりに並べる", async () => {
+			stubFetch(() => json(saved), { pinned: true });
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			const bar = screen.getByRole("status").parentElement;
+			expect(bar?.className).toBe("page-bar");
+			expect(bar?.contains(screen.getByTestId("connection"))).toBe(true);
+			expect(bar?.contains(screen.getByRole("button", { name: "このページを削除" }))).toBe(true);
+			// 本文は、その段の外(下)にある。
+			expect(bar?.contains(screen.getByTestId("editor"))).toBe(false);
+		});
+
+		it("読むだけの表示でも、状態は、同じ段に出す(操作は、出さない)", async () => {
+			stubFetch(() => json(saved));
+
+			render(<Page name="買い物" readOnly />);
+
+			await waitFor(() => expect(lines()).toEqual(["買い物"]));
+			const bar = screen.getByRole("status").parentElement;
+			expect(bar?.className).toBe("page-bar");
+			expect(bar?.contains(screen.getByTestId("connection"))).toBe(true);
+			expect(bar?.querySelector("button")).toBeNull();
+		});
+	});
+
 	describe("固定と削除(ADR-0026)", () => {
 		it("保存されているページでは、固定と削除の操作を出す。固定しているかどうかが分かる", async () => {
 			stubFetch(() => json(saved), { pinned: true });
