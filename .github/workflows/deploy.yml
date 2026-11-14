@@ -36,7 +36,20 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
+      # 検査に時間がかかっているあいだに、もっと新しいコミットが main に入り、先に本番へ出ていることがある。
+      # 古いコミットで、新しいものを上書きしないように、main の先頭のコミットのときだけ、出す。
+      - name: main の先頭のコミットか
+        id: tip
+        run: |
+          git fetch --quiet origin main
+          if [ "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA" ]; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main に、もっと新しいコミットがあります。このコミット(${GITHUB_SHA::12})は、本番へ出しません"
+          fi
       - name: Cloudflare に入るための値が、そろっているか
+        if: steps.tip.outputs.latest == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -57,13 +70,17 @@ jobs:
           [ -n "$PROJECT_CREATORS" ] ||
             echo "::warning::PROJECT_CREATORS が登録されていません。誰もプロジェクトを作れないまま、デプロイします(docs/deploy.md の 3)"
       - uses: ./.github/actions/setup
+        if: steps.tip.outputs.latest == 'true'
       - run: pnpm build
+        if: steps.tip.outputs.latest == 'true'
       # 開発用のログイン(名前を入れるだけでログインできる)は、公開環境では無効にする(ADR-0032)。
       - name: 本番用のビルドで開発用のログインが無効であることを確認
+        if: steps.tip.outputs.latest == 'true'
         run: grep -q '"DEV_LOGIN":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
       # ログインとプロジェクトの設定を、シークレットのファイルにする(docs/deploy.md の 3)。
       # 登録していない値は、空になる(その機能は、使えないままになる)。
       - name: シークレットのファイルを用意
+        if: steps.tip.outputs.latest == 'true'
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -74,6 +91,7 @@ jobs:
             '{ GOOGLE_CLIENT_ID: $id, GOOGLE_CLIENT_SECRET: $secret, PROJECT_CREATORS: $creators }' > "$RUNNER_TEMP/amime-secrets.json"
       # どのコミットを出したかが、Cloudflare の側でも分かるように、印(コミットの先頭12文字)と件名を付ける。
       - name: Cloudflare へデプロイ
+        if: steps.tip.outputs.latest == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -86,6 +104,7 @@ jobs:
         run: rm -f "$RUNNER_TEMP/amime-secrets.json"
       # 出したものが、応えるかを確かめる。本番のURLは、リポジトリ変数 APP_URL に入れておく(docs/deploy.md の 4)。
       - name: 本番が応えるかを確認
+        if: steps.tip.outputs.latest == 'true'
         env:
           APP_URL: ${{ vars.APP_URL }}
         run: |
@@ -104,6 +123,7 @@ jobs:
               ;;
           esac
       - name: 結果をまとめる
+        if: steps.tip.outputs.latest == 'true'
         env:
           APP_URL: ${{ vars.APP_URL }}
         run: |
