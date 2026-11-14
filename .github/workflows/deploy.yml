@@ -20,11 +20,35 @@ jobs:
     name: 検査
     uses: ./.github/workflows/ci.yml
 
-  # リポジトリ変数 DEPLOY_ENABLED が "true" のときだけ動く。
-  production:
-    name: 本番へデプロイ
+  # ここから下は、リポジトリ変数 DEPLOY_ENABLED が "true" のときだけ動く。
+
+  # 本番へ出す順番を待つ列には、main の先頭のコミットだけを入れる。
+  # 列で待てるのは1つだけで、あとから来たものが、待っているものを押しのける。検査が遅れて終わった古いコミットを
+  # 列に入れると、待っていた新しいコミットが取り消され、どちらも出ないままになる。
+  tip:
+    name: main の先頭のコミットか
     needs: checks
     if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      latest: ${{ steps.tip.outputs.latest }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: tip
+        run: |
+          git fetch --quiet origin main
+          if [ "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA" ]; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main に、もっと新しいコミットがあります。このコミット(${GITHUB_SHA::12})は、本番へ出しません"
+          fi
+
+  production:
+    name: 本番へデプロイ
+    needs: [checks, tip]
+    if: needs.tip.outputs.latest == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
@@ -36,9 +60,8 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
-      # 検査に時間がかかっているあいだに、もっと新しいコミットが main に入り、先に本番へ出ていることがある。
-      # 古いコミットで、新しいものを上書きしないように、main の先頭のコミットのときだけ、出す。
-      - name: main の先頭のコミットか
+      # 列で待っているあいだに、もっと新しいコミットが main に入っていることがある。出す直前に、もう一度確かめる。
+      - name: いまも、main の先頭のコミットか
         id: tip
         run: |
           git fetch --quiet origin main
