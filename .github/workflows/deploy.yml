@@ -1,0 +1,115 @@
+name: Deploy
+
+# main に入った変更を、検査してから、Cloudflare の本番へ出す(ADR-0037)。
+# 手順と、用意する値は、docs/deploy.md を参照。
+on:
+  push:
+    branches: [main]
+  # 手で動かす(シークレットを登録し直したあとに、同じ内容を出し直すとき)。
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CF_SEND_TELEMETRY: "false"
+
+jobs:
+  # PRと同じ検査を、main の内容でも行う。通らなければ、本番へは出さない。
+  checks:
+    name: 検査
+    uses: ./.github/workflows/ci.yml
+
+  # リポジトリ変数 DEPLOY_ENABLED が "true" のときだけ動く。
+  production:
+    name: 本番へデプロイ
+    needs: checks
+    if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    # 本番へのデプロイは、1つずつ順に行う。途中のものを、取り消さない。
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cloudflare に入るための値が、そろっているか
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          PROJECT_CREATORS: ${{ secrets.PROJECT_CREATORS }}
+        run: |
+          missing=()
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing+=(CLOUDFLARE_API_TOKEN)
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || missing+=(CLOUDFLARE_ACCOUNT_ID)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::デプロイに必要なシークレットが、登録されていません: ${missing[*]}(docs/deploy.md の 2)"
+            exit 1
+          fi
+          # なくてもデプロイはできるが、その機能が使えないままになる値。
+          [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ] ||
+            echo "::warning::GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET が登録されていません。Google でログインできないまま、デプロイします(docs/deploy.md の 3)"
+          [ -n "$PROJECT_CREATORS" ] ||
+            echo "::warning::PROJECT_CREATORS が登録されていません。誰もプロジェクトを作れないまま、デプロイします(docs/deploy.md の 3)"
+      - uses: ./.github/actions/setup
+      - run: pnpm build
+      # 開発用のログイン(名前を入れるだけでログインできる)は、公開環境では無効にする(ADR-0032)。
+      - name: 本番用のビルドで開発用のログインが無効であることを確認
+        run: grep -q '"DEV_LOGIN":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
+      # ログインとプロジェクトの設定を、シークレットのファイルにする(docs/deploy.md の 3)。
+      # 登録していない値は、空になる(その機能は、使えないままになる)。
+      - name: シークレットのファイルを用意
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          PROJECT_CREATORS: ${{ secrets.PROJECT_CREATORS }}
+        run: |
+          umask 077
+          jq -n --arg id "$GOOGLE_CLIENT_ID" --arg secret "$GOOGLE_CLIENT_SECRET" --arg creators "$PROJECT_CREATORS" \
+            '{ GOOGLE_CLIENT_ID: $id, GOOGLE_CLIENT_SECRET: $secret, PROJECT_CREATORS: $creators }' > "$RUNNER_TEMP/amime-secrets.json"
+      # どのコミットを出したかが、Cloudflare の側でも分かるように、印(コミットの先頭12文字)と件名を付ける。
+      - name: Cloudflare へデプロイ
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          message="$(git log -1 --format=%s | cut -c1-100)"
+          pnpm --filter @amime/web exec cf deploy --prebuilt --mode production \
+            --secrets-file "$RUNNER_TEMP/amime-secrets.json" --tag "${GITHUB_SHA::12}" --message "$message"
+      - name: シークレットのファイルを消す
+        if: always()
+        run: rm -f "$RUNNER_TEMP/amime-secrets.json"
+      # 出したものが、応えるかを確かめる。本番のURLは、リポジトリ変数 APP_URL に入れておく(docs/deploy.md の 4)。
+      - name: 本番が応えるかを確認
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "::notice::リポジトリ変数 APP_URL がないので、本番が応えるかは、確かめていません(docs/deploy.md の 4)"
+            exit 0
+          fi
+          # 出した直後は、応えるまでに少しかかることがある。何度か試す。
+          body="$(curl --fail --silent --show-error --retry 6 --retry-delay 5 --retry-all-errors --max-time 20 "${APP_URL%/}/api/health")"
+          echo "$body"
+          case "$body" in
+            *'"status":"ok"'*) ;;
+            *)
+              echo "::error::${APP_URL%/}/api/health が、期待した応答を返しません"
+              exit 1
+              ;;
+          esac
+      - name: 結果をまとめる
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          {
+            echo "## 本番へデプロイしました"
+            echo ""
+            echo "- コミット: \`${GITHUB_SHA::12}\` $(git log -1 --format=%s)"
+            echo "- URL: ${APP_URL:-(リポジトリ変数 APP_URL が、まだありません)}"
+          } >> "$GITHUB_STEP_SUMMARY"
