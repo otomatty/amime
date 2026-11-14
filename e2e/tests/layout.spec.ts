@@ -6,21 +6,13 @@ const PHONE = { width: 390, height: 800 };
 /** パソコンの幅。 */
 const DESKTOP = { width: 1280, height: 800 };
 
-/** 幅の広い中身(長いコード、列の多い表、切れ目のない長い語)のあるページを作り、その名前を返す。 */
-async function createWidePage(page: Page): Promise<string> {
+/** 本文のあるページを、APIで作り、その名前を返す(表のセルの区切りは、タブ。キーでは打てない)。 */
+async function createPageWith(page: Page, body: readonly string[]): Promise<string> {
 	const title = `layout-${randomUUID().slice(0, 8)}`;
 	const opened = await page.request.get(`/api/projects/e2e/pages/by-title/${title}`);
 	const { id } = (await opened.json()) as { id: string };
-	const texts = [
-		title,
-		"code:long.ts",
-		` const text = "${"とても長いコードの行".repeat(12)}";`,
-		"table:列の多い表",
-		` ${Array.from({ length: 14 }, (_, column) => `列${column + 1}の中身`).join("\t")}`,
-		`https://example.com/${"long-path-".repeat(20)}`,
-	];
 	let after: string | null = null;
-	const changes = texts.map((text, index) => {
+	const changes = [title, ...body].map((text, index) => {
 		const line = { id: `w${index}`, text };
 		const change = { type: "insert", line, after, before: null };
 		after = line.id;
@@ -32,6 +24,16 @@ async function createWidePage(page: Page): Promise<string> {
 	expect(saved.status()).toBe(200);
 	return title;
 }
+
+/** 幅の広い中身(長いコード、列の多い表、切れ目のない長い語)のあるページを作り、その名前を返す。 */
+const createWidePage = (page: Page) =>
+	createPageWith(page, [
+		"code:long.ts",
+		` const text = "${"とても長いコードの行".repeat(12)}";`,
+		"table:列の多い表",
+		` ${Array.from({ length: 14 }, (_, column) => `列${column + 1}の中身`).join("\t")}`,
+		`https://example.com/${"long-path-".repeat(20)}`,
+	]);
 
 /** 画面が、横にはみ出していないこと(横にスクロールしなくても、全部見える)。 */
 async function expectNoSidewaysScroll(page: Page) {
@@ -183,6 +185,31 @@ test.describe("画面の配置(ADR-0036)", () => {
 		});
 
 		await expect.poll(gap).toBeLessThan(4);
+	});
+
+	test("表の最初の行にいる人の、名前の札は、表の枠で切れない", async ({ page, context }) => {
+		const title = await createPageWith(page, ["table:小さな表", " 月\t火", " 水\t木"]);
+		await page.setViewportSize(DESKTOP);
+		await page.goto(`/e2e/${title}`);
+		await expect(page.getByTestId("line").nth(3)).toBeVisible();
+		// 別のタブが、表の最初の行の、最初のセルにカーソルを置く。
+		const other = await context.newPage();
+		await other.setViewportSize(DESKTOP);
+		await other.goto(`/e2e/${title}`);
+		const row = await other.getByTestId("line").nth(2).boundingBox();
+		if (!row) throw new Error("the row is not visible");
+		await other.mouse.click(row.x + 40, row.y + row.height / 2);
+
+		const label = page.locator(".table-block .remote-caret-name");
+		await expect(label).toBeVisible();
+		const name = await label.boundingBox();
+		const table = await page.locator(".table-block").boundingBox();
+		if (!name || !table) throw new Error("the label is not shown");
+
+		// 札は、カーソルの上に出る。その全体が、表の枠(はみ出したぶんを切る範囲)の中にある。
+		expect(name.y).toBeGreaterThanOrEqual(table.y);
+		expect(name.y + name.height).toBeLessThanOrEqual(table.y + table.height);
+		await other.close();
 	});
 
 	test("ページでは、保存の状態と、ページの操作が、本文の上の1段に並ぶ", async ({ page }) => {

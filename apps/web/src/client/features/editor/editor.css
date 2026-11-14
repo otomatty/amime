@@ -178,6 +178,18 @@ a.link[data-missing]:hover {
 	max-width: 100%;
 	overflow-x: auto;
 	border-collapse: collapse;
+	/*
+	 * 横に動かせる枠は、上下にはみ出したものも切る。最初の行にいる人の、名前の札(カーソルの上に出る)が切れないように、
+	 * 枠の上に、札のぶんの余白を取り、同じだけ上へずらす(見た目の位置は、変えない)。
+	 * 余白は、上の行(表の名前)に重なる。そこを押したときに、上の行に届くように、枠そのものは、押せないものにする。
+	 */
+	margin-top: -1.2em;
+	padding-top: 1.2em;
+	pointer-events: none;
+}
+
+.table-block > .line {
+	pointer-events: auto;
 }
 
 .line[data-kind="table-row"] {
