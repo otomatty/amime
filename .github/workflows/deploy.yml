@@ -45,10 +45,12 @@ jobs:
             echo "::notice::main に、もっと新しいコミットがあります。このコミット(${GITHUB_SHA::12})は、本番へ出しません"
           fi
 
+  # やり直し(Re-run)では、出さない。失敗したジョブだけをやり直すと、上の確かめ(tip)は、前の結果のまま使われる。
+  # 古い実行のやり直しが列に入ると、待っている新しいコミットを押しのける。出し直すときは、「Run workflow」で、新しく動かす。
   production:
     name: 本番へデプロイ
     needs: [checks, tip]
-    if: needs.tip.outputs.latest == 'true'
+    if: needs.tip.outputs.latest == 'true' && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
