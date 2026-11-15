@@ -83,7 +83,10 @@ test.describe("アクセシビリティ(axe で機械的に分かる違反がな
 		await expectNoViolations(page);
 	});
 
-	test("本文から探した結果", async ({ page }) => {
+	// Playwright の Firefox では、この画面で axe を動かすと、ページの処理が落ちる(Page crashed)。
+	// 落ちる規則は、実行のたびに変わる(aria-allowed-attr、label-content-name-mismatch など)。WebKit と Chromium では落ちない。
+	// 原因を調べるまで、Firefox では動かさない(@not-firefox。playwright.config.ts。#37)。
+	test("本文から探した結果", { tag: "@not-firefox" }, async ({ page }) => {
 		const token = randomUUID().slice(0, 8);
 		await createPage(page, `${token}-hit`, `${token} を探す`);
 		await page.goto(`/e2e/?q=${token}`);

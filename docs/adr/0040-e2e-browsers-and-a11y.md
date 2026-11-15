@@ -21,12 +21,13 @@ Playwright のプロジェクトを、次のようにする。
 | プロジェクト  | ブラウザ               | 動かすテスト                                     |
 | ------------- | ---------------------- | ------------------------------------------------ |
 | chromium      | Chromium(デスクトップ) | すべて                                           |
-| firefox       | Firefox                | `@chromium` の付いたもの以外                     |
+| firefox       | Firefox                | `@chromium`、`@not-firefox` の付いたもの以外     |
 | webkit        | WebKit(Safari)         | `@chromium` の付いたもの以外                     |
 | mobile-chrome | Chromium(Pixel 7)      | 画面の作り、起動、ページの一覧、アクセシビリティ |
 | mobile-safari | WebKit(iPhone 15)      | 同上                                             |
 
 - Chromium にしかない機能を使うテストには、tag `@chromium` を付ける。いまは、日本語入力(開発者ツール用の通信 CDP で、IME のイベントを起こす)と、クリップボードの中身を読むテスト(読む許可を与えられるのが Chromium だけ)。
+- Firefox で動かせない理由が、テストの側にあるもの(ブラウザの不具合など)には、tag `@not-firefox` を付け、テストの横に理由と Issue を書く。いまは、検索結果の画面の axe の検査だけ(Playwright の Firefox で、ページの処理が落ちる。[#37](https://github.com/otomatty/amime/issues/37))。
 - `test.skip` は使わない(規約で禁止している)。どのブラウザで動かすかは、設定ファイルの `grepInvert` で決める。
 - CI では、E2E のジョブを、ブラウザのエンジンごとに3つ並べる(Chromium、Firefox、WebKit)。スマートフォンの設定は、同じエンジンのジョブで動かす。1つが落ちても、ほかは最後まで動かす(`fail-fast: false`)。
 - 手元では、`pnpm test:e2e --project=chromium` のように、ブラウザを選べる。
@@ -55,3 +56,4 @@ Playwright のプロジェクトを、次のようにする。
 - 日本語入力は、Firefox と WebKit では、まだ自動で確かめていない(CDP が使えないため)。実機で確かめる必要がある(feature-matrix の IME)。
 - axe が見つけられるのは、機械で分かる違反だけ。スクリーンリーダーでの読み上げ(#3)は、別に確かめる。
 - この開発環境では、Firefox と WebKit を入れられなかった。この2つは、PR の CI で初めて動く。
+- 検索結果の画面の axe の検査で、結果が出る前に検査していた誤りを直したところ、語の印の上のリンクの文字の対比(4.4)が、AA の 4.5 に届いていないことが分かった。印の中のリンクは、濃いリンクの色(6.3)にした。

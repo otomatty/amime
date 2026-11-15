@@ -9,6 +9,8 @@ const chromiumLaunch = chromiumPath ? { launchOptions: { executablePath: chromiu
 
 /** Chromium でしか動かせないテストの印(テストの tag)。 */
 const CHROMIUM_ONLY = /@chromium/;
+/** Firefox では動かさないテストの印。理由は、テストの横に書く。 */
+const NOT_FIREFOX = /@chromium|@not-firefox/;
 /** スマートフォンの設定で動かすテスト。 */
 const MOBILE_TESTS = /(smoke|layout|a11y|pages)\.spec\.ts/;
 
@@ -39,7 +41,7 @@ export default defineConfig({
 		{
 			name: "firefox",
 			dependencies: ["setup"],
-			grepInvert: CHROMIUM_ONLY,
+			grepInvert: NOT_FIREFOX,
 			use: { ...devices["Desktop Firefox"], storageState: MEMBER_STATE },
 		},
 		{
