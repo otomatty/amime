@@ -95,12 +95,13 @@ apps/web/src/server ─┘
 2. **Green**: テストを通す最小限の実装を書きます。
 3. **Refactor**: テストを通したまま整理します。
 
-CIは次の4点を検査します。
+CIは次の5点を検査します。
 
 - 変更した実装ファイルの隣に、対応するテストファイルがあること。**[検査: `pnpm check:tdd`]**
 - 種別が `feat` / `fix` のPRが、テストの変更を含むこと。**[検査: `pnpm check:tdd`]**
 - `packages/*` と `scripts/lib` のカバレッジが 100%、`client` が 80% 以上であること。**[検査: `pnpm test:coverage`]**
 - 配信するファイル(画面のJS・CSS、Worker)の大きさ(gzip)が、上限を超えないこと。上限を上げるときは、理由をPRに書きます。**[検査: `pnpm check:size`]**
+- `packages/*` のテストが、実装にわざと入れた誤り(変異)を見つけること。PRでは変えたファイルで 80 点以上、毎週の全体で 90 点以上。**[検査: `pnpm test:mutation`(Stryker)]**
 
 テスト対象外になるのは、振る舞いを持たないファイル(`index.ts`、`types.ts`、`*.types.ts`、`*.d.ts`)と起動コード(`main.tsx`)だけです。
 

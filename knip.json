@@ -13,7 +13,11 @@
 			"project": ["src/**/*.ts"]
 		},
 		"e2e": {
-			"entry": ["tests/**/*.setup.ts"],
+			"entry": [
+				"tests/**/*.setup.ts",
+				"playwright.production.config.ts",
+				"production/**/*.spec.ts"
+			],
 			"project": ["**/*.ts"]
 		}
 	}
