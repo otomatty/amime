@@ -75,7 +75,17 @@ test.describe("アクセシビリティ(axe で機械的に分かる違反がな
 			"`コード`",
 		);
 		await createPage(page, `${token}-b`, `[${token}-a] へ戻る`);
-		await expect(page.getByRole("link", { name: `${token}-a` }).first()).toBeVisible();
+
+		// 記法を含むページ(a)を開き、関連するページ(b)のカードが出てから検査する。
+		// カードが出るのは、台帳に反映されてから。出るまで開き直す。
+		const related = page.getByRole("region", { name: "関連するページ" });
+		await expect(async () => {
+			await page.goto(`/e2e/${token}-a`);
+			await expect(related.getByRole("heading", { name: `${token}-b` })).toBeVisible({
+				timeout: 1000,
+			});
+		}).toPass();
+		await expect(page.getByTestId("line").filter({ hasText: "太字" })).toBeVisible();
 		await expectNoViolations(page);
 
 		// 一覧に出るのは、台帳に反映されてから。出るまで読み込み直してから検査する。
