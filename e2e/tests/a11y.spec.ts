@@ -78,8 +78,14 @@ test.describe("アクセシビリティ(axe で機械的に分かる違反がな
 		await expect(page.getByRole("link", { name: `${token}-a` }).first()).toBeVisible();
 		await expectNoViolations(page);
 
+		// 一覧に出るのは、台帳に反映されてから。出るまで読み込み直してから検査する。
 		await page.goto("/e2e/");
-		await expect(page.getByRole("link", { name: new RegExp(`${token}-b`) }).first()).toBeVisible();
+		await expect(async () => {
+			await page.reload();
+			await expect(page.getByRole("link", { name: new RegExp(`${token}-b`) }).first()).toBeVisible({
+				timeout: 1000,
+			});
+		}).toPass();
 		await expectNoViolations(page);
 	});
 
