@@ -119,12 +119,16 @@ test.describe("アクセシビリティ(axe で機械的に分かる違反がな
 	});
 
 	test("プロジェクトの設定と、自分のプロフィール", async ({ page }) => {
+		// 見出しは先に出る。メンバーの一覧(役割の選択、外すボタン)と招待リンクの欄は、読み込んでから出る。
 		await page.goto("/settings/e2e");
-		await expect(page.getByRole("heading", { level: 2 }).first()).toBeVisible();
+		const members = page.getByRole("list", { name: "メンバー" });
+		await expect(members.getByRole("combobox", { name: "e2e-member の役割" })).toBeVisible();
+		await expect(page.getByRole("button", { name: "招待リンクを作る" })).toBeVisible();
 		await expectNoViolations(page);
 
 		await page.goto("/settings");
-		await expect(page.getByRole("heading", { level: 2 }).first()).toBeVisible();
+		await expect(page.getByRole("textbox", { name: /表示名/ })).toBeVisible();
+		await expect(page.getByRole("button", { name: "保存する" })).toBeVisible();
 		await expectNoViolations(page);
 	});
 });
