@@ -21,6 +21,7 @@
 		"check:unused": "knip",
 		"check:tdd": "node scripts/check-test-first.ts",
 		"check:size": "node scripts/check-size.ts",
+		"test:mutation": "stryker run",
 		"check": "pnpm lint && pnpm typecheck && pnpm check:unused && pnpm test:coverage && pnpm test:server && pnpm build && pnpm check:size",
 		"prepare": "lefthook install"
 	},
@@ -28,6 +29,8 @@
 		"@biomejs/biome": "^2.6.6",
 		"@commitlint/cli": "^21.2.4",
 		"@commitlint/config-conventional": "^21.2.4",
+		"@stryker-mutator/core": "^10.1.1",
+		"@stryker-mutator/vitest-runner": "^10.1.1",
 		"@types/node": "^22.20.5",
 		"@vitest/coverage-v8": "^5.1.0",
 		"fast-check": "^4.10.2",
