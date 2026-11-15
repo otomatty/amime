@@ -20,9 +20,12 @@ pnpm check        # CIと同じ検査を一通り実行(E2Eを除く)
 E2Eテストは、ビルドしてから実行します。
 
 ```sh
-pnpm --filter @tsuzuri/e2e exec playwright install chromium   # 初回のみ
-pnpm test:e2e
+pnpm --filter @tsuzuri/e2e exec playwright install chromium firefox webkit   # 初回のみ
+pnpm test:e2e                                # すべてのブラウザで
+pnpm test:e2e --project=chromium             # Chromium だけで
 ```
+
+Chromium、Firefox、WebKit(Safari のエンジン)と、スマートフォンの設定(Pixel 7、iPhone 15)で動かします。主な画面は、axe でアクセシビリティも検査します。
 
 ## 構成
 

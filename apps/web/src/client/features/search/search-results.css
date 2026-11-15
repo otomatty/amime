@@ -54,3 +54,8 @@
 	background: var(--color-mark);
 	color: inherit;
 }
+
+/* リンクの色(#1f6f8b)は、印の地の上では対比が 4.4 で、WCAG AA の 4.5 に届かない。濃いほう(6.3)にする。 */
+.search-results a mark {
+	color: var(--color-link-strong);
+}

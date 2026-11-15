@@ -124,6 +124,11 @@ CIは次の5点を検査します。
 | サーバー       | `apps/web/src/server` | workerd              | APIの応答、Durable Object の保存と復元               |
 | E2E            | `e2e/`                | 実ブラウザ + workerd | 利用者の主要な流れが端から端まで動くこと(少数に絞る) |
 
+E2E は、Chromium、Firefox、WebKit と、スマートフォンの設定で動かします(`e2e/playwright.config.ts`)。
+
+- どのブラウザでも同じに動くように書きます。Chromium にしかない機能(開発者ツール用の通信、クリップボードを読む許可)を使うテストだけに、tag `@chromium` を付けます。ブラウザの不具合などで Firefox では動かせないテストには `@not-firefox` を付け、理由と Issue をテストの横に書きます。`test.skip` で外すことはしません。**[検査: Biome(`.skip` を禁止)]**
+- 画面を足したら、`e2e/tests/a11y.spec.ts` に、その画面の axe の検査を足します(WCAG 2.1 の A と AA)。
+
 ## 7. サーバー(Workers / Durable Objects)
 
 - Cloudflare の操作は `cf` CLI と `cloudflare.config.ts` で行います。Wrangler の設定ファイルは追加しません([ADR-0003](adr/0003-platform-cloudflare.md))。
