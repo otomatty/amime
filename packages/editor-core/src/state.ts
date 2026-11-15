@@ -1,4 +1,4 @@
-import { invariant } from "@amime/shared";
+import { invariant } from "@tsuzuri/shared";
 import type { Cursor, EditorState } from "./types.ts";
 
 /** 指定した行の本文を返す。行が存在しなければ不変条件違反。 */

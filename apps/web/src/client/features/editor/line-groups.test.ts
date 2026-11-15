@@ -1,4 +1,4 @@
-import type { LineKind } from "@amime/parser";
+import type { LineKind } from "@tsuzuri/parser";
 import { describe, expect, it } from "vitest";
 import { groupLines } from "./line-groups.ts";
 

@@ -1,4 +1,4 @@
-import { itemAt } from "@amime/shared";
+import { itemAt } from "@tsuzuri/shared";
 
 /**
  * 1行の本文を、利用者から見た「1文字」(書記素)の単位で見比べる(ADR-0022)。

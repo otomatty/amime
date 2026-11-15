@@ -1,4 +1,4 @@
-import { type LineId, MAX_LINE_LENGTH } from "@amime/sync";
+import { type LineId, MAX_LINE_LENGTH } from "@tsuzuri/sync";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CURSOR_INTERVAL_MS, connectPageSocket, HEARTBEAT_MS } from "./page-socket.ts";
 
@@ -39,7 +39,7 @@ function connect() {
 		onDeleted: vi.fn(),
 	};
 	const { close, sendCursor } = connectPageSocket({
-		url: "ws://amime.test/socket",
+		url: "ws://tsuzuri.test/socket",
 		handlers,
 		createSocket: (url) => {
 			const socket = new FakeSocket(url);
@@ -76,7 +76,7 @@ describe("connectPageSocket", () => {
 		latest().receive('{"type":"hello","version":3}');
 		latest().receive(JSON.stringify(commit));
 
-		expect(latest().url).toBe("ws://amime.test/socket");
+		expect(latest().url).toBe("ws://tsuzuri.test/socket");
 		expect(handlers.onHello).toHaveBeenCalledWith(3);
 		expect(handlers.onCommit).toHaveBeenCalledWith(commit);
 	});

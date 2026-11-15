@@ -1,5 +1,5 @@
 {
-	"name": "@amime/web",
+	"name": "@tsuzuri/web",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
@@ -13,10 +13,10 @@
 		"test:server": "vitest run --config vitest.server.config.ts"
 	},
 	"dependencies": {
-		"@amime/editor-core": "workspace:*",
-		"@amime/parser": "workspace:*",
-		"@amime/shared": "workspace:*",
-		"@amime/sync": "workspace:*",
+		"@tsuzuri/editor-core": "workspace:*",
+		"@tsuzuri/parser": "workspace:*",
+		"@tsuzuri/shared": "workspace:*",
+		"@tsuzuri/sync": "workspace:*",
 		"fractional-indexing": "^4.0.0",
 		"hono": "^4.13.18",
 		"react": "^19.3.1",

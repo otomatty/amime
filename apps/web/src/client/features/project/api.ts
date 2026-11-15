@@ -1,4 +1,4 @@
-import type { Role, Visibility } from "@amime/shared";
+import type { Role, Visibility } from "@tsuzuri/shared";
 import {
 	type InviteTarget,
 	type NewInvite,
@@ -11,7 +11,7 @@ import {
 	parseProjectList,
 	parseProjectMembers,
 	type UserId,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 
 const STATUS_MISSING = 404;
 

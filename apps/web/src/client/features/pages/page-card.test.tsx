@@ -1,5 +1,5 @@
-import type { PageCard, PageId } from "@amime/sync";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import type { PageCard, PageId } from "@tsuzuri/sync";
 import { afterEach, describe, expect, it } from "vitest";
 import { PageCards } from "./page-card.tsx";
 

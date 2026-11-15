@@ -1,5 +1,5 @@
-import type { Visibility } from "@amime/shared";
-import type { ProjectList } from "@amime/sync";
+import type { Visibility } from "@tsuzuri/shared";
+import type { ProjectList } from "@tsuzuri/sync";
 import { type FormEvent, useEffect, useState } from "react";
 import { useAccount } from "../account/account.tsx";
 import { type CreateProjectError, createProject, listProjects } from "./api.ts";
@@ -106,7 +106,7 @@ export function Home({ navigate = (href) => window.location.assign(href) }: Home
 		return (
 			<section className="project-home">
 				<p>
-					Amime は、チームで書くノートです。ログインすると、参加しているプロジェクトが並びます。
+					Tsuzuri は、チームで書くノートです。ログインすると、参加しているプロジェクトが並びます。
 				</p>
 				<p>
 					<a href="/?playground">試し書きのページ</a>で、書き心地を試せます(内容は保存されません)。

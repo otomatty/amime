@@ -1,5 +1,5 @@
-import type { PageId } from "@amime/sync";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { PageId } from "@tsuzuri/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PageTools } from "./page-tools.tsx";
 

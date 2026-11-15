@@ -8,7 +8,7 @@ import {
 	type Line,
 	type LineId,
 	type PendingEntry,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PageApiError } from "./page-api-error.ts";
 import type { PageSocketHandlers } from "./page-socket.ts";

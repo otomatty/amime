@@ -1,6 +1,6 @@
 import { exports } from "cloudflare:workers";
-import { safeReturnPath } from "@amime/shared";
-import type { AccountState, LoginMethod } from "@amime/sync";
+import { safeReturnPath } from "@tsuzuri/shared";
+import type { AccountState, LoginMethod } from "@tsuzuri/sync";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { endSession, signIn, startSession } from "../auth/accounts.ts";
@@ -14,7 +14,7 @@ import { listProjectIds } from "../db/projects.ts";
 import { revoking } from "./revoking.ts";
 
 /** ログインを始めてから、提供元から戻ってくるまでのあいだ、照合に使う値を入れる Cookie。 */
-const LOGIN_COOKIE = "amime_login";
+const LOGIN_COOKIE = "tsuzuri_login";
 const LOGIN_COOKIE_PATH = "/api/auth";
 /** ログインを始めてから、戻ってくるまでに待つ長さ(秒)。 */
 const LOGIN_TTL = 10 * 60;

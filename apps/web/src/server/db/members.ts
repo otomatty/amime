@@ -1,5 +1,5 @@
-import type { Role, Visibility } from "@amime/shared";
-import type { Invite, Member, UserId } from "@amime/sync";
+import type { Role, Visibility } from "@tsuzuri/shared";
+import type { Invite, Member, UserId } from "@tsuzuri/sync";
 import { hashToken, randomToken } from "../auth/crypto.ts";
 
 /** 招待リンクが使える長さ(ミリ秒)。 */

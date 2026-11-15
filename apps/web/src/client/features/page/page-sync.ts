@@ -16,7 +16,7 @@ import {
 	type Session,
 	sameLines,
 	send,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 import { PageApiError } from "./page-api-error.ts";
 import type { PageSocket, PageSocketHandlers } from "./page-socket.ts";
 
@@ -95,7 +95,7 @@ const NOTHING_PENDING: PendingEntry = { inflight: null, changes: [] };
 
 /**
  * 1つのページの保存と、他の人の変更の受け取りを受け持つ。
- * 文書の状態と規則は @amime/sync のセッションにあり、ここは「いつ送るか、いつ読み直すか」だけを決める。
+ * 文書の状態と規則は @tsuzuri/sync のセッションにあり、ここは「いつ送るか、いつ読み直すか」だけを決める。
  */
 export function createPageSync({
 	snapshot,

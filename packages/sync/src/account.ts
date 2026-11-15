@@ -1,4 +1,4 @@
-import { err, ok, type Result } from "@amime/shared";
+import { err, ok, type Result } from "@tsuzuri/shared";
 import * as v from "valibot";
 
 /** 利用者のID。 */

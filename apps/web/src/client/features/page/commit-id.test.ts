@@ -1,4 +1,4 @@
-import { parseCommitRequest } from "@amime/sync";
+import { parseCommitRequest } from "@tsuzuri/sync";
 import { describe, expect, it } from "vitest";
 import { createCommitId, deriveCommitId } from "./commit-id.ts";
 

@@ -47,7 +47,7 @@ GitHub の Settings → Branches(または Rulesets)で、`main` に次を設定
 
 3. (任意)Settings → Environments で `production` を作り、承認者を設定すると、本番デプロイの前に承認を挟めます。
 
-D1 のデータベース(`amime`)は、最初のデプロイで、自動で作られます(`cf deploy` の `--provision` は、既定で有効)。利用者とログインの状態の表は、Worker が、最初の要求のときに作ります。
+D1 のデータベース(`tsuzuri`)は、最初のデプロイで、自動で作られます(`cf deploy` の `--provision` は、既定で有効)。利用者とログインの状態の表は、Worker が、最初の要求のときに作ります。
 
 > 必要な権限は、`cf` の公式文書([CI での使い方](https://developers.cloudflare.com/cf/ci/))で確かめてください。この文書を書いたときは、公式文書を開けず、Wrangler での経験から書いています。権限が足りなければ、デプロイのログに、足りない権限が出ます。
 
@@ -74,9 +74,9 @@ D1 のデータベース(`amime`)は、最初のデプロイで、自動で作�
 
 ## 4. 本番のURL
 
-最初のデプロイが済むと、`https://amime.(アカウントのサブドメイン).workers.dev` で開けます(Cloudflare のダッシュボードの、Worker の画面に出ます)。
+最初のデプロイが済むと、`https://tsuzuri.(アカウントのサブドメイン).workers.dev` で開けます(Cloudflare のダッシュボードの、Worker の画面に出ます)。
 
-- このURLを、リポジトリ変数 `APP_URL` に入れます(例: `https://amime.example.workers.dev`)。デプロイのたびに、`/api/health` が応えるかを確かめるようになります。
+- このURLを、リポジトリ変数 `APP_URL` に入れます(例: `https://tsuzuri.example.workers.dev`)。デプロイのたびに、`/api/health` が応えるかを確かめるようになります。
 - Google のリダイレクト URI(3 の 1)も、このURLで登録します。
 - 自分のドメインで出すときは、`apps/web/cloudflare.config.ts` の `worker` に `domains: ["notes.example.com"]` を足します(ドメインは、同じ Cloudflare アカウントで管理しているもの)。`APP_URL` と、Google のリダイレクト URI も、そのドメインに変えます。
 
@@ -93,10 +93,10 @@ D1 のデータベース(`amime`)は、最初のデプロイで、自動で作�
 ## 6. 手元からデプロイする
 
 ```sh
-pnpm --filter @amime/web exec cf auth login
+pnpm --filter @tsuzuri/web exec cf auth login
 pnpm build
 # シークレットを、JSON か .env の形のファイルで渡す(ファイルは、リポジトリに入れない)。
-pnpm --filter @amime/web exec cf deploy --prebuilt --mode production --secrets-file ../../secrets.json
+pnpm --filter @tsuzuri/web exec cf deploy --prebuilt --mode production --secrets-file ../../secrets.json
 ```
 
 ## 注意

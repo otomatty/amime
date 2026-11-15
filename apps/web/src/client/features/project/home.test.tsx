@@ -76,7 +76,7 @@ describe("Home(トップ。参加しているプロジェクトの一覧)", () =
 		renderHome();
 
 		expect(
-			await screen.findByText(/ログインすると、参加しているプロジェクトが並びます/),
+			await screen.findByText(/^Tsuzuri は、チームで書くノートです。ログインすると、/),
 		).toBeDefined();
 		expect(screen.getByRole("link", { name: "試し書きのページ" }).getAttribute("href")).toBe(
 			"/?playground",

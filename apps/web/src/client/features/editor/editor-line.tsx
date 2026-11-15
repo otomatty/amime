@@ -1,4 +1,4 @@
-import { segmentGraphemes } from "@amime/editor-core";
+import { segmentGraphemes } from "@tsuzuri/editor-core";
 import {
 	type InlineNode,
 	type LineKind,
@@ -6,8 +6,8 @@ import {
 	parseLine,
 	type Span,
 	type TableCell,
-} from "@amime/parser";
-import { toTitleLc } from "@amime/shared";
+} from "@tsuzuri/parser";
+import { toTitleLc } from "@tsuzuri/shared";
 import { type CSSProperties, Fragment, memo, type ReactNode } from "react";
 import { IconImage } from "./icons.tsx";
 import { pageHref, projectHref } from "./links.ts";

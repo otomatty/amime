@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { app } from "../app.ts";
 
-const ORIGIN = "https://amime.test";
+const ORIGIN = "https://tsuzuri.test";
 const unique = (name: string) => `${name}-${crypto.randomUUID().slice(0, 8)}`;
 
 async function login(): Promise<string> {

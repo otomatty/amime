@@ -1,4 +1,4 @@
-import { parseDisplayName, parsePictureUrl } from "@amime/shared";
+import { parseDisplayName, parsePictureUrl } from "@tsuzuri/shared";
 import { Hono } from "hono";
 import { updateProfile } from "../auth/accounts.ts";
 import { type AppEnv, readJson } from "../context.ts";

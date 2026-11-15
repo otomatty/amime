@@ -1,5 +1,5 @@
-import { highlight, textTerms } from "@amime/shared";
-import type { SearchResults as Results } from "@amime/sync";
+import { highlight, textTerms } from "@tsuzuri/shared";
+import type { SearchResults as Results } from "@tsuzuri/sync";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { pageHref } from "../editor/links.ts";
 import { searchPages } from "../page/api.ts";

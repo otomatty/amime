@@ -1,4 +1,4 @@
-import type { LineKind } from "@amime/parser";
+import type { LineKind } from "@tsuzuri/parser";
 
 /** 連続する行のまとまり。start 行目から end 行目の手前まで。 */
 export type LineGroup = {

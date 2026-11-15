@@ -1,4 +1,4 @@
-import type { PageId } from "@amime/sync";
+import type { PageId } from "@tsuzuri/sync";
 import { useState } from "react";
 import { deletePage, pinPage } from "./api.ts";
 

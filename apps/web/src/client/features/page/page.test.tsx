@@ -63,7 +63,7 @@ afterEach(() => {
 /** 以前のタブが端末内に残した、未送信の変更。 */
 function leavePending(changes: unknown[]) {
 	window.localStorage.setItem(
-		`amime:pending:${PAGE_ID}:closed-tab`,
+		`tsuzuri:pending:${PAGE_ID}:closed-tab`,
 		JSON.stringify({ savedAt: Date.now(), entries: [{ inflight: null, changes }] }),
 	);
 }

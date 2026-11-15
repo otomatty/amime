@@ -7,12 +7,12 @@ import {
 	redo,
 	replaceLines,
 	undo,
-} from "@amime/editor-core";
-import { type Line, startTracking } from "@amime/sync";
+} from "@tsuzuri/editor-core";
+import { type Line, startTracking } from "@tsuzuri/sync";
 
 /**
  * 編集欄の状態。文書(本文、行ID、カーソル)と、取り消しのための履歴。
- * 規則はすべて @amime/editor-core にあり、ここは編集欄の操作をそれに取り次ぐだけ。
+ * 規則はすべて @tsuzuri/editor-core にあり、ここは編集欄の操作をそれに取り次ぐだけ。
  */
 export type EditorModel = History;
 

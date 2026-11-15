@@ -113,7 +113,7 @@ jobs:
         run: |
           umask 077
           jq -n --arg id "$GOOGLE_CLIENT_ID" --arg secret "$GOOGLE_CLIENT_SECRET" --arg creators "$PROJECT_CREATORS" \
-            '{ GOOGLE_CLIENT_ID: $id, GOOGLE_CLIENT_SECRET: $secret, PROJECT_CREATORS: $creators }' > "$RUNNER_TEMP/amime-secrets.json"
+            '{ GOOGLE_CLIENT_ID: $id, GOOGLE_CLIENT_SECRET: $secret, PROJECT_CREATORS: $creators }' > "$RUNNER_TEMP/tsuzuri-secrets.json"
       # どのコミットを出したかが、Cloudflare の側でも分かるように、印(コミットの先頭12文字)と件名を付ける。
       - name: Cloudflare へデプロイ
         if: steps.tip.outputs.latest == 'true'
@@ -122,11 +122,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           message="$(git log -1 --format=%s | cut -c1-100)"
-          pnpm --filter @amime/web exec cf deploy --prebuilt --mode production \
-            --secrets-file "$RUNNER_TEMP/amime-secrets.json" --tag "${GITHUB_SHA::12}" --message "$message"
+          pnpm --filter @tsuzuri/web exec cf deploy --prebuilt --mode production \
+            --secrets-file "$RUNNER_TEMP/tsuzuri-secrets.json" --tag "${GITHUB_SHA::12}" --message "$message"
       - name: シークレットのファイルを消す
         if: always()
-        run: rm -f "$RUNNER_TEMP/amime-secrets.json"
+        run: rm -f "$RUNNER_TEMP/tsuzuri-secrets.json"
       # 出したものが、応えるかを確かめる。本番のURLは、リポジトリ変数 APP_URL に入れておく(docs/deploy.md の 4)。
       - name: 本番が応えるかを確認
         if: steps.tip.outputs.latest == 'true'

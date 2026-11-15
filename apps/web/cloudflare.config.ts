@@ -9,7 +9,7 @@ const DEV_LOGIN_MODES: ReadonlySet<string | undefined> = new Set(["development",
 
 export default defineConfig(({ mode }) => ({
 	worker: {
-		name: "amime",
+		name: "tsuzuri",
 		compatibilityDate: "2026-11-10",
 		entrypoint,
 		assets: {
@@ -19,7 +19,7 @@ export default defineConfig(({ mode }) => ({
 		},
 		env: {
 			// 利用者とログインの状態(ADR-0032)。
-			DB: bindings.d1({ name: "amime" }),
+			DB: bindings.d1({ name: "tsuzuri" }),
 			// Google でのログインに使う、OAuth クライアントのIDとシークレット。自動テストでは、決まった値を使う。
 			GOOGLE_CLIENT_ID: mode === "test" ? bindings.text("test-client-id") : bindings.secret(),
 			GOOGLE_CLIENT_SECRET:

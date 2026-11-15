@@ -1,4 +1,4 @@
-import { readIdentity } from "@amime/shared";
+import { readIdentity } from "@tsuzuri/shared";
 import { decodeJsonSegment } from "./crypto.ts";
 import type { LoginProvider } from "./provider.types.ts";
 

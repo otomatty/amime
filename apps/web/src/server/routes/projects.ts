@@ -1,5 +1,5 @@
-import { allows, canCreateProject, parseProjectName, type Visibility } from "@amime/shared";
-import type { ProjectInfo, ProjectList } from "@amime/sync";
+import { allows, canCreateProject, parseProjectName, type Visibility } from "@tsuzuri/shared";
+import type { ProjectInfo, ProjectList } from "@tsuzuri/sync";
 import { Hono } from "hono";
 import { type AppEnv, readJson } from "../context.ts";
 import { createProject, findProject, listProjects } from "../db/projects.ts";

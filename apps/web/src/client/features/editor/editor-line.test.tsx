@@ -1,5 +1,5 @@
-import type { LineKind } from "@amime/parser";
 import { cleanup, render, screen } from "@testing-library/react";
+import type { LineKind } from "@tsuzuri/parser";
 import { afterEach, describe, expect, it } from "vitest";
 import { EditorLine, type RemoteCaret } from "./editor-line.tsx";
 import { IconSourceProvider } from "./icons.tsx";

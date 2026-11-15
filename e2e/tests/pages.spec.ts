@@ -178,10 +178,10 @@ test.describe("ページの一覧", () => {
 		await expect(page.getByRole("region", { name: "ページの一覧" })).toBeVisible();
 	});
 
-	test("見出しの Amime を押すと、参加しているプロジェクトの一覧へ戻れる", async ({ page }) => {
+	test("見出しの Tsuzuri を押すと、参加しているプロジェクトの一覧へ戻れる", async ({ page }) => {
 		await page.goto(`/e2e/${newPageName()}`);
 
-		await page.getByRole("link", { name: "Amime" }).click();
+		await page.getByRole("link", { name: "Tsuzuri" }).click();
 
 		await expect(page.getByRole("heading", { name: "プロジェクト", exact: true })).toBeVisible();
 		await expect(page.getByRole("link", { name: "e2e", exact: true })).toBeVisible();

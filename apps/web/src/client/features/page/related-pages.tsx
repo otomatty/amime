@@ -1,4 +1,4 @@
-import type { PageLinks } from "@amime/sync";
+import type { PageLinks } from "@tsuzuri/sync";
 import { useId } from "react";
 import { pageHref } from "../editor/links.ts";
 import { PageCards } from "../pages/page-card.tsx";

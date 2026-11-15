@@ -1,4 +1,4 @@
-import type { SelectionRange } from "@amime/editor-core";
+import type { SelectionRange } from "@tsuzuri/editor-core";
 
 /** 1行の中で選択されている範囲。選択にかかっていなければ start と end は null。 */
 export type LineSelection = {

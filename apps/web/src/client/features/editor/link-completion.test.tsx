@@ -1,5 +1,5 @@
-import type { LineRole } from "@amime/parser";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { LineRole } from "@tsuzuri/parser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CompletionList, useLinkCompletion } from "./link-completion.tsx";
 

@@ -77,7 +77,7 @@ jobs:
       - name: 本番用のビルドでプロジェクトを作れる人が埋め込まれていないことを確認
         run: grep -q '"PROJECT_CREATORS":{"type":"secret"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
       - name: アップロードせずにデプロイ内容を検証
-        run: pnpm --filter @amime/web exec cf deploy --prebuilt --mode production --dry-run
+        run: pnpm --filter @tsuzuri/web exec cf deploy --prebuilt --mode production --dry-run
 
   e2e:
     name: E2Eテスト
@@ -89,7 +89,7 @@ jobs:
       # --with-deps は付けない。apt の更新が必要になり、ランナーの状態によっては長時間待たされる。
       # ブラウザの実行に必要なライブラリは、ランナーのイメージに入っている。
       - name: ブラウザをインストール
-        run: pnpm --filter @amime/e2e exec playwright install chromium
+        run: pnpm --filter @tsuzuri/e2e exec playwright install chromium
       # 開発用のログインを使えるE2E用のビルド(--mode e2e)を作ってから実行する。
       - run: pnpm test:e2e
 
@@ -108,7 +108,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-      - run: pnpm --filter @amime/web exec cf previews deploy
+      - run: pnpm --filter @tsuzuri/web exec cf previews deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

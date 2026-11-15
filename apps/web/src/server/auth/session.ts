@@ -6,7 +6,7 @@ import { ready } from "../db/migrate.ts";
 import { findSession, SESSION_TTL } from "./accounts.ts";
 
 /** ログインの状態を入れる Cookie の名前。 */
-export const SESSION_COOKIE = "amime_session";
+export const SESSION_COOKIE = "tsuzuri_session";
 
 /** https で動いているか。手元の開発(http)では、Cookie に Secure を付けない。 */
 export const isSecure = (c: Context<AppEnv>) => new URL(c.req.url).protocol === "https:";

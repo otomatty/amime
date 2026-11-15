@@ -1,6 +1,6 @@
 import { exports } from "cloudflare:workers";
-import { allows, type Role, type Visibility } from "@amime/shared";
-import type { NewInvite, ProjectMembers, UserId } from "@amime/sync";
+import { allows, type Role, type Visibility } from "@tsuzuri/shared";
+import type { NewInvite, ProjectMembers, UserId } from "@tsuzuri/sync";
 import { type Context, Hono } from "hono";
 import { type AppEnv, readJson } from "../context.ts";
 import {

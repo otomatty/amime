@@ -7,7 +7,7 @@ import {
 	parseServerMessage,
 	type ServerMessage,
 	type TitleProblem,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 
 /** 接続が生きているかを確かめる間隔。 */
 export const HEARTBEAT_MS = 30_000;

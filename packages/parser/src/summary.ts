@@ -1,4 +1,4 @@
-import { toTitleLc } from "@amime/shared";
+import { toTitleLc } from "@tsuzuri/shared";
 import { classifyLines } from "./blocks.ts";
 import { parseLine } from "./line.ts";
 import type { InlineNode, ParsedLine } from "./types.ts";

@@ -42,8 +42,8 @@ describe("App", () => {
 
 		render(<App />);
 
-		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Amime");
-		expect(screen.getByRole("link", { name: "Amime" }).getAttribute("href")).toBe("/");
+		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Tsuzuri");
+		expect(screen.getByRole("link", { name: "Tsuzuri" }).getAttribute("href")).toBe("/");
 	});
 
 	it("ヘッダーに、ログインの状態を表示する", async () => {
@@ -268,7 +268,7 @@ describe("App", () => {
 			render(<App />);
 
 			expect(await screen.findByRole("heading", { name: "プロフィール" })).toBeDefined();
-			expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Amime");
+			expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Tsuzuri");
 		});
 
 		it("/invite/値 では、招待リンクの画面を表示する", async () => {
@@ -278,7 +278,7 @@ describe("App", () => {
 			render(<App />);
 
 			expect(await screen.findByRole("heading", { name: "「team」への招待" })).toBeDefined();
-			expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Amime");
+			expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Tsuzuri");
 		});
 	});
 });

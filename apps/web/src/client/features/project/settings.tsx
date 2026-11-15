@@ -1,5 +1,5 @@
-import type { Role, Visibility } from "@amime/shared";
-import type { Member, NewInvite, ProjectInfo, ProjectMembers, UserId } from "@amime/sync";
+import type { Role, Visibility } from "@tsuzuri/shared";
+import type { Member, NewInvite, ProjectInfo, ProjectMembers, UserId } from "@tsuzuri/sync";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAccount } from "../account/account.tsx";
 import {

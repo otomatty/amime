@@ -7,7 +7,7 @@ import {
 	type Line,
 	type LineId,
 	MAX_LINE_LENGTH,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 import { describe, expect, it, vi } from "vitest";
 import { MAX_INDEXED_TEXT } from "./project-do.ts";
 

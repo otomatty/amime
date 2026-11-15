@@ -88,7 +88,7 @@
 										"message": "packages/* はブラウザと Workers の両方で動く必要があります。実行環境のAPIは apps/ で扱ってください。"
 									},
 									{
-										"group": ["@amime/web", "@amime/web/*"],
+										"group": ["@tsuzuri/web", "@tsuzuri/web/*"],
 										"message": "packages/* から apps/* へは依存できません。"
 									}
 								]

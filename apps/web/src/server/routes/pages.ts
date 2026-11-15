@@ -1,12 +1,12 @@
 import { exports } from "cloudflare:workers";
-import { allows, MAX_TITLE_LENGTH } from "@amime/shared";
+import { allows, MAX_TITLE_LENGTH } from "@tsuzuri/shared";
 import {
 	type PageId,
 	parseClientId,
 	parseCommitRequest,
 	parsePageId,
 	parsePageSort,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 import { type Context, Hono } from "hono";
 import { type AppEnv, readJson } from "../context.ts";
 

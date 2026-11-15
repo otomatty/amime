@@ -1,4 +1,4 @@
-import { parseIndent } from "@amime/parser";
+import { parseIndent } from "@tsuzuri/parser";
 import { indentLines, outdentLines } from "./commands.ts";
 import { type LineRange, lineAt, targetLines, withSelection } from "./state.ts";
 import type { Cursor, EditorState } from "./types.ts";

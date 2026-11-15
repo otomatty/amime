@@ -36,7 +36,7 @@ export default defineConfig({
 	webServer: {
 		// 事前に E2E 用のビルド(`pnpm build:e2e`)が必要。`pnpm test:e2e` が先に実行する。
 		// E2E用のビルドでは、開発用のログインが使える(ADR-0032)。本番用のビルドでは、使えない。
-		command: `pnpm --filter @amime/web preview --port ${PORT} --strictPort`,
+		command: `pnpm --filter @tsuzuri/web preview --port ${PORT} --strictPort`,
 		url: `http://localhost:${PORT}/api/health`,
 		reuseExistingServer: !isCI,
 		timeout: 60_000,

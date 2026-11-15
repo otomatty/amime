@@ -1,4 +1,4 @@
-import { invariant } from "@amime/shared";
+import { invariant } from "@tsuzuri/shared";
 
 /**
  * 利用者から見た「1文字」(書記素)を扱う。

@@ -1,5 +1,5 @@
 {
-	"name": "@amime/parser",
+	"name": "@tsuzuri/parser",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
@@ -10,6 +10,6 @@
 		"typecheck": "tsc"
 	},
 	"dependencies": {
-		"@amime/shared": "workspace:*"
+		"@tsuzuri/shared": "workspace:*"
 	}
 }

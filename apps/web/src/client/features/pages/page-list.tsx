@@ -1,5 +1,5 @@
-import { titleOfLine } from "@amime/shared";
-import type { PageCard, PageSort } from "@amime/sync";
+import { titleOfLine } from "@tsuzuri/shared";
+import type { PageCard, PageSort } from "@tsuzuri/sync";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { pageHref } from "../editor/links.ts";
 import { listPages } from "../page/api.ts";

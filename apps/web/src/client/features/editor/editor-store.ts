@@ -1,4 +1,4 @@
-import type { Line } from "@amime/sync";
+import type { Line } from "@tsuzuri/sync";
 import { type EditorAction, type EditorModel, reduceModel } from "./editor-model.ts";
 
 /**

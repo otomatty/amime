@@ -1,5 +1,5 @@
 import { exports } from "cloudflare:workers";
-import { MAX_TITLE_LENGTH, toTitleLc } from "@amime/shared";
+import { MAX_TITLE_LENGTH, toTitleLc } from "@tsuzuri/shared";
 import { Hono } from "hono";
 import type { AppEnv } from "../context.ts";
 import { listMembers } from "../db/members.ts";

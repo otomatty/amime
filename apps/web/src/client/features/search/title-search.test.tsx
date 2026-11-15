@@ -8,7 +8,7 @@ const json = (body: unknown, status = 200) =>
 /** 名前で探すAPIの代わり。入力(q)ごとの応答を決める。 */
 function stubTitles(respond: (query: string) => Response | Promise<Response>) {
 	const fetchMock = vi.fn(async (url: string) =>
-		respond(new URL(url, "https://amime.test").searchParams.get("q") ?? ""),
+		respond(new URL(url, "https://tsuzuri.test").searchParams.get("q") ?? ""),
 	);
 	vi.stubGlobal("fetch", fetchMock);
 	return fetchMock;
