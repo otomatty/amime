@@ -275,10 +275,9 @@ test.describe("記法の表示", () => {
 	});
 });
 
-test.describe("日本語入力(IME)", () => {
-	// 実際のIMEと同じイベント列を、Chromium の開発者ツール用の通信(CDP)で発生させる。
-	// CDP は Chromium でしか使えない。他のブラウザを対象に加えるときは、このブロックを Chromium 限定にすること。
-
+// 実際のIMEと同じイベント列を、Chromium の開発者ツール用の通信(CDP)で発生させる。
+// CDP は Chromium でしか使えないので、@chromium を付ける(他のブラウザでは動かさない。playwright.config.ts)。
+test.describe("日本語入力(IME)", { tag: "@chromium" }, () => {
 	test.beforeEach(async ({ page }) => {
 		await page.goto("/?playground");
 	});
@@ -552,8 +551,11 @@ test.describe("範囲選択・コピー・取り消し", () => {
 			.locator("[data-column].selected")
 			.evaluateAll((elements) => elements.map((el) => el.textContent).join(""));
 
-	test.beforeEach(async ({ page, context }) => {
-		await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+	test.beforeEach(async ({ page, context, browserName }) => {
+		// クリップボードを読む許可(clipboard-read)は、Chromium でしか与えられない。
+		// クリップボードの中身を確かめるテストには @chromium を付け、他のブラウザでは動かさない(playwright.config.ts)。
+		if (browserName === "chromium")
+			await context.grantPermissions(["clipboard-read", "clipboard-write"]);
 		await page.goto("/?playground");
 	});
 
@@ -607,7 +609,9 @@ test.describe("範囲選択・コピー・取り消し", () => {
 		expect(await selectedText(page)).toBe("に空白を入れると箇条書きになります");
 	});
 
-	test("コピーして貼り付けると、選択した文字列が複製される", async ({ page }) => {
+	test("コピーして貼り付けると、選択した文字列が複製される", { tag: "@chromium" }, async ({
+		page,
+	}) => {
 		await clickLineEnd(page, 0);
 		await page.keyboard.press("Shift+Home");
 		expect(await selectedText(page)).toBe("はじめに");
@@ -620,9 +624,9 @@ test.describe("範囲選択・コピー・取り消し", () => {
 		expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("はじめに");
 	});
 
-	test("複数行を切り取って、別の場所に貼り付けられる(記法やインデントもそのまま)", async ({
-		page,
-	}) => {
+	test("複数行を切り取って、別の場所に貼り付けられる(記法やインデントもそのまま)", {
+		tag: "@chromium",
+	}, async ({ page }) => {
 		await clickLineEnd(page, 2); // 「 1段目」
 		await page.keyboard.press("Home");
 		await page.keyboard.press("Shift+ArrowDown");

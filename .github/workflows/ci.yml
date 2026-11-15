@@ -90,25 +90,53 @@ jobs:
       - name: 配信するファイルの大きさ
         run: pnpm check:size
 
+  # ブラウザごとに、並べて動かす。スマートフォンの設定(画面の作りと主な画面)は、同じエンジンのジョブで動かす。
+  # Chromium の機能を使うテスト(@chromium)は、Chromium だけで動く(e2e/playwright.config.ts)。
   e2e:
-    name: E2Eテスト
+    name: E2Eテスト(${{ matrix.browser }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            projects: --project=chromium --project=mobile-chrome
+            # Chromium の実行に必要なライブラリは、ランナーのイメージに入っている。apt の更新は、長く待たされることがあるので、しない。
+            deps: false
+          - browser: firefox
+            projects: --project=firefox
+            deps: true
+          - browser: webkit
+            projects: --project=webkit --project=mobile-safari
+            deps: true
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-      # --with-deps は付けない。apt の更新が必要になり、ランナーの状態によっては長時間待たされる。
-      # ブラウザの実行に必要なライブラリは、ランナーのイメージに入っている。
       - name: ブラウザをインストール
-        run: pnpm --filter @tsuzuri/e2e exec playwright install chromium
+        env:
+          BROWSER: ${{ matrix.browser }}
+          DEPS: ${{ matrix.deps }}
+        run: |
+          if [ "$DEPS" = "true" ]; then
+            pnpm --filter @tsuzuri/e2e exec playwright install --with-deps "$BROWSER"
+          else
+            pnpm --filter @tsuzuri/e2e exec playwright install "$BROWSER"
+          fi
       # 開発用のログインを使えるE2E用のビルド(--mode e2e)を作ってから実行する。
-      - run: pnpm test:e2e
+      - name: E2Eテスト
+        env:
+          PROJECTS: ${{ matrix.projects }}
+        # PROJECTS は「--project=…」を空白で区切ったもの。分けて渡すため、引用符で囲まない。
+        run: |
+          # shellcheck disable=SC2086
+          pnpm test:e2e $PROJECTS
       # 失敗したときは、画面の記録(trace)と報告を、成果物として残す。Actions の実行の画面から、取り出せる。
       - name: 失敗したときの記録を残す
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-report
+          name: e2e-report-${{ matrix.browser }}
           path: |
             e2e/playwright-report
             e2e/test-results
