@@ -1,4 +1,4 @@
-import type { Change, ClientId, CommitId, LineId, PendingEntry } from "@amime/sync";
+import type { Change, ClientId, CommitId, LineId, PendingEntry } from "@tsuzuri/sync";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPendingStore, PENDING_MAX_AGE_MS } from "./pending-store.ts";
 
@@ -121,7 +121,7 @@ describe("createPendingStore", () => {
 
 	it("古すぎる記録と、読めない記録は、引き取らずに消す", async () => {
 		storeFor("stale", { now: 0 }).save(unsent(update("古い")));
-		window.localStorage.setItem(`amime:pending:${encodeURIComponent("メモ")}:broken`, "{");
+		window.localStorage.setItem(`tsuzuri:pending:${encodeURIComponent("メモ")}:broken`, "{");
 
 		expect(await storeFor("new", { now: PENDING_MAX_AGE_MS + 1 }).adopt()).toEqual([]);
 		expect(window.localStorage).toHaveLength(0);
@@ -198,7 +198,7 @@ describe("createPendingStore", () => {
 
 	it("引き取りの途中で元のタブが記録を書き換えていたら、その記録は消さない", async () => {
 		storeFor("old").save(unsent(update("A2")));
-		const key = `amime:pending:${encodeURIComponent("メモ")}:old`;
+		const key = `tsuzuri:pending:${encodeURIComponent("メモ")}:old`;
 		// 読んだあと、消す前に、元のタブ(まだ開いている)が新しい変更を書き込む。
 		const racing = new Proxy(window.localStorage, {
 			get(target, property) {

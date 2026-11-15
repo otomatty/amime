@@ -1,4 +1,4 @@
-import type { ClientId } from "@amime/sync";
+import type { ClientId } from "@tsuzuri/sync";
 
 /** この端末(タブ)の識別子を作る。ページを開くたびに新しく作る。 */
 export function createClientId(): ClientId {

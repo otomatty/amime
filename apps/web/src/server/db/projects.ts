@@ -1,5 +1,5 @@
-import type { Role, Visibility } from "@amime/shared";
-import type { ProjectInfo, UserId } from "@amime/sync";
+import type { Role, Visibility } from "@tsuzuri/shared";
+import type { ProjectInfo, UserId } from "@tsuzuri/sync";
 import { randomToken } from "../auth/crypto.ts";
 import type { ProjectAccess } from "../context.ts";
 

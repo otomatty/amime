@@ -1,5 +1,5 @@
-import { insertText, setCursor } from "@amime/editor-core";
-import type { Line, LineId } from "@amime/sync";
+import { insertText, setCursor } from "@tsuzuri/editor-core";
+import type { Line, LineId } from "@tsuzuri/sync";
 import { describe, expect, it, vi } from "vitest";
 import { createModel, type EditorAction } from "./editor-model.ts";
 import { createEditorStore } from "./editor-store.ts";

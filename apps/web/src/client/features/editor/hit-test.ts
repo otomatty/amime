@@ -1,5 +1,5 @@
-import type { Cursor } from "@amime/editor-core";
-import type { Span } from "@amime/parser";
+import type { Cursor } from "@tsuzuri/editor-core";
+import type { Span } from "@tsuzuri/parser";
 
 /** 画面上の1文字の位置。 */
 export type CharBox = {

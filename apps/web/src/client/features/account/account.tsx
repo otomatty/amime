@@ -1,4 +1,4 @@
-import type { AccountState } from "@amime/sync";
+import type { AccountState } from "@tsuzuri/sync";
 import {
 	createContext,
 	type ReactNode,

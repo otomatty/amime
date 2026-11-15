@@ -2,7 +2,7 @@ import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 const get = (path: string, headers: Record<string, string> = {}) =>
-	exports.default.fetch(`https://amime.test${path}`, { headers });
+	exports.default.fetch(`https://tsuzuri.test${path}`, { headers });
 
 describe("GET /api/health", () => {
 	it("稼働中であることを返す", async () => {

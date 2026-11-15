@@ -1,6 +1,6 @@
-import { parseLine } from "@amime/parser";
-import { parseDisplayName } from "@amime/shared";
-import type { Account } from "@amime/sync";
+import { parseLine } from "@tsuzuri/parser";
+import { parseDisplayName } from "@tsuzuri/shared";
+import type { Account } from "@tsuzuri/sync";
 import { type FormEvent, useState } from "react";
 import "./account.css";
 import { useAccount } from "./account.tsx";

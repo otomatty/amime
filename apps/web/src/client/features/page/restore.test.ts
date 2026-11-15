@@ -8,7 +8,7 @@ import {
 	type Line,
 	type LineId,
 	type PendingEntry,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 import { describe, expect, it, vi } from "vitest";
 import { PageApiError } from "./page-api-error.ts";
 import { restorePage } from "./restore.ts";

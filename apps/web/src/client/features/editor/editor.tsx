@@ -12,9 +12,9 @@ import {
 	selectTo,
 	setCursor,
 	shortcutLetter,
-} from "@amime/editor-core";
-import { classifyLines } from "@amime/parser";
-import type { Line, LineId } from "@amime/sync";
+} from "@tsuzuri/editor-core";
+import { classifyLines } from "@tsuzuri/parser";
+import type { Line, LineId } from "@tsuzuri/sync";
 import {
 	type ClipboardEvent,
 	type CompositionEvent,
@@ -103,7 +103,7 @@ const keyInput = (event: KeyboardEvent): KeyInput => ({
 
 /**
  * 行エディタ。表示は自前で描画し、文字入力は画面に見えない textarea で受け取る(ADR-0010)。
- * 編集の規則はすべて @amime/editor-core にあり、ここはイベントを操作に変換するだけ。
+ * 編集の規則はすべて @tsuzuri/editor-core にあり、ここはイベントを操作に変換するだけ。
  */
 export function Editor({
 	initialLines,

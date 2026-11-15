@@ -4,7 +4,8 @@ test.describe("起動確認", () => {
 	test("トップページにプロダクト名と行が表示される", async ({ page }) => {
 		await page.goto("/?playground");
 
-		await expect(page.getByRole("heading", { level: 1, name: "Amime" })).toBeVisible();
+		await expect(page).toHaveTitle("Tsuzuri");
+		await expect(page.getByRole("heading", { level: 1, name: "Tsuzuri" })).toBeVisible();
 		await expect(page.getByTestId("line").first()).toBeVisible();
 	});
 
@@ -23,7 +24,7 @@ test.describe("起動確認", () => {
 	test("SPAなので、未知のパスでもアプリが表示される", async ({ page }) => {
 		await page.goto("/some-project/some-page");
 
-		await expect(page.getByRole("heading", { level: 1 })).toContainText("Amime");
+		await expect(page.getByRole("heading", { level: 1 })).toContainText("Tsuzuri");
 		// ないプロジェクトなので、そのことが表示される。
 		await expect(page.getByText(/ないか、見る権限がありません/)).toBeVisible();
 	});

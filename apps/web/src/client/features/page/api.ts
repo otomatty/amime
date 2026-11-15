@@ -1,4 +1,4 @@
-import type { Result } from "@amime/shared";
+import type { Result } from "@tsuzuri/shared";
 import {
 	type ClientId,
 	type Commit,
@@ -15,7 +15,7 @@ import {
 	parseSearchResults,
 	parseSnapshot,
 	type SearchResults,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 import { currentProject } from "../project/route.ts";
 import { PageApiError } from "./page-api-error.ts";
 import { connectPageSocket } from "./page-socket.ts";

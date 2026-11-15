@@ -4,8 +4,8 @@ import {
 	type LineRole,
 	parseLine,
 	writePageLink,
-} from "@amime/parser";
-import { toTitleLc } from "@amime/shared";
+} from "@tsuzuri/parser";
+import { toTitleLc } from "@tsuzuri/shared";
 import { ceilToBoundary } from "./graphemes.ts";
 import { lineAtCursor } from "./state.ts";
 import type { EditorState } from "./types.ts";

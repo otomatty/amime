@@ -1,5 +1,5 @@
-import { canCompleteLink, type LinkQuery, linkQueryAt } from "@amime/editor-core";
-import type { LineRole } from "@amime/parser";
+import { canCompleteLink, type LinkQuery, linkQueryAt } from "@tsuzuri/editor-core";
+import type { LineRole } from "@tsuzuri/parser";
 import { type Ref, useEffect, useMemo, useState } from "react";
 
 /** 入力が止まってから、候補を探し始めるまでの時間。打つたびに問い合わせない。 */

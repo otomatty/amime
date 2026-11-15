@@ -1,4 +1,4 @@
-import type { PageCard } from "@amime/sync";
+import type { PageCard } from "@tsuzuri/sync";
 import { pageHref } from "../editor/links.ts";
 import "./page-card.css";
 

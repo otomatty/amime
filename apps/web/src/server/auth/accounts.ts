@@ -1,5 +1,5 @@
-import type { Identity } from "@amime/shared";
-import type { Account, UserId } from "@amime/sync";
+import type { Identity } from "@tsuzuri/shared";
+import type { Account, UserId } from "@tsuzuri/sync";
 import { hashToken, randomToken } from "./crypto.ts";
 
 /** ログインの状態を保つ長さ(ミリ秒)。使い続けているあいだは、延びる。 */

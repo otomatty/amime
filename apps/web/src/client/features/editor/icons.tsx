@@ -1,4 +1,4 @@
-import { toTitleLc } from "@amime/shared";
+import { toTitleLc } from "@tsuzuri/shared";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 
 /** 名前から、アイコンの画像のURLを引く。引けなければ null。 */

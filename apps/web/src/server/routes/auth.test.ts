@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { app } from "../app.ts";
 
-const ORIGIN = "https://amime.test";
+const ORIGIN = "https://tsuzuri.test";
 type Env = typeof env;
 
 /** Set-Cookie から、次の要求で送る Cookie を作る(消されたものは除く)。 */
@@ -123,7 +123,7 @@ describe("GET /api/me", () => {
 	});
 
 	it("でたらめな Cookie では、ログインしていない扱いになる", async () => {
-		expect((await me("amime_session=unknown")).user).toBeNull();
+		expect((await me("tsuzuri_session=unknown")).user).toBeNull();
 	});
 });
 
@@ -133,7 +133,7 @@ describe("開発用のログイン(POST /api/auth/dev)", () => {
 
 		expect(response.status).toBe(204);
 		const [cookie = ""] = response.headers.getSetCookie();
-		expect(cookie).toMatch(/^amime_session=[\w-]{40,}; /);
+		expect(cookie).toMatch(/^tsuzuri_session=[\w-]{40,}; /);
 		expect(cookie).toContain("HttpOnly");
 		expect(cookie).toContain("SameSite=Lax");
 		expect(cookie).toContain("Path=/");
@@ -238,7 +238,7 @@ describe("ログインの期限", () => {
 		expect((await call("/api/me", { cookie })).headers.getSetCookie()).toEqual([]);
 		vi.setSystemTime(new Date("2026-01-20T00:00:00Z"));
 		const renewed = await call("/api/me", { cookie });
-		expect(renewed.headers.getSetCookie()[0]).toMatch(/^amime_session=.*Max-Age=2592000/);
+		expect(renewed.headers.getSetCookie()[0]).toMatch(/^tsuzuri_session=.*Max-Age=2592000/);
 		expect(cookiesFrom(renewed, cookie)).toBe(cookie);
 
 		vi.setSystemTime(new Date("2026-02-10T00:00:00Z"));
@@ -264,7 +264,7 @@ describe("Google でログインする", () => {
 		expect(query.get("code_challenge")).toMatch(/^[\w-]{43}$/);
 		expect(query.get("code_challenge_method")).toBe("S256");
 		const [cookie = ""] = response.headers.getSetCookie();
-		expect(cookie).toMatch(/^amime_login=/);
+		expect(cookie).toMatch(/^tsuzuri_login=/);
 		expect(cookie).toContain("HttpOnly");
 		expect(cookie).toContain("SameSite=Lax");
 		expect(cookie).toContain("Path=/api/auth");
@@ -304,7 +304,7 @@ describe("Google でログインする", () => {
 			.replaceAll("=", "");
 		expect(challenge).toBe(expected);
 		const after = cookiesFrom(response, cookie);
-		expect(after).toMatch(/^amime_session=/);
+		expect(after).toMatch(/^tsuzuri_session=/);
 		expect((await me(after)).user).toEqual({
 			id: expect.any(String),
 			name: "山田 花子",
@@ -355,7 +355,7 @@ describe("Google でログインする", () => {
 		expect(response.status).toBe(302);
 		expect(response.headers.get("location")).toBe("/?login=failed");
 		expect(requests).toEqual([]);
-		expect(cookiesFrom(response, cookie)).not.toContain("amime_session");
+		expect(cookiesFrom(response, cookie)).not.toContain("tsuzuri_session");
 	});
 
 	it.each([
@@ -417,7 +417,7 @@ describe("Google でログインする", () => {
 			{ cookie },
 		);
 
-		expect(cookiesFrom(response, cookie)).not.toContain("amime_login");
+		expect(cookiesFrom(response, cookie)).not.toContain("tsuzuri_login");
 	});
 
 	it("戻る場所がとても長くても、照合に使う Cookie は、ブラウザが受け取れる大きさに収まる", async () => {

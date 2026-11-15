@@ -1,4 +1,4 @@
-import type { InviteTarget } from "@amime/sync";
+import type { InviteTarget } from "@tsuzuri/sync";
 import { Hono } from "hono";
 import type { AppEnv } from "../context.ts";
 import { acceptInvite, findInvite } from "../db/members.ts";

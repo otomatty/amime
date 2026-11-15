@@ -41,16 +41,16 @@ importers:
 
   apps/web:
     dependencies:
-      '@amime/editor-core':
+      '@tsuzuri/editor-core':
         specifier: workspace:*
         version: link:../../packages/editor-core
-      '@amime/parser':
+      '@tsuzuri/parser':
         specifier: workspace:*
         version: link:../../packages/parser
-      '@amime/shared':
+      '@tsuzuri/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@amime/sync':
+      '@tsuzuri/sync':
         specifier: workspace:*
         version: link:../../packages/sync
       fractional-indexing:
@@ -105,19 +105,19 @@ importers:
 
   packages/editor-core:
     dependencies:
-      '@amime/parser':
+      '@tsuzuri/parser':
         specifier: workspace:*
         version: link:../parser
-      '@amime/shared':
+      '@tsuzuri/shared':
         specifier: workspace:*
         version: link:../shared
-      '@amime/sync':
+      '@tsuzuri/sync':
         specifier: workspace:*
         version: link:../sync
 
   packages/parser:
     dependencies:
-      '@amime/shared':
+      '@tsuzuri/shared':
         specifier: workspace:*
         version: link:../shared
 
@@ -125,7 +125,7 @@ importers:
 
   packages/sync:
     dependencies:
-      '@amime/shared':
+      '@tsuzuri/shared':
         specifier: workspace:*
         version: link:../shared
       valibot:

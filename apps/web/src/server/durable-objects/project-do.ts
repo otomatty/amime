@@ -1,5 +1,5 @@
 import { DurableObject, exports } from "cloudflare:workers";
-import { type PageSummary, plainLines } from "@amime/parser";
+import { type PageSummary, plainLines } from "@tsuzuri/parser";
 import {
 	foldText,
 	likePatterns,
@@ -11,7 +11,7 @@ import {
 	titleFromName,
 	titleOfLine,
 	toTitleLc,
-} from "@amime/shared";
+} from "@tsuzuri/shared";
 import type {
 	LinkGroup,
 	PageCard,
@@ -22,7 +22,7 @@ import type {
 	PageSort,
 	SearchResults,
 	TitleProblem,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 
 /** 開いただけで保存されていないページを、台帳に残しておく期間。 */
 export const PLACEHOLDER_MAX_AGE_MS = 24 * 60 * 60 * 1000;

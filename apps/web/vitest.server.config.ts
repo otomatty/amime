@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	plugins: [cloudflareTest({ config: true })],
 	test: {
-		name: "@amime/web:server",
+		name: "@tsuzuri/web:server",
 		include: ["src/server/**/*.test.ts"],
 	},
 });

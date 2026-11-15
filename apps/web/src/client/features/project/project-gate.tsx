@@ -1,4 +1,4 @@
-import type { ProjectInfo } from "@amime/sync";
+import type { ProjectInfo } from "@tsuzuri/sync";
 import { type ReactNode, useEffect, useState } from "react";
 import { useAccount } from "../account/account.tsx";
 import { type LoadedProject, loadProject } from "./api.ts";

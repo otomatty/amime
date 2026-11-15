@@ -1,4 +1,4 @@
-import { invariant } from "@amime/shared";
+import { invariant } from "@tsuzuri/shared";
 import { nextBoundary, previousBoundary, snapToBoundary } from "./graphemes.ts";
 import { lineAt, lineAtCursor, selectionRange } from "./state.ts";
 import type { Cursor, EditorState } from "./types.ts";

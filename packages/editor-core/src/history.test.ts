@@ -1,4 +1,4 @@
-import { applyChanges, type Change, type Line, type LineId, startTracking } from "@amime/sync";
+import { applyChanges, type Change, type Line, type LineId, startTracking } from "@tsuzuri/sync";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { deleteBackward, insertText, splitLine } from "./commands.ts";

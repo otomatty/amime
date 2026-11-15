@@ -1,4 +1,4 @@
-import { itemAt } from "@amime/shared";
+import { itemAt } from "@tsuzuri/shared";
 import {
 	type Line,
 	type LineId,
@@ -9,7 +9,7 @@ import {
 	recordEdit,
 	revertEdit,
 	trackLines,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 import { setCursor } from "./motion.ts";
 import { selectTo } from "./selection.ts";
 import type { Cursor, EditorState } from "./types.ts";

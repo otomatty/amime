@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import type { UserId } from "@amime/sync";
+import type { UserId } from "@tsuzuri/sync";
 import { beforeAll, describe, expect, it } from "vitest";
 import { signIn } from "../auth/accounts.ts";
 import {

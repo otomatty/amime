@@ -13,7 +13,7 @@ const hit = (id: string, title: string, ...lines: string[]) => ({
 
 function stubSearch(respond: (query: string) => Response | Promise<Response>) {
 	const fetchMock = vi.fn(async (url: string) =>
-		respond(new URL(url, "https://amime.test").searchParams.get("q") ?? ""),
+		respond(new URL(url, "https://tsuzuri.test").searchParams.get("q") ?? ""),
 	);
 	vi.stubGlobal("fetch", fetchMock);
 	return fetchMock;

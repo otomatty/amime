@@ -1,7 +1,7 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import type { PageSummary } from "@amime/parser";
-import { type CommitId, type LineId, MAX_LINE_LENGTH, type PageId } from "@amime/sync";
+import type { PageSummary } from "@tsuzuri/parser";
+import { type CommitId, type LineId, MAX_LINE_LENGTH, type PageId } from "@tsuzuri/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	DEFAULT_HITS,

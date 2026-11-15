@@ -1,4 +1,4 @@
-import { itemAt } from "@amime/shared";
+import { itemAt } from "@tsuzuri/shared";
 import { type MergeBudget, mergeText } from "./merge-text.ts";
 import { MAX_LINE_LENGTH } from "./schema.ts";
 import type { Applied, Change, Line, LineId, Placement } from "./types.ts";

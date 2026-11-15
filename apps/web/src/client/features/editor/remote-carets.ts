@@ -1,4 +1,4 @@
-import type { LineId } from "@amime/sync";
+import type { LineId } from "@tsuzuri/sync";
 import type { RemoteCaret } from "./editor-line.tsx";
 
 /** 他の人(端末)のカーソルの位置(ADR-0023)。 */

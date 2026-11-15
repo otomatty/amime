@@ -1,5 +1,5 @@
-import type { Role, Visibility } from "@amime/shared";
-import type { Account } from "@amime/sync";
+import type { Role, Visibility } from "@tsuzuri/shared";
+import type { Account } from "@tsuzuri/sync";
 
 /** 要求の宛先のプロジェクトと、要求した人の、そこでの役割(メンバーでなければ null)。 */
 export type ProjectAccess = {

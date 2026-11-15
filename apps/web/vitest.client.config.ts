@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	plugins: [react()],
 	test: {
-		name: "@amime/web:client",
+		name: "@tsuzuri/web:client",
 		environment: "jsdom",
 		setupFiles: ["./vitest.client.setup.ts"],
 		restoreMocks: true,

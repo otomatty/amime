@@ -1,4 +1,4 @@
-import type { Identity } from "@amime/shared";
+import type { Identity } from "@tsuzuri/shared";
 
 /**
  * ログインの提供元(OpenID Connect の認可コードの流れ)。

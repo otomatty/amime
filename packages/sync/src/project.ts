@@ -1,4 +1,4 @@
-import { err, ok, type Result, type Role, type Visibility } from "@amime/shared";
+import { err, ok, type Result, type Role, type Visibility } from "@tsuzuri/shared";
 import * as v from "valibot";
 import type { UserId } from "./account.ts";
 

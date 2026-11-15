@@ -1,15 +1,15 @@
-import { toTitleLc } from "@amime/shared";
+import { toTitleLc } from "@tsuzuri/shared";
 import {
 	type ClientId,
 	type PendingEntry,
 	type PendingRecord,
 	parsePendingRecord,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 
 /** 残しておく期間。これより古い記録は、復元せずに消す。 */
 export const PENDING_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
-const KEY_PREFIX = "amime:pending:";
+const KEY_PREFIX = "tsuzuri:pending:";
 
 /**
  * 未送信の変更を、端末(ブラウザ)の中に残しておく場所(ADR-0020)。

@@ -1,4 +1,4 @@
-import type { LineId } from "@amime/sync";
+import type { LineId } from "@tsuzuri/sync";
 import { describe, expect, it } from "vitest";
 import { caretsByLine, colorOf, REMOTE_COLORS } from "./remote-carets.ts";
 

@@ -1,4 +1,4 @@
-import type { ClientId, CursorPosition } from "@amime/sync";
+import type { ClientId, CursorPosition } from "@tsuzuri/sync";
 
 /** 他の端末(人)のカーソル。 */
 export type RemoteCursor = CursorPosition & {

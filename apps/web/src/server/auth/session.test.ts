@@ -23,7 +23,7 @@ const call = (url: string, headers: Record<string, string> = {}) =>
 
 describe("session(ログインの状態を読む)", () => {
 	it("Cookie がなければ、利用者は null。応答は、キャッシュさせない", async () => {
-		const response = await call("https://amime.test/who");
+		const response = await call("https://tsuzuri.test/who");
 
 		expect(await response.json()).toEqual({ user: null });
 		expect(response.headers.get("cache-control")).toBe("no-store");
@@ -40,15 +40,15 @@ describe("session(ログインの状態を読む)", () => {
 		);
 		const token = await startSession(env.DB, user, Date.now());
 
-		const response = await call("https://amime.test/who", { cookie: `amime_session=${token}` });
+		const response = await call("https://tsuzuri.test/who", { cookie: `tsuzuri_session=${token}` });
 
 		expect(await response.json()).toEqual({ user: subject });
 		expect(response.headers.getSetCookie()).toEqual([]);
 	});
 
 	it("他のサイトのページからの要求は、断る。同じサイトからの要求と、Origin のない要求は、通す", async () => {
-		const evil = await call("https://amime.test/who", { origin: "https://evil.example" });
-		const same = await call("https://amime.test/who", { origin: "https://amime.test" });
+		const evil = await call("https://tsuzuri.test/who", { origin: "https://evil.example" });
+		const same = await call("https://tsuzuri.test/who", { origin: "https://tsuzuri.test" });
 
 		expect(evil.status).toBe(403);
 		expect(await evil.json()).toEqual({ error: "cross-origin" });
@@ -58,10 +58,10 @@ describe("session(ログインの状態を読む)", () => {
 
 describe("ログインの状態を入れる Cookie", () => {
 	it("スクリプトから読めず、他のサイトからの要求には付かない。https では Secure を付ける", async () => {
-		const [cookie = ""] = (await call("https://amime.test/set")).headers.getSetCookie();
+		const [cookie = ""] = (await call("https://tsuzuri.test/set")).headers.getSetCookie();
 
 		expect(cookie).toBe(
-			"amime_session=token-1; Max-Age=2592000; Path=/; HttpOnly; Secure; SameSite=Lax",
+			"tsuzuri_session=token-1; Max-Age=2592000; Path=/; HttpOnly; Secure; SameSite=Lax",
 		);
 	});
 
@@ -73,8 +73,8 @@ describe("ログインの状態を入れる Cookie", () => {
 	});
 
 	it("消すときは、期限の切れた Cookie で上書きする", async () => {
-		const [cookie = ""] = (await call("https://amime.test/clear")).headers.getSetCookie();
+		const [cookie = ""] = (await call("https://tsuzuri.test/clear")).headers.getSetCookie();
 
-		expect(cookie).toMatch(/^amime_session=; Max-Age=0; Path=\//);
+		expect(cookie).toMatch(/^tsuzuri_session=; Max-Age=0; Path=\//);
 	});
 });

@@ -3,7 +3,7 @@ import { env, exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { app } from "../app.ts";
 
-const ORIGIN = "https://amime.test";
+const ORIGIN = "https://tsuzuri.test";
 const unique = (name: string) => `${name}-${crypto.randomUUID().slice(0, 8)}`;
 
 type Session = { cookie: string; id: string; name: string };

@@ -1,4 +1,4 @@
-import { parseClientId } from "@amime/sync";
+import { parseClientId } from "@tsuzuri/sync";
 import { describe, expect, it } from "vitest";
 import { createClientId } from "./client-id.ts";
 

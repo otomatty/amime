@@ -1,4 +1,4 @@
-import type { ClientId, LineId } from "@amime/sync";
+import type { ClientId, LineId } from "@tsuzuri/sync";
 import { describe, expect, it, vi } from "vitest";
 import { createPresence } from "./presence.ts";
 

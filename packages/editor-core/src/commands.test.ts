@@ -1,4 +1,4 @@
-import { InvariantError } from "@amime/shared";
+import { InvariantError } from "@tsuzuri/shared";
 import { describe, expect, it } from "vitest";
 import {
 	deleteBackward,

@@ -1,4 +1,4 @@
-import { itemAt } from "@amime/shared";
+import { itemAt } from "@tsuzuri/shared";
 import type { Line, LineId } from "./types.ts";
 
 /** 上から(fromEnd なら下から)数えて、本文が一致し続ける行の数。 */

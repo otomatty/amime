@@ -1,4 +1,4 @@
-import { type AccountState, parseAccountState } from "@amime/sync";
+import { type AccountState, parseAccountState } from "@tsuzuri/sync";
 
 /** ログインの状態が分からないときの扱い。ログインしていないものとし、ログインの方法も出さない。 */
 const UNKNOWN: AccountState = { user: null, login: [] };

@@ -16,8 +16,8 @@ describe("pageHref", () => {
 	});
 
 	it("スキームに見えるタイトルでも、相対パスのままになる", () => {
-		expect(new URL(pageHref("javascript:alert(1)"), "https://amime.test/p/x").href).toBe(
-			"https://amime.test/p/javascript%3Aalert(1)",
+		expect(new URL(pageHref("javascript:alert(1)"), "https://tsuzuri.test/p/x").href).toBe(
+			"https://tsuzuri.test/p/javascript%3Aalert(1)",
 		);
 	});
 });

@@ -1,5 +1,5 @@
-import type { LineId } from "@amime/sync";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { LineId } from "@tsuzuri/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "./editor.tsx";
 

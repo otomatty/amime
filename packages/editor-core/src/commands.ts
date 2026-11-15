@@ -1,4 +1,4 @@
-import { parseIndent } from "@amime/parser";
+import { parseIndent } from "@tsuzuri/parser";
 import { ceilToBoundary, nextBoundary, previousBoundary, snapToBoundary } from "./graphemes.ts";
 import {
 	type LineRange,

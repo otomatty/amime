@@ -1,5 +1,5 @@
-import { insertText } from "@amime/editor-core";
-import type { Line, LineId } from "@amime/sync";
+import { insertText } from "@tsuzuri/editor-core";
+import type { Line, LineId } from "@tsuzuri/sync";
 import { describe, expect, it } from "vitest";
 import { createModel, type EditorAction, reduceModel } from "./editor-model.ts";
 

@@ -7,7 +7,7 @@ import {
 	type PageSnapshot,
 	startTracking,
 	type TitleProblem,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "../editor/editor.tsx";
 import { createIdPrefix } from "../editor/editor-model.ts";

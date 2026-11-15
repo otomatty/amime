@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { app } from "../app.ts";
 
-const ORIGIN = "https://amime.test";
+const ORIGIN = "https://tsuzuri.test";
 type Env = typeof env;
 const unique = (name: string) => `${name}-${crypto.randomUUID().slice(0, 8)}`;
 

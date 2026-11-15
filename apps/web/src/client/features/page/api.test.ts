@@ -1,4 +1,4 @@
-import type { ClientId, Commit, CommitId, LineId, PageId } from "@amime/sync";
+import type { ClientId, Commit, CommitId, LineId, PageId } from "@tsuzuri/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createPageApi,
@@ -222,10 +222,10 @@ describe("deletePage(ページを削除する)", () => {
 
 describe("pageSocketUrl", () => {
 	it("いま開いているページと同じ接続先の、WebSocket のURLを作る", () => {
-		const page = new URL("https://amime.example/notes/x");
+		const page = new URL("https://tsuzuri.example/notes/x");
 
 		expect(pageSocketUrl(page, pageId, client)).toBe(
-			"wss://amime.example/api/projects/team/pages/p-1/socket?client=tab-1",
+			"wss://tsuzuri.example/api/projects/team/pages/p-1/socket?client=tab-1",
 		);
 	});
 

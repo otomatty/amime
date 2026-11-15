@@ -1,4 +1,4 @@
-# Amime(網目)
+# Tsuzuri(綴)
 
 行とリンクで知識をつなぐ、チーム向けのリアルタイム共同編集ノートです。Cloudflare Workers 上で動きます。
 
@@ -20,7 +20,7 @@ pnpm check        # CIと同じ検査を一通り実行(E2Eを除く)
 E2Eテストは、ビルドしてから実行します。
 
 ```sh
-pnpm --filter @amime/e2e exec playwright install chromium   # 初回のみ
+pnpm --filter @tsuzuri/e2e exec playwright install chromium   # 初回のみ
 pnpm test:e2e
 ```
 

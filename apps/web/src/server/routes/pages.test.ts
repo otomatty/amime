@@ -20,12 +20,12 @@ function call(url: string, init: RequestInit = {}): Promise<Response> {
 }
 
 beforeAll(async () => {
-	const login = await exports.default.fetch("https://amime.test/api/auth/dev", {
+	const login = await exports.default.fetch("https://tsuzuri.test/api/auth/dev", {
 		method: "POST",
 		body: JSON.stringify({ name: "pages-test-member" }),
 	});
 	cookie = (login.headers.getSetCookie()[0] ?? "").split(";")[0] ?? "";
-	await call("https://amime.test/api/projects", {
+	await call("https://tsuzuri.test/api/projects", {
 		method: "POST",
 		body: JSON.stringify({ name: PROJECT }),
 	});
@@ -35,9 +35,9 @@ beforeAll(async () => {
 	projectId = row?.id ?? "";
 });
 
-const get = (path: string) => call(`https://amime.test${path}`);
+const get = (path: string) => call(`https://tsuzuri.test${path}`);
 const post = (path: string, body: unknown) =>
-	call(`https://amime.test${path}`, {
+	call(`https://tsuzuri.test${path}`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: typeof body === "string" ? body : JSON.stringify(body),
@@ -125,7 +125,7 @@ describe("ページのAPI", () => {
 		});
 		await runDurableObjectAlarm(stub);
 
-		const response = await call(`https://amime.test/api/pages/${info.id}/socket?client=late`, {
+		const response = await call(`https://tsuzuri.test/api/pages/${info.id}/socket?client=late`, {
 			headers: { Upgrade: "websocket" },
 		});
 		const messages: unknown[] = [];
@@ -188,9 +188,12 @@ describe("ページのAPI", () => {
 		it("ページを書き換えたあと、少しして、ページの名前が1行目に合う。接続している端末に知らせる", async () => {
 			const { info } = await open("api-rename");
 			const stub = exports.PageDO.getByName(`${projectId}/${info.id}`);
-			const response = await call(`https://amime.test/api/pages/${info.id}/socket?client=reader`, {
-				headers: { Upgrade: "websocket" },
-			});
+			const response = await call(
+				`https://tsuzuri.test/api/pages/${info.id}/socket?client=reader`,
+				{
+					headers: { Upgrade: "websocket" },
+				},
+			);
 			const messages: unknown[] = [];
 			response.webSocket?.accept();
 			response.webSocket?.addEventListener("message", ({ data }) => {
@@ -495,9 +498,12 @@ describe("ページのAPI", () => {
 				changes: insertLines("書き換え リンク元", "[書き換え 前の名前] を読む"),
 			});
 			await index(linking);
-			const response = await call(`https://amime.test/api/pages/${linking}/socket?client=reader`, {
-				headers: { Upgrade: "websocket" },
-			});
+			const response = await call(
+				`https://tsuzuri.test/api/pages/${linking}/socket?client=reader`,
+				{
+					headers: { Upgrade: "websocket" },
+				},
+			);
 			const messages: unknown[] = [];
 			response.webSocket?.accept();
 			response.webSocket?.addEventListener("message", ({ data }) => {
@@ -528,7 +534,7 @@ describe("ページのAPI", () => {
 
 	describe("固定と削除(ADR-0026)", () => {
 		const send = (method: string, path: string, body?: unknown) =>
-			call(`https://amime.test${path}`, {
+			call(`https://tsuzuri.test${path}`, {
 				method,
 				...(body !== undefined && {
 					headers: { "content-type": "application/json" },
@@ -639,9 +645,12 @@ describe("ページのAPI", () => {
 		it("削除すると、開いている端末に知らせる。あとから接続した端末にも、削除されたことだけを伝えて閉じる", async () => {
 			const id = await create("削除を 知らせる");
 			const connect = async (client: string) => {
-				const response = await call(`https://amime.test/api/pages/${id}/socket?client=${client}`, {
-					headers: { Upgrade: "websocket" },
-				});
+				const response = await call(
+					`https://tsuzuri.test/api/pages/${id}/socket?client=${client}`,
+					{
+						headers: { Upgrade: "websocket" },
+					},
+				);
 				const messages: unknown[] = [];
 				const closes: number[] = [];
 				response.webSocket?.accept();
@@ -690,7 +699,7 @@ describe("ページの WebSocket", () => {
 
 	/** WebSocket で接続し、届いたメッセージを集める。 */
 	async function connect(page: string, client: string) {
-		const response = await call(`https://amime.test/api/pages/${page}/socket?client=${client}`, {
+		const response = await call(`https://tsuzuri.test/api/pages/${page}/socket?client=${client}`, {
 			headers: { Upgrade: "websocket" },
 		});
 		const socket = response.webSocket;
@@ -954,7 +963,7 @@ describe("ページの WebSocket", () => {
 		["ない", ""],
 		["使えない文字を含む", "?client=a%20b"],
 	])("端末の識別子が%s接続は 400 で断る", async (_name, query) => {
-		const response = await call(`https://amime.test/api/pages/ws-client/socket${query}`, {
+		const response = await call(`https://tsuzuri.test/api/pages/ws-client/socket${query}`, {
 			headers: { Upgrade: "websocket" },
 		});
 
@@ -968,7 +977,7 @@ describe("他のサイトからの要求", () => {
 	const change = { type: "insert", line: { id: "a", text: "a" }, after: null, before: null };
 
 	it("他のサイトのページからの書き込みは 403 で断り、何も保存しない", async () => {
-		const response = await call("https://amime.test/api/pages/origin-post/commits", {
+		const response = await call("https://tsuzuri.test/api/pages/origin-post/commits", {
 			method: "POST",
 			headers: foreign,
 			body: JSON.stringify({ id: commitId(), changes: [change] }),
@@ -980,22 +989,25 @@ describe("他のサイトからの要求", () => {
 	});
 
 	it("他のサイトのページからの WebSocket の接続は 403 で断る(他のサイトに編集内容を読ませない)", async () => {
-		const response = await call("https://amime.test/api/pages/origin-socket/socket?client=reader", {
-			headers: { Upgrade: "websocket", ...foreign },
-		});
+		const response = await call(
+			"https://tsuzuri.test/api/pages/origin-socket/socket?client=reader",
+			{
+				headers: { Upgrade: "websocket", ...foreign },
+			},
+		);
 
 		expect(response.status).toBe(403);
 	});
 
 	it("同じサイトのページからの要求は受け付ける", async () => {
-		const same = { Origin: "https://amime.test" };
+		const same = { Origin: "https://tsuzuri.test" };
 
-		const commit = await call("https://amime.test/api/pages/origin-same/commits", {
+		const commit = await call("https://tsuzuri.test/api/pages/origin-same/commits", {
 			method: "POST",
 			headers: same,
 			body: JSON.stringify({ id: commitId(), changes: [change] }),
 		});
-		const socket = await call("https://amime.test/api/pages/origin-same/socket?client=reader", {
+		const socket = await call("https://tsuzuri.test/api/pages/origin-same/socket?client=reader", {
 			headers: { Upgrade: "websocket", ...same },
 		});
 
@@ -1004,9 +1016,9 @@ describe("他のサイトからの要求", () => {
 	});
 
 	it("同じホストでも、http と https の違うサイトからの要求は断る", async () => {
-		const response = await call("https://amime.test/api/pages/origin-scheme/commits", {
+		const response = await call("https://tsuzuri.test/api/pages/origin-scheme/commits", {
 			method: "POST",
-			headers: { Origin: "http://amime.test" },
+			headers: { Origin: "http://tsuzuri.test" },
 			body: JSON.stringify({ id: commitId(), changes: [change] }),
 		});
 
@@ -1014,7 +1026,7 @@ describe("他のサイトからの要求", () => {
 	});
 
 	it("Origin が URL として読めない要求は断る", async () => {
-		const response = await call("https://amime.test/api/pages/origin-bad/commits", {
+		const response = await call("https://tsuzuri.test/api/pages/origin-bad/commits", {
 			method: "POST",
 			headers: { Origin: "null" },
 			body: JSON.stringify({ id: commitId(), changes: [change] }),

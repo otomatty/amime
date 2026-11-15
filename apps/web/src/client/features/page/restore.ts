@@ -7,7 +7,7 @@ import {
 	sameLines,
 	splitChanges,
 	withPending,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 import { deriveCommitId } from "./commit-id.ts";
 import { PageApiError } from "./page-api-error.ts";
 import type { PageApi } from "./page-sync.ts";

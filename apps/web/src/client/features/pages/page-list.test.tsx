@@ -19,7 +19,7 @@ const card = (id: string, title: string, extra: object = {}) => ({
 
 /** 一覧のAPIの代わり。呼ばれたURLを記録する。 */
 function stubList(respond: (url: URL) => Response | Promise<Response>) {
-	const fetchMock = vi.fn(async (input: string) => respond(new URL(input, "https://amime.test")));
+	const fetchMock = vi.fn(async (input: string) => respond(new URL(input, "https://tsuzuri.test")));
 	vi.stubGlobal("fetch", fetchMock);
 	return fetchMock;
 }

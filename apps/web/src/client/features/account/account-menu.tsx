@@ -1,4 +1,4 @@
-import type { Account, AccountState } from "@amime/sync";
+import type { Account, AccountState } from "@tsuzuri/sync";
 import { type FormEvent, useState } from "react";
 import "./account.css";
 import { useAccount } from "./account.tsx";

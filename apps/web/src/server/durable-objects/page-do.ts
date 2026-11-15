@@ -1,6 +1,6 @@
 import { DurableObject, exports } from "cloudflare:workers";
-import { type Rename, renameLinks, summarizePage } from "@amime/parser";
-import { toTitleLc } from "@amime/shared";
+import { type Rename, renameLinks, summarizePage } from "@tsuzuri/parser";
+import { toTitleLc } from "@tsuzuri/shared";
 import {
 	applyChanges,
 	type Change,
@@ -19,7 +19,7 @@ import {
 	parseCursorPosition,
 	parsePageTitle,
 	type ServerMessage,
-} from "@amime/sync";
+} from "@tsuzuri/sync";
 import { generateKeyBetween } from "fractional-indexing";
 import { MAX_INDEXED_TEXT } from "./project-do.ts";
 

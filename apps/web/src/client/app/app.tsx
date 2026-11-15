@@ -1,4 +1,4 @@
-import type { ProjectInfo } from "@amime/sync";
+import type { ProjectInfo } from "@tsuzuri/sync";
 import { AccountProvider, useAccount } from "../features/account/account.tsx";
 import { AccountMenu } from "../features/account/account-menu.tsx";
 import { Profile } from "../features/account/profile.tsx";
@@ -116,7 +116,7 @@ export function App() {
 			<main className="app">
 				<header className="app-header">
 					<h1 className="app-title">
-						<a href="/">Amime</a>
+						<a href="/">Tsuzuri</a>
 						{"project" in route && (
 							<>
 								{" / "}

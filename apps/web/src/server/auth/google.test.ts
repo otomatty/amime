@@ -8,7 +8,7 @@ const input = {
 	code: "code-1",
 	verifier: "verifier-1",
 	nonce: "nonce-1",
-	redirectUri: "https://amime.test/api/auth/callback/google",
+	redirectUri: "https://tsuzuri.test/api/auth/callback/google",
 	now: 1_000_000,
 };
 const claims = {

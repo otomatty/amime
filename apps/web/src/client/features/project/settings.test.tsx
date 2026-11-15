@@ -60,7 +60,7 @@ function renderSettings(project: { name: string; visibility: string; role: strin
 			<ProjectSettings
 				project={project as never}
 				navigate={navigate}
-				origin="https://amime.example"
+				origin="https://tsuzuri.example"
 			/>
 		</AccountProvider>,
 	);
@@ -215,7 +215,7 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			const input = (await screen.findByRole("textbox", {
 				name: /新しい招待リンク/,
 			})) as HTMLInputElement;
-			expect(input.value).toBe("https://amime.example/invite/tok-en_1");
+			expect(input.value).toBe("https://tsuzuri.example/invite/tok-en_1");
 			expect(input.readOnly).toBe(true);
 		});
 
@@ -233,7 +233,7 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			const input = (await screen.findByRole("textbox", {
 				name: /新しい招待リンク/,
 			})) as HTMLInputElement;
-			expect(input.value).toBe("https://amime.example/invite/tok-en_1");
+			expect(input.value).toBe("https://tsuzuri.example/invite/tok-en_1");
 			// 前に読み込んだメンバーも、出したままにする。
 			expect(await memberItems()).toHaveLength(2);
 		});
@@ -251,7 +251,7 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 
 			await screen.findByRole("alert");
 			const input = screen.getByRole("textbox", { name: /新しい招待リンク/ }) as HTMLInputElement;
-			expect(input.value).toBe("https://amime.example/invite/first");
+			expect(input.value).toBe("https://tsuzuri.example/invite/first");
 		});
 
 		it("作ったばかりのリンクを無効にできなかったら、リンクは表示したままにする(まだ使えるリンクを、見失わせない)", async () => {
@@ -281,18 +281,18 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 				});
 			renderSettings();
 			fireEvent.click(await screen.findByRole("button", { name: "招待リンクを作る" }));
-			await screen.findByDisplayValue("https://amime.example/invite/old");
+			await screen.findByDisplayValue("https://tsuzuri.example/invite/old");
 			fireEvent.click(screen.getByRole("button", { name: "無効にする" }));
 
 			server.replies["POST /api/projects/team/invites"] = () =>
 				Response.json({ ...invite, id: "i2", token: "new" }, { status: 201 });
 			fireEvent.click(screen.getByRole("button", { name: "招待リンクを作る" }));
-			await screen.findByDisplayValue("https://amime.example/invite/new");
+			await screen.findByDisplayValue("https://tsuzuri.example/invite/new");
 			finish(new Response(null, { status: 204 }));
 
 			await waitFor(() => expect(server.requests).toHaveLength(3));
 			await new Promise((resolve) => setTimeout(resolve, 20));
-			expect(screen.getByDisplayValue("https://amime.example/invite/new")).toBeDefined();
+			expect(screen.getByDisplayValue("https://tsuzuri.example/invite/new")).toBeDefined();
 		});
 
 		it("自分をメンバーに戻したあとで、一覧を読み直せなくても、管理者だけの操作を出すのをやめる", async () => {
@@ -328,7 +328,7 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			fireEvent.click(create);
 			finish(Response.json({ ...invite, token: "only" }, { status: 201 }));
 
-			await screen.findByDisplayValue("https://amime.example/invite/only");
+			await screen.findByDisplayValue("https://tsuzuri.example/invite/only");
 			await waitFor(() => expect(create.disabled).toBe(false));
 			expect(server.requests.filter((request) => request.method === "POST")).toHaveLength(1);
 		});
@@ -351,7 +351,7 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			const create = screen.getByRole("button", { name: "招待リンクを作る" }) as HTMLButtonElement;
 			await waitFor(() => expect(create.disabled).toBe(false));
 			await new Promise((resolve) => setTimeout(resolve, 20));
-			expect(screen.queryByDisplayValue("https://amime.example/invite/revoked")).toBeNull();
+			expect(screen.queryByDisplayValue("https://tsuzuri.example/invite/revoked")).toBeNull();
 		});
 
 		it("作ったばかりのリンクを無効にしたら、一覧の読み直しを待たずに、表示を消す", async () => {
@@ -360,7 +360,7 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 				Response.json({ ...invite, token: "tok" }, { status: 201 });
 			renderSettings();
 			fireEvent.click(await screen.findByRole("button", { name: "招待リンクを作る" }));
-			await screen.findByDisplayValue("https://amime.example/invite/tok");
+			await screen.findByDisplayValue("https://tsuzuri.example/invite/tok");
 			await waitFor(() => expect(server.requests).toHaveLength(1));
 			// 無効にしたあとの読み直しは、届かないまま。
 			server.loads.push(() => new Promise<Response>(() => {}));
@@ -368,7 +368,7 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			fireEvent.click(screen.getByRole("button", { name: "無効にする" }));
 
 			await waitFor(() =>
-				expect(screen.queryByDisplayValue("https://amime.example/invite/tok")).toBeNull(),
+				expect(screen.queryByDisplayValue("https://tsuzuri.example/invite/tok")).toBeNull(),
 			);
 		});
 
@@ -386,16 +386,16 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 			server.replies["POST /api/projects/team/invites"] = () =>
 				Response.json({ ...invite, id: "i1", token: "first" }, { status: 201 });
 			fireEvent.click(await screen.findByRole("button", { name: "招待リンクを作る" }));
-			await screen.findByDisplayValue("https://amime.example/invite/first");
+			await screen.findByDisplayValue("https://tsuzuri.example/invite/first");
 
 			server.replies["POST /api/projects/team/invites"] = () =>
 				Response.json({ ...invite, id: "i2", token: "second" }, { status: 201 });
 			fireEvent.click(screen.getByRole("button", { name: "招待リンクを作る" }));
-			await screen.findByDisplayValue("https://amime.example/invite/second");
+			await screen.findByDisplayValue("https://tsuzuri.example/invite/second");
 			deliver();
 			await new Promise((resolve) => setTimeout(resolve, 20));
 
-			expect(screen.getByDisplayValue("https://amime.example/invite/second")).toBeDefined();
+			expect(screen.getByDisplayValue("https://tsuzuri.example/invite/second")).toBeDefined();
 		});
 
 		it("前に始めた読み直しが、あとから届いても、新しい一覧を古い一覧で上書きしない", async () => {
