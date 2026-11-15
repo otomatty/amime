@@ -31,8 +31,10 @@ test.describe("本番の画面が開く", () => {
 		expect(me.ok()).toBe(true);
 		expect(await me.json()).toMatchObject({ user: null });
 
-		// 開発用のログインは、本番では使えない(ADR-0032)。
-		const dev = await request.post("/api/auth/dev", { data: { name: "production-check" } });
-		expect(dev.ok()).toBe(false);
+		// 開発用のログインは、本番では使えない(ADR-0032)。使えないときは 404 を返す。
+		// 間違って使える状態になっていても、本番に書き込まないように、使えない名前(空)を送る(使えれば 400 になる)。
+		const dev = await request.post("/api/auth/dev", { data: { name: "" } });
+		expect(dev.status()).toBe(404);
+		expect(await dev.json()).toEqual({ error: "not-found" });
 	});
 });

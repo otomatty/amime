@@ -31,8 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # PRでは、比較元との差分で、対象を選ぶ。
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          # PRでは、比較元との差分で、対象を選ぶ。履歴をすべて取得する。
+          fetch-depth: 0
       - uses: ./.github/actions/setup
       - name: 対象を決める
         id: scope
@@ -42,20 +42,23 @@ jobs:
         run: |
           if [ "$EVENT" = "pull_request" ]; then
             targets="$(node scripts/mutation-targets.ts)"
-            echo "targets=$targets" >> "$GITHUB_OUTPUT"
-            echo "break=80" >> "$GITHUB_OUTPUT"
-            if [ -z "$targets" ]; then
-              echo "run=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::変異を入れる対象のファイルがありません"
-            else
-              echo "run=true" >> "$GITHUB_OUTPUT"
-              echo "対象: $targets"
-            fi
+            threshold=80
           else
-            echo "targets=" >> "$GITHUB_OUTPUT"
-            echo "break=90" >> "$GITHUB_OUTPUT"
-            echo "run=true" >> "$GITHUB_OUTPUT"
+            targets=""
+            threshold=90
           fi
+          if [ "$EVENT" = "pull_request" ] && [ -z "$targets" ]; then
+            run=false
+            echo "::notice::変異を入れる対象のファイルがありません"
+          else
+            run=true
+            echo "対象: ${targets:-すべてのパッケージ}"
+          fi
+          {
+            echo "targets=$targets"
+            echo "break=$threshold"
+            echo "run=$run"
+          } >> "$GITHUB_OUTPUT"
       - name: ミューテーションテスト
         if: steps.scope.outputs.run == 'true'
         env:
