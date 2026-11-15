@@ -88,6 +88,12 @@ test.describe("アクセシビリティ(axe で機械的に分かる違反がな
 		await createPage(page, `${token}-hit`, `${token} を探す`);
 		await page.goto(`/e2e/?q=${token}`);
 		await expect(page.getByRole("heading", { level: 2 })).toContainText(token);
+		// 見つかるのは、台帳に反映されてから。結果(リンク、添える行、語の印)が出てから検査する。
+		await expect(async () => {
+			await page.reload();
+			await expect(page.getByRole("link", { name: `${token}-hit` })).toBeVisible({ timeout: 1000 });
+		}).toPass();
+		await expect(page.locator("mark").first()).toBeVisible();
 
 		await expectNoViolations(page);
 	});
