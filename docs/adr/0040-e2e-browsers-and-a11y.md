@@ -27,7 +27,7 @@ Playwright のプロジェクトを、次のようにする。
 | mobile-safari | WebKit(iPhone 15)      | 同上                                             |
 
 - Chromium にしかない機能を使うテストには、tag `@chromium` を付ける。いまは、日本語入力(開発者ツール用の通信 CDP で、IME のイベントを起こす)と、クリップボードの中身を読むテスト(読む許可を与えられるのが Chromium だけ)。
-- Firefox で動かせない理由が、テストの側にあるもの(ブラウザの不具合など)には、tag `@not-firefox` を付け、テストの横に理由と Issue を書く。いまは、検索結果の画面の axe の検査だけ(Playwright の Firefox で、ページの処理が落ちる。[#37](https://github.com/otomatty/amime/issues/37))。
+- Firefox で動かせない理由が、テストの側にあるもの(ブラウザの不具合など)には、tag `@not-firefox` を付け、テストの横に理由と Issue を書く。いまは、axe の検査(Playwright の Firefox で、axe を動かすと、ページの処理がときどき落ちる。落ちる画面と規則は、実行のたびに変わる。[#37](https://github.com/otomatty/amime/issues/37))。axe の検査の結果は、ブラウザのエンジンにはほとんどよらないので、Chromium と WebKit で確かめる。
 - `test.skip` は使わない(規約で禁止している)。どのブラウザで動かすかは、設定ファイルの `grepInvert` で決める。
 - CI では、E2E のジョブを、ブラウザのエンジンごとに3つ並べる(Chromium、Firefox、WebKit)。スマートフォンの設定は、同じエンジンのジョブで動かす。1つが落ちても、ほかは最後まで動かす(`fail-fast: false`)。
 - 手元では、`pnpm test:e2e --project=chromium` のように、ブラウザを選べる。

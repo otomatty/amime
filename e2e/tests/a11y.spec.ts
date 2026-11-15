@@ -42,7 +42,11 @@ async function createPage(page: Page, name: string, ...body: string[]) {
 	await expect(page.getByRole("status")).toHaveText("保存済み");
 }
 
-test.describe("アクセシビリティ(axe で機械的に分かる違反がない)", () => {
+// Playwright の Firefox では、axe を動かすと、ページの処理がときどき落ちる(Page crashed)。
+// 落ちる画面と規則は、実行のたびに変わる。WebKit と Chromium では落ちない。
+// 原因を調べるまで、Firefox では動かさない(@not-firefox。playwright.config.ts。#37)。axe の検査の結果は、
+// ブラウザのエンジンにはほとんどよらないので、Chromium と WebKit(スマートフォンを含む)で確かめる。
+test.describe("アクセシビリティ(axe で機械的に分かる違反がない)", { tag: "@not-firefox" }, () => {
 	test("ログインしていないときのトップ", async ({ browser }) => {
 		const page = await freshPage(browser);
 		await page.goto("/");
@@ -99,10 +103,7 @@ test.describe("アクセシビリティ(axe で機械的に分かる違反がな
 		await expectNoViolations(page);
 	});
 
-	// Playwright の Firefox では、この画面で axe を動かすと、ページの処理が落ちる(Page crashed)。
-	// 落ちる規則は、実行のたびに変わる(aria-allowed-attr、label-content-name-mismatch など)。WebKit と Chromium では落ちない。
-	// 原因を調べるまで、Firefox では動かさない(@not-firefox。playwright.config.ts。#37)。
-	test("本文から探した結果", { tag: "@not-firefox" }, async ({ page }) => {
+	test("本文から探した結果", async ({ page }) => {
 		const token = randomUUID().slice(0, 8);
 		await createPage(page, `${token}-hit`, `${token} を探す`);
 		await page.goto(`/e2e/?q=${token}`);
