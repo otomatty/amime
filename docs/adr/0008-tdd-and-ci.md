@@ -1,6 +1,6 @@
 # ADR-0008: テスト先行の運用と、CIでの強制
 
-- 状態: 採用(デプロイのワークフローは [ADR-0037](0037-ci-and-deploy-workflows.md) で変更)
+- 状態: 採用(デプロイのワークフローは [ADR-0037](0037-ci-and-deploy-workflows.md) で変更。検査の追加は [ADR-0039](0039-quality-gates-in-ci.md))
 - 日付: 2026-11-11
 
 ## 状況
