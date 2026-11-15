@@ -147,6 +147,14 @@ jobs:
               exit 1
               ;;
           esac
+      # 画面が開き、書けること。開発用のログインが使えないこと。ログインせず、読むだけにする(e2e/production)。
+      - name: 本番の画面を確かめる
+        if: steps.tip.outputs.latest == 'true' && vars.APP_URL != ''
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          pnpm --filter @tsuzuri/e2e exec playwright install chromium
+          pnpm --filter @tsuzuri/e2e exec playwright test -c playwright.production.config.ts
       - name: 結果をまとめる
         if: steps.tip.outputs.latest == 'true'
         env:

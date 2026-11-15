@@ -1,0 +1,83 @@
+name: Mutation
+
+# ミューテーションテスト(ADR-0041)。純粋パッケージの実装に、わざと小さな誤り(変異)を入れ、テストが見つけるかを確かめる。
+# - PR: パッケージの実装かテストを変えたときに、変えたファイルだけを対象にする。点が 80 より低ければ落とす
+# - 毎週と手動: すべてのパッケージを対象にする。点が 90 より低ければ落とす
+on:
+  pull_request:
+    paths:
+      - "packages/*/src/**"
+      - "stryker.config.js"
+      - "vitest.mutation.config.ts"
+      - "scripts/lib/mutation.ts"
+      - ".github/workflows/mutation.yml"
+  schedule:
+    # 毎週月曜の 03:23(日本時間)。
+    - cron: "23 18 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: ミューテーションテスト
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # PRでは、比較元との差分で、対象を選ぶ。
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+      - uses: ./.github/actions/setup
+      - name: 対象を決める
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: origin/${{ github.base_ref }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            targets="$(node scripts/mutation-targets.ts)"
+            echo "targets=$targets" >> "$GITHUB_OUTPUT"
+            echo "break=80" >> "$GITHUB_OUTPUT"
+            if [ -z "$targets" ]; then
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::変異を入れる対象のファイルがありません"
+            else
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              echo "対象: $targets"
+            fi
+          else
+            echo "targets=" >> "$GITHUB_OUTPUT"
+            echo "break=90" >> "$GITHUB_OUTPUT"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: ミューテーションテスト
+        if: steps.scope.outputs.run == 'true'
+        env:
+          STRYKER_MUTATE: ${{ steps.scope.outputs.targets }}
+          STRYKER_BREAK: ${{ steps.scope.outputs.break }}
+        run: pnpm test:mutation
+      - name: 結果をまとめる
+        if: always() && steps.scope.outputs.run == 'true'
+        env:
+          STRYKER_BREAK: ${{ steps.scope.outputs.break }}
+        run: |
+          if [ -f reports/mutation/mutation.json ]; then
+            node scripts/mutation-report.ts
+          else
+            echo "::warning::結果のファイルがありません(途中で止まった可能性があります)"
+          fi
+      # 見逃した変異の場所と中身は、HTML の報告で見られる。
+      - name: 報告を残す
+        if: always() && steps.scope.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: reports/mutation
+          retention-days: 14
+          if-no-files-found: ignore
