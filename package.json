@@ -20,7 +20,8 @@
 		"test:e2e": "pnpm build:e2e && pnpm --filter @tsuzuri/e2e test",
 		"check:unused": "knip",
 		"check:tdd": "node scripts/check-test-first.ts",
-		"check": "pnpm lint && pnpm typecheck && pnpm check:unused && pnpm test:coverage && pnpm test:server && pnpm build",
+		"check:size": "node scripts/check-size.ts",
+		"check": "pnpm lint && pnpm typecheck && pnpm check:unused && pnpm test:coverage && pnpm test:server && pnpm build && pnpm check:size",
 		"prepare": "lefthook install"
 	},
 	"devDependencies": {
