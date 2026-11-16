@@ -85,6 +85,23 @@ describe("createPendingStore", () => {
 		);
 	});
 
+	it("大文字と小文字だけが違う、別のページIDの記録は、引き取らず、消さずに残す", async () => {
+		// 記録のキーは、ページIDを小文字にして作る。そのため、P1 と p1 の記録は、同じキーの並びに入る。
+		storeFor("other-page", { page: "P1" }).save(unsent(update("P1 の変更")));
+
+		expect(await storeFor("new", { page: "p1" }).adopt()).toEqual([]);
+		expect(listPendingRecords(window.localStorage, () => 1000)).toMatchObject([{ id: "P1" }]);
+	});
+
+	it("ページの記録がない記録(この形を入れる前に残したもの)は、これまでどおり引き取る", async () => {
+		window.localStorage.setItem(
+			"tsuzuri:pending:memo:old",
+			JSON.stringify({ savedAt: 1000, entries: [unsent(update("A2"))] }),
+		);
+
+		expect(await storeFor("new").adopt()).toMatchObject([unsent(update("A2"))]);
+	});
+
 	it("名前を直しても、残していた変更はそのまま引き取れる", async () => {
 		const store = storeFor("old", { page: "p1" });
 		store.save(unsent(update("A2")));

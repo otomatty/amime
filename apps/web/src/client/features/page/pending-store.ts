@@ -178,6 +178,9 @@ export function createPendingStore({
 			if (key === ownKey) continue;
 			const raw = target.getItem(key);
 			const record = parsePendingRecord(raw);
+			// キーは、ページIDを小文字にして作る。大文字と小文字だけが違う、別のページの記録もここに入る。
+			// そのページの変更なので、引き取らず、消さずに残す(ページの記録がない、前の形の記録は、これまでどおり)。
+			if (record.ok && record.value.page !== undefined && record.value.page.id !== page) continue;
 			if (record.ok && now() - record.value.savedAt <= PENDING_MAX_AGE_MS) {
 				found.push({ key, raw, record: record.value });
 			} else {
