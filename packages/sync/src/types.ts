@@ -229,10 +229,20 @@ export type PendingEntry = {
 	readonly changes: readonly Change[];
 };
 
+/** 端末内の記録が、どのページのものか(ADR-0042)。 */
+export type PendingPage = {
+	readonly project: string;
+	readonly id: PageId;
+	/** 最後に残したときの、ページの名前。 */
+	readonly title: string;
+};
+
 /** 端末内に残す、未送信の変更の記録。 */
 export type PendingRecord = {
 	/** 残した時刻(ミリ秒)。 */
 	readonly savedAt: number;
 	/** 載せ直す順に並べる。他のタブの記録を引き取ると、複数になる。 */
 	readonly entries: readonly PendingEntry[];
+	/** どのページの記録か。この形を入れる前に残した記録には、ない。 */
+	readonly page?: PendingPage | undefined;
 };

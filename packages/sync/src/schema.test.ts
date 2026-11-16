@@ -1,3 +1,4 @@
+import { MAX_TITLE_LENGTH } from "@tsuzuri/shared";
 import { describe, expect, it } from "vitest";
 import {
 	MAX_CHANGES,
@@ -428,6 +429,34 @@ describe("parsePendingRecord", () => {
 		const record = { savedAt: 1000, entries: [entry, { inflight: null, changes: [] }] };
 
 		expect(parsePendingRecord(JSON.stringify(record))).toEqual({ ok: true, value: record });
+	});
+
+	it("どのページの記録か(プロジェクト、ページID、名前)を持てる。古い記録には、ない", () => {
+		const page = { project: "notes", id: "0123abcd", title: "出張メモ" };
+		const record = { savedAt: 1, entries: [entry], page };
+
+		expect(parsePendingRecord(JSON.stringify(record))).toEqual({ ok: true, value: record });
+		expect(parsePendingRecord(JSON.stringify({ savedAt: 1, entries: [entry] }))).toEqual({
+			ok: true,
+			value: { savedAt: 1, entries: [entry] },
+		});
+	});
+
+	it("ページの記録の形が違えば(IDに使えない文字、名前が長すぎる)、ページの記録だけを捨てる。変更は残す", () => {
+		// 記録ごと受け付けないと、読めない記録として消され、未送信の変更が失われる。
+		const bad = [
+			{ project: "notes", id: "a b", title: "題" },
+			{ project: "notes", id: "0123abcd", title: "あ".repeat(MAX_TITLE_LENGTH + 1) },
+			{ project: "", id: "0123abcd", title: "題" },
+			"notes",
+		];
+
+		for (const page of bad) {
+			expect(parsePendingRecord(JSON.stringify({ savedAt: 1, entries: [entry], page }))).toEqual({
+				ok: true,
+				value: { savedAt: 1, entries: [entry] },
+			});
+		}
 	});
 
 	it("変更を残した端末の識別子(origin)を持てる", () => {

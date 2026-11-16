@@ -111,3 +111,9 @@
 .page-tools button.danger:hover:not(:disabled) {
 	color: var(--color-on-link);
 }
+
+/* 同じ名前で残っている、別のページの変更へのリンク(ADR-0042)。 */
+.page-strays {
+	margin: 0.35rem 0 0;
+	padding-left: 1.2rem;
+}

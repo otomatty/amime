@@ -10,6 +10,12 @@ export { type LineTracker, startTracking, trackLines } from "./line-ids.ts";
 export { mapColumn } from "./merge-text.ts";
 export { type OwnEdit, reapplyEdit, recordEdit, revertEdit } from "./own-edit.ts";
 export {
+	type PendingPageSummary,
+	pendingPages,
+	type StoredPending,
+	strayPages,
+} from "./pending-pages.ts";
+export {
 	type Invite,
 	type InviteTarget,
 	type Member,
@@ -77,6 +83,7 @@ export type {
 	PageSnapshot,
 	PageSort,
 	PendingEntry,
+	PendingPage,
 	PendingRecord,
 	SearchHit,
 	SearchResults,

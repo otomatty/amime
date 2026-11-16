@@ -178,6 +178,19 @@ describe("ページのAPI", () => {
 			expect(await (await get(`/api/pages/${info.id}`)).json()).toMatchObject({ version: 1 });
 		});
 
+		it("IDから、ページのいまの名前を引ける(ADR-0042)。台帳にないIDは 404、IDの形が違えば 400", async () => {
+			const { info } = await open("Api ID から");
+			const found = await get(`/api/pages/${info.id}/info`);
+
+			expect(found.status).toBe(200);
+			expect(found.headers.get("cache-control")).toBe("no-store");
+			expect(await found.json()).toEqual(info);
+			const unknown = await get("/api/pages/0123456789abcdef0123456789abcdef/info");
+			expect(unknown.status).toBe(404);
+			expect(await unknown.json()).toEqual({ error: "unknown-page" });
+			expect((await get("/api/pages/a%20b/info")).status).toBe(400);
+		});
+
 		it("長すぎる名前は 400 で断る", async () => {
 			const { response, info } = await open("a".repeat(201));
 

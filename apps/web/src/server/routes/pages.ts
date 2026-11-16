@@ -105,6 +105,13 @@ export const pages = new Hono<AppEnv>()
 		await directory(c).remove(id.value);
 		return c.json(DELETED, 410);
 	})
+	// IDからページを引く(ADR-0042)。端末内に残った変更のページを、名前ではなくIDで開くときに使う。
+	.get("/:id/info", async (c) => {
+		const id = parsePageId(c.req.param("id"));
+		if (!id.ok) return c.json({ error: "invalid-page" }, 400);
+		const info = await directory(c).info(id.value);
+		return info === null ? c.json(UNKNOWN_PAGE, 404) : c.json(info);
+	})
 	// ページのつながり(関連するページ、同じリンクを持つページ、まだないページへのリンク)。ADR-0027。
 	.get("/:id/links", async (c) => {
 		const id = parsePageId(c.req.param("id"));

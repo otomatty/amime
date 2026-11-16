@@ -1,4 +1,4 @@
-import { err, ok, type Result } from "@tsuzuri/shared";
+import { err, MAX_TITLE_LENGTH, ok, type Result } from "@tsuzuri/shared";
 import * as v from "valibot";
 import type {
 	ClientId,
@@ -88,6 +88,18 @@ const CommitRequestSchema = v.object({
 });
 // 変更の数と本文の長さに上限は設けない(送るときに、サーバーが検査する)。
 const StoredChangesSchema = v.array(StoredChangeSchema);
+// ページのIDも外部から届く文字列。形を検査したうえで、ここでブランド型にする。
+const PageIdSchema = v.pipe(
+	v.string(),
+	v.regex(IDENTIFIER),
+	v.transform((value) => value as PageId),
+);
+// どのページの記録か(ADR-0042)。この形を入れる前に残した記録には、ない。
+const PendingPageSchema = v.object({
+	project: v.pipe(v.string(), v.minLength(1)),
+	id: PageIdSchema,
+	title: v.pipe(v.string(), v.maxLength(MAX_TITLE_LENGTH)),
+});
 const PendingRecordSchema = v.object({
 	savedAt: v.pipe(v.number(), v.minValue(0)),
 	entries: v.array(
@@ -97,13 +109,9 @@ const PendingRecordSchema = v.object({
 			changes: StoredChangesSchema,
 		}),
 	),
+	// 形が違えば、ページの記録だけを捨てる。記録ごと受け付けないと、読めない記録として消され、変更が失われる。
+	page: v.optional(v.fallback(v.optional(PendingPageSchema), undefined)),
 });
-// ページのIDも外部から届く文字列。形を検査したうえで、ここでブランド型にする。
-const PageIdSchema = v.pipe(
-	v.string(),
-	v.regex(IDENTIFIER),
-	v.transform((value) => value as PageId),
-);
 const pageTitle = {
 	title: v.string(),
 	problem: v.nullable(v.picklist(["taken", "empty", "too-long", "reserved"])),

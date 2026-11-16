@@ -1,9 +1,11 @@
 import { toTitleLc } from "@tsuzuri/shared";
 import {
 	type ClientId,
+	type PageId,
 	type PendingEntry,
 	type PendingRecord,
 	parsePendingRecord,
+	type StoredPending,
 } from "@tsuzuri/sync";
 
 /** 残しておく期間。これより古い記録は、復元せずに消す。 */
@@ -29,6 +31,11 @@ export type PendingStore = {
 	 */
 	readonly adopt: () => Promise<readonly PendingEntry[]>;
 	/**
+	 * ページの名前が変わったことを知らせる。記録に添える名前を直す(ADR-0042)。
+	 * 残している記録があれば、その場で書き直す。
+	 */
+	readonly retitle: (title: string) => void;
+	/**
 	 * このタブが開いていることを、他のタブに示す。返した関数を呼ぶと、示すのをやめる。
 	 * 示しているあいだ、このタブの記録は他のタブに引き取られない。タブが閉じたり落ちたりすると、自動で解かれる。
 	 */
@@ -46,8 +53,12 @@ type PendingStoreOptions = {
 	 * 残っている記録をすべて引き取る。
 	 */
 	readonly locks: Locks | null;
-	/** ページ名。 */
-	readonly page: string;
+	/** プロジェクトの名前。どのページの記録かを、記録に添える(ADR-0042)。 */
+	readonly project: string;
+	/** ページID。 */
+	readonly page: PageId;
+	/** ページを開いたときの名前。名前が変わったら retitle で知らせる。 */
+	readonly title: string;
 	readonly client: ClientId;
 	/** いまの時刻(ミリ秒)。テストで差し替える。 */
 	readonly now?: () => number;
@@ -84,18 +95,46 @@ function keysWith(storage: Storage, prefix: string): string[] {
 	return keys;
 }
 
+/**
+ * この端末に残っている記録を、すべて読む(ADR-0042)。どのページの記録かが分かるものだけを返す
+ * (この形を入れる前に残した記録には、ない)。読めない記録と古すぎる記録は返さない。読むだけで、消さない。
+ */
+export function listPendingRecords(
+	storage: Storage | null,
+	now: () => number = Date.now,
+): StoredPending[] {
+	if (storage === null) return [];
+	try {
+		return keysWith(storage, KEY_PREFIX).flatMap((key) => {
+			const record = parsePendingRecord(storage.getItem(key));
+			if (!record.ok || record.value.page === undefined) return [];
+			if (now() - record.value.savedAt > PENDING_MAX_AGE_MS) return [];
+			return [{ ...record.value.page, savedAt: record.value.savedAt }];
+		});
+	} catch {
+		return [];
+	}
+}
+
 export function createPendingStore({
 	storage,
 	locks,
+	project,
 	page,
+	title: openedTitle,
 	client,
 	now = Date.now,
 }: PendingStoreOptions): PendingStore {
+	/** 記録に添える名前。ページの名前が変わったら、直す。 */
+	let title = openedTitle;
 	// ページは、サーバーと同じ規則(空白と大文字小文字の違いは同じページ)で識別する。
 	const pagePrefix = `${KEY_PREFIX}${encodeURIComponent(toTitleLc(page))}:`;
 	const ownKey = `${pagePrefix}${client}`;
-	/** 最後に残した変更。同じ内容を書き込み直さないために覚えておく。 */
+	/** 最後に残した変更(と名前)。同じ内容を書き込み直さないために覚えておく。 */
 	let lastSaved: string | null = null;
+	/** 最後に残した変更と、その時刻。名前だけを直すときに、書き直すため。 */
+	let lastEntries: readonly PendingEntry[] = [];
+	let lastSavedAt = 0;
 	/**
 	 * 引き取ったが、自分の記録に移せなかったので消さずにおいた、他のタブの記録。
 	 * release を呼ぶと、その記録のロックを解く(送り終えるまでは、他のタブに引き取らせない)。
@@ -118,13 +157,18 @@ export function createPendingStore({
 			}
 			leftovers = [];
 			lastSaved = null;
+			lastEntries = [];
 			return;
 		}
-		const serialized = JSON.stringify(entries);
+		// 名前も含めて比べる。名前だけが変わったときも、書き直す。
+		const serialized = JSON.stringify({ entries, title });
 		// 内容が同じでも、他のタブに引き取られて記録が消えていたら、書き直す。
 		if (serialized === lastSaved && target.getItem(ownKey) !== null) return;
-		target.setItem(ownKey, JSON.stringify({ savedAt, entries }));
+		const record: PendingRecord = { savedAt, entries, page: { project, id: page, title } };
+		target.setItem(ownKey, JSON.stringify(record));
 		lastSaved = serialized;
+		lastEntries = entries;
+		lastSavedAt = savedAt;
 	};
 
 	/** 他のタブの記録を読む。読めない記録と古すぎる記録は、その場で消す。 */
@@ -219,6 +263,17 @@ export function createPendingStore({
 		adopt() {
 			adopted ??= adoptOthers();
 			return adopted;
+		},
+		retitle(next) {
+			if (next === title) return;
+			title = next;
+			if (storage === null || lastSaved === null) return;
+			try {
+				// 時刻は変えない(記録の新旧を比べるための時刻なので、変更を残した時刻のままにする)。
+				write(storage, lastEntries, lastSavedAt);
+			} catch {
+				// 書き直せなくても、変更は前の名前のまま残っている。次に残すときに、新しい名前になる。
+			}
 		},
 		hold() {
 			if (locks === null) return () => {};

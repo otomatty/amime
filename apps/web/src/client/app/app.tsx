@@ -1,9 +1,10 @@
-import type { ProjectInfo } from "@tsuzuri/sync";
+import { type ProjectInfo, parsePageId } from "@tsuzuri/sync";
 import { AccountProvider, useAccount } from "../features/account/account.tsx";
 import { AccountMenu } from "../features/account/account-menu.tsx";
 import { Profile } from "../features/account/profile.tsx";
 import { Editor } from "../features/editor/editor.tsx";
 import { Page } from "../features/page/page.tsx";
+import { PendingPages } from "../features/page/pending-pages.tsx";
 import { PageList } from "../features/pages/page-list.tsx";
 import { Home } from "../features/project/home.tsx";
 import { InvitePage } from "../features/project/invite.tsx";
@@ -50,7 +51,17 @@ function Playground() {
  * URLに ?q= で語が付いていれば、本文を探した結果を表示する(ADR-0031)。
  */
 function ProjectTop({ project }: { readonly project: ProjectInfo }) {
-	const query = new URLSearchParams(window.location.search).get("q")?.trim() ?? "";
+	const params = new URLSearchParams(window.location.search);
+	// 端末内に残った変更のページを、IDで開く(ADR-0042)。名前からは引けなくなったページにも使う。
+	const pageId = parsePageId(params.get("page"));
+	if (pageId.ok) {
+		return (
+			<article className="page">
+				<Page id={pageId.value} readOnly={project.role === null} />
+			</article>
+		);
+	}
+	const query = params.get("q")?.trim() ?? "";
 	if (query !== "") return <SearchResults query={query} />;
 	return (
 		<>
@@ -59,6 +70,7 @@ function ProjectTop({ project }: { readonly project: ProjectInfo }) {
 					<a href={`/settings/${project.name}`}>メンバーと設定</a>
 				</p>
 			)}
+			{project.role !== null && <PendingPages />}
 			<PageList readOnly={project.role === null} />
 		</>
 	);
