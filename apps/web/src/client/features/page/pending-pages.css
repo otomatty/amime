@@ -1,0 +1,29 @@
+/* この端末に、送れていない変更があるページ(ADR-0042)。プロジェクトのトップ、一覧の上に出す。 */
+.pending-pages {
+	margin: 0 0 1.5rem;
+	padding: 0.75rem 1rem;
+	border: 1px solid var(--color-line);
+	border-radius: var(--radius-control);
+	background: var(--color-quote-bg);
+	font-size: 0.875rem;
+}
+
+.pending-pages h2 {
+	margin: 0 0 0.25rem;
+	font-size: 0.9375rem;
+}
+
+.pending-pages p {
+	margin: 0 0 0.5rem;
+	color: var(--color-muted);
+}
+
+.pending-pages ul {
+	margin: 0;
+	padding-left: 1.2rem;
+}
+
+.pending-pages-time {
+	color: var(--color-muted);
+	font-size: 0.8125rem;
+}

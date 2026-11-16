@@ -72,6 +72,14 @@ export function openPage(name: string): Promise<PageInfo> {
 	return request(`${pagesPath()}/by-title/${encodeURIComponent(name)}`, undefined, parsePageInfo);
 }
 
+/**
+ * IDから、ページのいまの名前を引く(ADR-0042)。端末内に残った変更のページを、IDで開くときに使う。
+ * 台帳にないIDは、missing の失敗になる。
+ */
+export function findPage(id: PageId): Promise<PageInfo> {
+	return request(`${pagePath(id)}/info`, undefined, parsePageInfo);
+}
+
 /** ページの一覧を取り出す(ADR-0025)。offset は、何件目から取り出すか。 */
 export function listPages({
 	sort,

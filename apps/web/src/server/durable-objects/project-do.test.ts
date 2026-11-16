@@ -180,6 +180,16 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 		});
 	});
 
+	describe("info(IDからページを引く)", () => {
+		it("台帳にあるページの、いまの名前を返す。知らないIDは null", async () => {
+			const stub = project("info");
+			const opened = await stub.open("旅のメモ");
+
+			expect(await stub.info(opened.id)).toEqual(opened);
+			expect(await stub.info("unknown" as PageId)).toBeNull();
+		});
+	});
+
 	describe("open(名前からページを引く)", () => {
 		it("まだない名前を開くと、新しいIDを決める。名前は、URLの名前から作る", async () => {
 			const info = await project("open-new").open("買い物_メモ");

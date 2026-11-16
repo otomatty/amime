@@ -167,6 +167,90 @@ describe("App", () => {
 			expect(urls).not.toContain("/api/projects/team/pages?sort=updated&offset=0");
 		});
 
+		it("URLに ?page= でページIDが付いていれば、IDでページを開く(ADR-0042)", async () => {
+			const urls = stubServer();
+			open("/team/?page=p9");
+
+			render(<App />);
+
+			await waitFor(() => expect(urls).toContain("/api/projects/team/pages/p9/info"));
+			expect(urls.filter((url) => url.includes("/by-title/"))).toEqual([]);
+		});
+
+		it("IDで開いたページは、URLを名前に変えたあとで描き直しても(ログアウトした)、一覧に切り替わらない", async () => {
+			let user: unknown = hanako;
+			let project = () => Response.json({ ...team, visibility: "public" });
+			const info = { id: "p9", title: "出張メモ", problem: null, pinned: false };
+			const replies: Record<string, () => Response> = {
+				"/api/projects/team/pages/p9/info": () => Response.json(info),
+				"/api/projects/team/pages/p9": () =>
+					Response.json({ version: 1, lines: [{ id: "a", text: "出張メモ" }] }),
+				"/api/projects/team/pages/p9/links": () =>
+					Response.json({ missing: [], related: [], hops: [] }),
+			};
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (url: string) => {
+					if (url === "/api/me") return Response.json({ user, login: ["google"] });
+					if (url === "/api/projects/team") return project();
+					return replies[url]?.() ?? Response.json({ titles: [] });
+				}),
+			);
+			open("/team/?page=p9");
+			render(<App />);
+			await waitFor(() =>
+				expect(decodeURIComponent(window.location.pathname)).toBe("/team/出張メモ"),
+			);
+			expect(window.location.search).toBe("");
+
+			// ログアウトした。公開のプロジェクトなので、読むだけの表示で開き直す。
+			user = null;
+			project = () => Response.json({ ...team, visibility: "public", role: null });
+			fireEvent.click(screen.getByRole("button", { name: "ログアウト" }));
+
+			await waitFor(() => expect(screen.queryByRole("button", { name: "ログアウト" })).toBeNull());
+			await waitFor(() =>
+				expect(screen.getAllByTestId("line").map((line) => line.textContent)).toEqual(["出張メモ"]),
+			);
+			expect(screen.queryByRole("region", { name: "ページの一覧" })).toBeNull();
+		});
+
+		it("メンバーには、この端末に送れていない変更があるページを、一覧の上に出す。メンバーでない人には、出さない", async () => {
+			window.localStorage.setItem(
+				"tsuzuri:pending:p9:tab",
+				JSON.stringify({
+					savedAt: Date.now(),
+					entries: [{ inflight: null, changes: [{ type: "delete", id: "a" }] }],
+					page: { project: "team", id: "p9", title: "出張メモ" },
+				}),
+			);
+			const list = {
+				"/api/projects/team/pages?sort=updated&offset=0": () =>
+					Response.json({ pages: [], total: 0 }),
+			};
+			stubServer(list);
+			open("/team/");
+
+			const { unmount } = render(<App />);
+
+			const region = await screen.findByRole("region", {
+				name: "この端末に、送れていない変更があるページ",
+			});
+			expect(region.textContent).toContain("出張メモ");
+			unmount();
+
+			stubServer({
+				...list,
+				"/api/projects/team": () => Response.json({ ...team, visibility: "public", role: null }),
+			});
+			render(<App />);
+			await screen.findByRole("region", { name: "ページの一覧" });
+			expect(
+				screen.queryByRole("region", { name: "この端末に、送れていない変更があるページ" }),
+			).toBeNull();
+			window.localStorage.clear();
+		});
+
 		it("メンバーでない人(公開のプロジェクトを見ている人)には、新しいページを作る欄を出さない", async () => {
 			stubServer({
 				"/api/projects/team": () => Response.json({ ...team, visibility: "public", role: null }),

@@ -1,6 +1,6 @@
-import type { Change, ClientId, CommitId, LineId, PendingEntry } from "@tsuzuri/sync";
+import type { Change, ClientId, CommitId, LineId, PageId, PendingEntry } from "@tsuzuri/sync";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createPendingStore, PENDING_MAX_AGE_MS } from "./pending-store.ts";
+import { createPendingStore, listPendingRecords, PENDING_MAX_AGE_MS } from "./pending-store.ts";
 
 const client = (value: string) => value as ClientId;
 const update = (text: string): Change => ({ type: "update", id: "a" as LineId, text });
@@ -36,6 +36,7 @@ function createFakeLocks(): Locks {
 
 type StoreOptions = {
 	page?: string;
+	title?: string;
 	now?: number;
 	storage?: Storage | null;
 	/** 省くと、ロックが使えない環境(残っている記録をすべて引き取る)。 */
@@ -46,7 +47,9 @@ function storeFor(tab: string, options: StoreOptions = {}) {
 	return createPendingStore({
 		storage: options.storage === undefined ? window.localStorage : options.storage,
 		locks: options.locks ?? null,
-		page: options.page ?? "メモ",
+		project: "notes",
+		page: (options.page ?? "memo") as PageId,
+		title: options.title ?? "メモ",
 		client: client(tab),
 		now: () => options.now ?? 1000,
 	});
@@ -55,6 +58,96 @@ function storeFor(tab: string, options: StoreOptions = {}) {
 describe("createPendingStore", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
+	});
+
+	it("記録には、どのページのものか(プロジェクト、ページID、名前)を添える(ADR-0042)", () => {
+		storeFor("tab", { page: "p1", title: "出張メモ" }).save(unsent(update("A2")));
+
+		expect(listPendingRecords(window.localStorage, () => 1000)).toEqual([
+			{ project: "notes", id: "p1", title: "出張メモ", savedAt: 1000 },
+		]);
+	});
+
+	it("ページの名前が変わったら、記録の名前も直す。まだ記録がなければ、次に残すときに使う", () => {
+		const store = storeFor("tab", { page: "p1", title: "前の名前" });
+		store.save(unsent(update("A2")));
+		store.retitle("いまの名前");
+
+		expect(listPendingRecords(window.localStorage, () => 1000)).toMatchObject([
+			{ id: "p1", title: "いまの名前" },
+		]);
+
+		const later = storeFor("later", { page: "p2", title: "仮の名前" });
+		later.retitle("決まった名前");
+		later.save(unsent(update("B2")));
+		expect(listPendingRecords(window.localStorage, () => 1000)).toContainEqual(
+			expect.objectContaining({ id: "p2", title: "決まった名前" }),
+		);
+	});
+
+	it("大文字と小文字だけが違う、別のページIDの記録は、引き取らず、消さずに残す", async () => {
+		// 記録のキーは、ページIDを小文字にして作る。そのため、P1 と p1 の記録は、同じキーの並びに入る。
+		storeFor("other-page", { page: "P1" }).save(unsent(update("P1 の変更")));
+
+		expect(await storeFor("new", { page: "p1" }).adopt()).toEqual([]);
+		expect(listPendingRecords(window.localStorage, () => 1000)).toMatchObject([{ id: "P1" }]);
+	});
+
+	it("ページの記録がない記録(この形を入れる前に残したもの)は、これまでどおり引き取る", async () => {
+		window.localStorage.setItem(
+			"tsuzuri:pending:memo:old",
+			JSON.stringify({ savedAt: 1000, entries: [unsent(update("A2"))] }),
+		);
+
+		expect(await storeFor("new").adopt()).toMatchObject([unsent(update("A2"))]);
+	});
+
+	it("名前を直しても、残していた変更はそのまま引き取れる", async () => {
+		const store = storeFor("old", { page: "p1" });
+		store.save(unsent(update("A2")));
+		store.retitle("いまの名前");
+
+		expect(await storeFor("new", { page: "p1" }).adopt()).toMatchObject([unsent(update("A2"))]);
+	});
+
+	it("他のタブの記録を引き取って移した記録にも、どのページのものかを添える", async () => {
+		storeFor("old", { page: "p1", title: "メモ" }).save(unsent(update("A2")));
+		await storeFor("new", { page: "p1", title: "メモ" }).adopt();
+
+		expect(listPendingRecords(window.localStorage, () => 1000)).toEqual([
+			{ project: "notes", id: "p1", title: "メモ", savedAt: 1000 },
+		]);
+	});
+
+	describe("listPendingRecords(この端末に残っている記録を、すべて読む)", () => {
+		it("ページの記録がない記録(この形を入れる前に残したもの)と、読めない記録、古すぎる記録は、返さない", () => {
+			window.localStorage.setItem(
+				"tsuzuri:pending:old:tab",
+				JSON.stringify({ savedAt: 1000, entries: [unsent(update("A2"))] }),
+			);
+			window.localStorage.setItem("tsuzuri:pending:broken:tab", "{");
+			storeFor("tab", { page: "p1", now: 1000 }).save(unsent(update("A2")));
+			storeFor("tab", { page: "p2", now: 1000 + DAY }).save(unsent(update("B2")));
+
+			expect(listPendingRecords(window.localStorage, () => 1000 + PENDING_MAX_AGE_MS + 1)).toEqual([
+				{ project: "notes", id: "p2", title: "メモ", savedAt: 1000 + DAY },
+			]);
+		});
+
+		it("読むだけで、記録は消さない(古すぎる記録も、開いたときに消す)", () => {
+			window.localStorage.setItem("tsuzuri:pending:broken:tab", "{");
+
+			listPendingRecords(window.localStorage);
+
+			expect(window.localStorage.getItem("tsuzuri:pending:broken:tab")).toBe("{");
+		});
+
+		it("ほかの用途の値は読まない。保存先が使えなければ、空", () => {
+			window.localStorage.setItem("other", JSON.stringify({ savedAt: 1, entries: [] }));
+
+			expect(listPendingRecords(window.localStorage, () => 1000)).toEqual([]);
+			expect(listPendingRecords(null)).toEqual([]);
+		});
 	});
 
 	it("未送信の変更を残すと、別のタブ(次に開いたとき)から引き取れる", async () => {
@@ -121,7 +214,7 @@ describe("createPendingStore", () => {
 
 	it("古すぎる記録と、読めない記録は、引き取らずに消す", async () => {
 		storeFor("stale", { now: 0 }).save(unsent(update("古い")));
-		window.localStorage.setItem(`tsuzuri:pending:${encodeURIComponent("メモ")}:broken`, "{");
+		window.localStorage.setItem("tsuzuri:pending:memo:broken", "{");
 
 		expect(await storeFor("new", { now: PENDING_MAX_AGE_MS + 1 }).adopt()).toEqual([]);
 		expect(window.localStorage).toHaveLength(0);
@@ -198,7 +291,7 @@ describe("createPendingStore", () => {
 
 	it("引き取りの途中で元のタブが記録を書き換えていたら、その記録は消さない", async () => {
 		storeFor("old").save(unsent(update("A2")));
-		const key = `tsuzuri:pending:${encodeURIComponent("メモ")}:old`;
+		const key = "tsuzuri:pending:memo:old";
 		// 読んだあと、消す前に、元のタブ(まだ開いている)が新しい変更を書き込む。
 		const racing = new Proxy(window.localStorage, {
 			get(target, property) {

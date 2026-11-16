@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { PageId } from "@tsuzuri/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Page } from "./page.tsx";
+import { listPendingRecords } from "./pending-store.ts";
 
 const json = (body: unknown, status = 200) =>
 	new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -79,6 +81,14 @@ const pendingRecords = () =>
 	);
 
 const SAVED = { version: 1, lines: [{ id: "a", text: "買い物" }] };
+
+/** 保存されたページを返し、送られたコミットは、そのまま受け付ける。 */
+const acceptCommits = (_url: string, init?: RequestInit) => {
+	if (init?.method !== "POST") return json(SAVED);
+	return json({ version: 2, applied: JSON.parse(String(init.body)).changes });
+};
+/** 端末内に残っている記録の、ページの情報。 */
+const records = () => listPendingRecords(window.localStorage);
 
 /** WebSocket の代わりを置いて、ページを開く。届けるメッセージと、送られたメッセージを扱える。 */
 async function openWithSocket(info: Parameters<typeof stubFetch>[1] = {}, readOnly = false) {
@@ -873,5 +883,118 @@ describe("Page", () => {
 		fireEvent.click(await screen.findByRole("button", { name: "もう一度読み込む" }));
 
 		await waitFor(() => expect(lines()).toEqual(["買い物"]));
+	});
+
+	describe("名前から引けなくなった、端末内の未送信の変更(ADR-0042、Issue #18)", () => {
+		const OTHER_ID = "p9";
+		/** 別のページIDで、端末内に残っている記録。 */
+		function leaveStray(title: string, changes: unknown[], id = OTHER_ID) {
+			window.localStorage.setItem(
+				`tsuzuri:pending:${id}:closed-tab`,
+				JSON.stringify({
+					savedAt: Date.now(),
+					entries: [{ inflight: null, changes }],
+					page: { project: "team", id, title },
+				}),
+			);
+		}
+		const draft = {
+			type: "insert",
+			line: { id: "t", text: "出張メモ" },
+			after: null,
+			before: null,
+		};
+		const note = {
+			type: "insert",
+			line: { id: "n", text: "新幹線の時刻" },
+			after: "t",
+			before: null,
+		};
+
+		it("開いた名前と同じ名前で、別のページの変更が残っていたら、そのページを開く案内を出す", async () => {
+			leaveStray("出張メモ", [draft, note]);
+			stubFetch(() => json({ version: 1, lines: [{ id: "a", text: "出張メモ" }] }));
+
+			render(<Page name="出張メモ" />);
+
+			await waitFor(() => expect(lines()).toEqual(["出張メモ"]));
+			const notice = screen.getByRole("note");
+			expect(notice.textContent).toMatch(
+				/「出張メモ」の名前で書いた、送れていない変更が、この端末に残っています/,
+			);
+			expect(within(notice).getByRole("link").getAttribute("href")).toBe(`./?page=${OTHER_ID}`);
+		});
+
+		it("開いたページそのものの記録は、案内しない(そのまま復元する)", async () => {
+			leaveStray("買い物", [{ type: "update", id: "a", text: "買い物 追記" }], PAGE_ID);
+			stubFetch(acceptCommits);
+
+			render(<Page name="買い物" />);
+
+			await waitFor(() => expect(lines()).toEqual(["買い物 追記"]));
+			expect(screen.queryByText(/送れていない変更が、この端末に残っています/)).toBeNull();
+		});
+
+		it("IDで開くと、台帳のいまの名前でページを開き、残っていた変更を復元する。URLは、いまの名前にする", async () => {
+			window.history.replaceState(null, "", `/team/?page=${OTHER_ID}`);
+			leaveStray("出張メモ", [{ type: "update", id: "a", text: "旅のメモ 追記" }]);
+			const info = { id: OTHER_ID, title: "旅のメモ", problem: null, pinned: false };
+			const fetchMock = stubFetch((url, init) => {
+				if (url.endsWith(`/${OTHER_ID}/info`)) return json(info);
+				return acceptCommits(url, init);
+			});
+
+			render(<Page id={OTHER_ID as PageId} />);
+
+			await waitFor(() => expect(lines()).toEqual(["旅のメモ 追記"]));
+			expect(fetchMock).toHaveBeenCalledWith(`/api/projects/team/pages/${OTHER_ID}`, undefined);
+			await waitFor(() =>
+				expect(window.location.pathname + window.location.search).toBe(
+					`/team/${encodeURIComponent("旅のメモ").replaceAll("%20", "_")}`,
+				),
+			);
+		});
+
+		it("IDで開いたページが台帳になくても(1度も保存できなかった)、端末内の記録の名前で開いて、復元して送る", async () => {
+			leaveStray("出張メモ", [draft, note]);
+			const fetchMock = stubFetch((url, init) => {
+				if (url.endsWith(`/${OTHER_ID}/info`)) return json({ error: "unknown-page" }, 404);
+				if (init?.method === "POST") return json({ version: 1, applied: [draft, note] });
+				return json({ version: 0, lines: [] });
+			});
+
+			render(<Page id={OTHER_ID as PageId} />);
+
+			await waitFor(() => expect(lines()).toEqual(["出張メモ", "新幹線の時刻"]));
+			await waitFor(() => expect(status()).toBe("保存済み"));
+			expect(
+				fetchMock.mock.calls.some(
+					([url, init]) =>
+						url === `/api/projects/team/pages/${OTHER_ID}/commits` && init?.method === "POST",
+				),
+			).toBe(true);
+		});
+
+		it("台帳にも、端末内の記録にもないIDは、見つからないと表示する", async () => {
+			stubFetch((url) =>
+				url.endsWith("/info")
+					? json({ error: "unknown-page" }, 404)
+					: json({ version: 0, lines: [] }),
+			);
+
+			render(<Page id={"nothing" as PageId} />);
+
+			await waitFor(() => expect(screen.getByText(/このページは、まだありません/)).toBeDefined());
+		});
+
+		it("記録には、ページのいまの名前を添える。名前が変わったと知らされたら、記録の名前も直す", async () => {
+			const { receive } = await openWithSocket();
+			type("買い物 追記");
+			await waitFor(() => expect(records()).toMatchObject([{ id: PAGE_ID, title: "買い物" }]));
+
+			receive({ type: "page", title: "買い物 追記", problem: null });
+
+			await waitFor(() => expect(records()).toMatchObject([{ id: PAGE_ID, title: "買い物 追記" }]));
+		});
 	});
 });

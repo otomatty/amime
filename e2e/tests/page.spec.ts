@@ -521,3 +521,103 @@ test.describe("未送信の変更の復元", () => {
 		await otherContext.close();
 	});
 });
+
+test.describe("名前から引けなくなった、端末内の未送信の変更(ADR-0042、Issue #18)", () => {
+	test("閉じているあいだに、他の人がページの名前を変えた。前の名前で開くと案内が出て、そこから開くと復元して送る", async ({
+		page,
+		context,
+		browser,
+	}) => {
+		const name = newPageName();
+		await page.goto(`/e2e/${name}`);
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Enter");
+		await page.keyboard.type("保存済みの行");
+		await expect(status(page)).toHaveText("保存済み");
+		await page.route("**/commits", (route) => route.abort());
+		await page.keyboard.press("Enter");
+		await page.keyboard.type("送れなかった行");
+		await expect(status(page)).toHaveText("保存できませんでした。自動で再試行します");
+		await page.close();
+
+		// 別の人(別のブラウザ)が、そのあいだに名前を変える。
+		const otherContext = await browser.newContext();
+		const other = await otherContext.newPage();
+		await other.goto(`/e2e/${name}`);
+		await clickLineEnd(other, 0);
+		await other.keyboard.type(" 改");
+		await expect(other).toHaveURL(new RegExp(`/${name}_${encodeURIComponent("改")}$`));
+		await otherContext.close();
+
+		// 前の名前で開くと、まだないページが開き、残っている変更へ案内する。
+		const reopened = await context.newPage();
+		await reopened.goto(`/e2e/${name}`);
+		const notice = reopened
+			.getByRole("note")
+			.filter({ hasText: "送れていない変更が、この端末に残っています" });
+		await expect(notice).toBeVisible();
+		await notice.getByRole("link").click();
+
+		await expectLines(reopened, [`${name} 改`, "保存済みの行", "送れなかった行"]);
+		await expect(status(reopened)).toHaveText("保存済み");
+		await expect(reopened).toHaveURL(new RegExp(`/${name}_${encodeURIComponent("改")}$`));
+	});
+
+	test("通信できないまま書いた新しいページの名前を、他の人が別のページに付けた。一覧と案内から開くと、重ならない名前のページとして保存される", async ({
+		page,
+		context,
+		browser,
+	}) => {
+		const name = newPageName();
+		await page.route("**/commits", (route) => route.abort());
+		await page.goto(`/e2e/${name}`);
+		await clickLineEnd(page, 0);
+		await page.keyboard.press("Enter");
+		await page.keyboard.type("通信できないときの下書き");
+		await expect(status(page)).toHaveText("保存できませんでした。自動で再試行します");
+		await page.close();
+
+		// 別の人が、別のページの1行目を、同じ名前に変える。開いただけのページ(通信できないまま書いたページ)は、
+		// 台帳から名前を外され、その名前は、別の人のページのものになる(ADR-0024)。
+		const otherContext = await browser.newContext();
+		const other = await otherContext.newPage();
+		await other.goto(`/e2e/${name}-other`);
+		await clickLineEnd(other, 0);
+		await other.keyboard.press("Enter");
+		await other.keyboard.type("他の人のページ");
+		await expect(status(other)).toHaveText("保存済み");
+		await clickLineEnd(other, 0);
+		await other.keyboard.press("Shift+Home");
+		await other.keyboard.type(name);
+		await expect(other).toHaveURL(new RegExp(`/${name}$`));
+		await otherContext.close();
+
+		// プロジェクトのトップに、送れていない変更があるページが出る。
+		const top = await context.newPage();
+		await top.goto("/e2e/");
+		const pending = top.getByRole("region", { name: "この端末に、送れていない変更があるページ" });
+		await expect(pending.getByRole("link", { name })).toBeVisible();
+
+		// 同じ名前で開くと、他の人のページが開き、残っている変更へ案内する。
+		await top.goto(`/e2e/${name}`);
+		await expectLines(top, [name, "他の人のページ"]);
+		const notice = top
+			.getByRole("note")
+			.filter({ hasText: "送れていない変更が、この端末に残っています" });
+		await notice.getByRole("link").click();
+
+		// 復元して送ると、重ならない名前で台帳に載り、URLもその名前になる。
+		await expectLines(top, [name, "通信できないときの下書き"]);
+		await expect(status(top)).toHaveText("保存済み");
+		await expect(top).toHaveURL(new RegExp(`/${name}_\\(2\\)$`));
+		await top.reload();
+		await expectLines(top, [name, "通信できないときの下書き"]);
+
+		// 送り終えたので、一覧にはもう出ない。
+		await top.goto("/e2e/");
+		await expect(top.getByRole("region", { name: "ページの一覧" })).toBeVisible();
+		await expect(
+			top.getByRole("region", { name: "この端末に、送れていない変更があるページ" }),
+		).toHaveCount(0);
+	});
+});

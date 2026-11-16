@@ -359,6 +359,12 @@ export class ProjectDO extends DurableObject {
 		return this.#byId(id) !== null;
 	}
 
+	/** IDからページを引く(ADR-0042)。台帳にない(開いたことのない、削除した)ページは null。 */
+	info(id: PageId): PageInfo | null {
+		const existing = this.#byId(id);
+		return existing === null ? null : toInfo(existing);
+	}
+
 	/** その名前のページの、最初の画像のURL(一覧のカードに出すもの)。ページか画像がなければ null。 */
 	image(name: string): string | null {
 		const row = this.ctx.storage.sql

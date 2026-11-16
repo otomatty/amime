@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createPageApi,
 	deletePage,
+	findPage,
 	listPages,
 	loadIcon,
 	loadLinks,
@@ -32,6 +33,23 @@ afterEach(() => {
 
 const client = "tab-1" as ClientId;
 const pageId = "p-1" as PageId;
+
+describe("findPage(IDからページを引く。ADR-0042)", () => {
+	const info = { id: "p-1", title: "出張メモ", problem: null, pinned: false };
+
+	it("IDで引いて、ページのいまの名前を返す", async () => {
+		const fetchMock = stubFetch(json(info));
+
+		expect(await findPage(pageId)).toEqual(info);
+		expect(fetchMock).toHaveBeenCalledWith("/api/projects/team/pages/p-1/info", undefined);
+	});
+
+	it("台帳にないIDは、ないことが分かる失敗になる", async () => {
+		stubFetch(json({ error: "unknown-page" }, 404));
+
+		await expect(findPage(pageId)).rejects.toMatchObject({ kind: "missing" });
+	});
+});
 
 describe("openPage(名前からページを引く)", () => {
 	const info = { id: "p-1", title: "買い物/メモ", problem: null, pinned: false };
