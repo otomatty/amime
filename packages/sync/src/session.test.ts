@@ -328,6 +328,27 @@ describe("splitChanges(変更の列を、コミットに収まる大きさに分
 		expect(parts.map((part) => part.length)).toEqual([MAX_CHANGES, MAX_CHANGES, 1]);
 		expect(parts.flat()).toEqual(changes);
 	});
+
+	it("とても多い変更も、順序を保って分ける(読み込むページには、行の数の上限がない)", () => {
+		const changes = deletes(MAX_CHANGES * 50 + 1);
+
+		const parts = splitChanges(changes);
+
+		expect(parts).toHaveLength(51);
+		expect(parts.every((part, index) => part[0] === changes[index * MAX_CHANGES])).toBe(true);
+		expect(parts.at(-1)).toEqual([changes.at(-1)]);
+	});
+
+	it("本文の長さでも分ける。1つの変更が上限より長くても、1つは入れる", () => {
+		const long = (index: number): Change => ({
+			type: "insert",
+			line: line(`n${index}`, "x".repeat(MAX_COMMIT_TEXT_LENGTH)),
+			after: null,
+			before: null,
+		});
+
+		expect(splitChanges([long(0), long(1)]).map((part) => part.length)).toEqual([1, 1]);
+	});
 });
 
 describe("1つのコミットに収まらない変更", () => {
