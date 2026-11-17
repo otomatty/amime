@@ -81,6 +81,8 @@ describe("linkQueryAt(書いている途中のリンク)", () => {
 			["アイコンの名前の途中", "[買い|物.icon]"],
 			["外部リンクの表示文字の途中", "[買い|物 https://example.com]"],
 			["他のプロジェクトへのリンクの途中", "[/proj/買い|物]"],
+			["括弧の直後(名前の前)", "[|買い物]"],
+			["URLの途中", "[h|ttps://example.com"],
 		])("%sでは、リンクを書いている途中として扱わない", (_name, marked) => {
 			expect(queryAt(marked)).toBeNull();
 		});
@@ -95,6 +97,19 @@ describe("linkQueryAt(書いている途中のリンク)", () => {
 
 		it("閉じたコードのあとの括弧は、対象にする", () => {
 			expect(queryAt("`code` [買い|")).toMatchObject({ kind: "bracket", query: "買い" });
+		});
+
+		it("閉じたコードの直後は、コードの中として扱わない", () => {
+			expect(queryAt("[買 `a`|")).toMatchObject({ kind: "bracket", query: "買 `a`" });
+		});
+
+		it("カーソルのすぐ後ろや、少し後ろに、別の記法(URL、コード)があっても、対象にする", () => {
+			expect(queryAt("[買| https://example.com")).toMatchObject({ kind: "bracket", query: "買" });
+			expect(queryAt("[買|`code`")).toMatchObject({ kind: "bracket", query: "買" });
+		});
+
+		it("引用の行でも、カーソルの後ろに文字が続いていても、対象にする(中に記法を書ける記法は、数えない)", () => {
+			expect(queryAt("> 引用 [買|物")).toMatchObject({ kind: "bracket", query: "買" });
 		});
 	});
 
@@ -118,6 +133,8 @@ describe("linkQueryAt(書いている途中のリンク)", () => {
 			["文字に続く #(C# など)", "C#メ|"],
 			["コードの中", "`#買い|`"],
 			["タグの外", "#買い物 の|"],
+			["# の前", "|#買い物"],
+			["# の直後(名前の前)", "#|買い物"],
 		])("%sでは、タグを書いている途中として扱わない", (_name, marked) => {
 			expect(queryAt(marked)).toBeNull();
 		});
@@ -130,6 +147,8 @@ describe("linkQueryAt(書いている途中のリンク)", () => {
 
 		it("括弧の中の # は、括弧のリンクの名前の一部として扱う", () => {
 			expect(queryAt("[C #メ|")).toMatchObject({ kind: "bracket", query: "C #メ" });
+			// タグの途中にカーソルがあっても、括弧のリンクとして扱う。
+			expect(queryAt("[C #メ|モ")).toMatchObject({ kind: "bracket", query: "C #メ" });
 		});
 	});
 });
@@ -185,6 +204,8 @@ describe("canCompleteLink(その名前へのリンクとして、補完できる
 		expect(complete("[bu|] after `", "buy` stuff")).toBe("[bu|] after `");
 		// 行に他のバッククォートがなければ、リンクとして読まれる。
 		expect(canComplete("[bu|] after", "buy` stuff")).toBe(true);
+		// 前のバッククォートと組になって、補完した名前の一部がコードになる。
+		expect(canComplete("`[買|", "a`b")).toBe(false);
 	});
 
 	it("[名前] と書いて、そのページへのリンクになる名前なら、補完できる", () => {

@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { renameLinks, writePageLink } from "./rename.ts";
 
@@ -9,6 +10,20 @@ describe("writePageLink(ページへのリンクの書き方)", () => {
 
 	it("タグとして書けない名前は、[名前] と書く", () => {
 		expect(writePageLink("a`b", "hashtag")).toBe("[a`b]");
+	});
+
+	it("[名前] で書くときは、どんな名前でも、タグにしない", () => {
+		fc.assert(
+			fc.property(fc.oneof(fc.string(), fc.constantFrom("null", "undefined", "a b")), (title) => {
+				const written = writePageLink(title, "page-link");
+				expect(written === null || written === `[${title}]`).toBe(true);
+			}),
+		);
+	});
+
+	it("空の名前へのリンクは、書けない(# や [] だけでは、リンクにならない)", () => {
+		expect(writePageLink("", "hashtag")).toBeNull();
+		expect(writePageLink("", "page-link")).toBeNull();
 	});
 
 	it.each([
@@ -46,6 +61,19 @@ describe("renameLinks(名前が変わったページへのリンクを書き換�
 			"題",
 			"[New] [New] [New]",
 		]);
+	});
+
+	it("書き換えると、名前の記号が行の別の記号と組になって、リンクが消えるなら、書き換えない", () => {
+		// 新しい名前のバッククォートが、行の後ろのバッククォートと組になって、コードになる。
+		expect(rename(["題", "[牛乳] と `x"], "牛乳", "a`b")).toEqual([]);
+		expect(rename(["題", "[牛乳] と x"], "牛乳", "a`b")).toEqual([
+			{ index: 1, text: "[a`b] と x" },
+		]);
+	});
+
+	it("新しい名前が空なら、書き換えない(タグを # だけにしない)", () => {
+		expect(rename(["題", "#牛乳"], "牛乳", "")).toEqual([]);
+		expect(rename(["題", "#牛乳 と [牛乳]"], "牛乳", "")).toEqual([]);
 	});
 
 	it("#タグ は、タグのまま書き換える。名前の空白は、アンダースコアにする", () => {

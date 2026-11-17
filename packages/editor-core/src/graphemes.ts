@@ -5,6 +5,7 @@ import { invariant } from "@tsuzuri/shared";
  * 絵文字や結合文字は UTF-16 では複数単位になるため、カーソル移動と削除は必ずここを通す。
  * 位置(column)は UTF-16 の単位で数える。
  */
+// Stryker disable next-line ObjectLiteral: 書記素は、Intl.Segmenter の既定の単位。省いても結果は変わらない(読み手のために書く)
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** index を含む文字を返す。index は 0 以上、text の長さ未満であること。 */
@@ -42,6 +43,7 @@ export function nextBoundary(text: string, column: number): number {
 
 /** column を行の範囲に収め、文字の途中であればその文字の開始位置に寄せる。 */
 export function snapToBoundary(text: string, column: number): number {
+	// 0 は、下の手順でも 0 になる(先頭の文字の開始位置)。
 	if (column <= 0) return 0;
 	if (column >= text.length) return text.length;
 	return graphemeAt(text, column).index;
@@ -49,6 +51,7 @@ export function snapToBoundary(text: string, column: number): number {
 
 /** column を行の範囲に収め、文字の途中であればその文字の終了位置に寄せる。 */
 export function ceilToBoundary(text: string, column: number): number {
+	// 0 は、下の手順でも 0 になる(先頭の文字の開始位置で、文字の途中ではない)。
 	if (column <= 0) return 0;
 	if (column >= text.length) return text.length;
 	const start = graphemeAt(text, column).index;

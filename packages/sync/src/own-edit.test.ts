@@ -81,6 +81,17 @@ describe("revertEdit(自分の編集を打ち消す)", () => {
 			expect(revertEdit(current, deleted)).toBe(current);
 		});
 
+		it("打ち消した結果が、ちょうど長さの上限なら、打ち消す", () => {
+			const half = "あ".repeat(MAX_LINE_LENGTH / 2);
+			const deleted = recordEdit([line("a", `${half}${half.slice(1)}`)], [line("a", half)]);
+			const current = afterRemote([line("a", half)], update("a", `${half}!`));
+
+			// 同じ場所(末尾)に足した文字は、先に入っていたほう(他の人の「!」)を前にする。
+			const reverted = `${half}!${half.slice(1)}`;
+			expect(reverted).toHaveLength(MAX_LINE_LENGTH);
+			expect(revertEdit(current, deleted)).toEqual([line("a", reverted)]);
+		});
+
 		it("元にした本文を持たない変更は、そのまま置き換える", () => {
 			const current = [line("a", "他の人の本文")];
 			const edit = { forward: [update("a", "A2")], backward: [update("a", "A")] };
