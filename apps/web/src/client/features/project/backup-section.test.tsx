@@ -163,8 +163,23 @@ describe("BackupSection(書き出しと読み込み。ADR-0043)", () => {
 			screen.getByText(/同じ名前のページがあったので、書き換えずに飛ばしました: 二/),
 		).toBeDefined();
 		expect(screen.getByRole("alert").textContent).toMatch(
-			/送れなかったページ: 三。もう一度同じファイルを読み込むと、続きから作ります。/,
+			/送れなかったページ: 三。もう一度読み込むと、続きから作ります。/,
 		);
 		expect(vi.mocked(importProject).mock.calls[0]?.[0]).toEqual(file);
+	});
+
+	it("送れなかったページがあれば、ファイルを選び直さずに、もう一度読み込める", async () => {
+		vi.mocked(importProject)
+			.mockResolvedValueOnce({ created: ["一"], skipped: [], failed: ["二"] })
+			.mockResolvedValueOnce({ created: ["二"], skipped: ["一"], failed: [] });
+		render(<BackupSection project="team" admin download={vi.fn()} />);
+		choose(JSON.stringify(file));
+		fireEvent.click(await screen.findByRole("button", { name: "読み込む" }));
+
+		fireEvent.click(await screen.findByRole("button", { name: "もう一度読み込む" }));
+
+		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+		expect(vi.mocked(importProject).mock.calls.map((call) => call[0])).toEqual([file, file]);
+		expect(screen.queryByRole("button", { name: "もう一度読み込む" })).toBeNull();
 	});
 });

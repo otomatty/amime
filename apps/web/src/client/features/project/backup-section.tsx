@@ -40,7 +40,7 @@ type ImportState =
 	| { readonly kind: "invalid"; readonly message: string }
 	| { readonly kind: "ready"; readonly file: ProjectFile }
 	| { readonly kind: "running"; readonly done: number; readonly total: number }
-	| { readonly kind: "done"; readonly result: ImportResult };
+	| { readonly kind: "done"; readonly file: ProjectFile; readonly result: ImportResult };
 
 type BackupSectionProps = {
 	readonly project: string;
@@ -103,7 +103,7 @@ export function BackupSection({ project, admin, download = saveFile }: BackupSec
 		const result = await importProject(file, {
 			onProgress: (done, total) => setImported({ kind: "running", done, total }),
 		});
-		setImported({ kind: "done", result });
+		setImported({ kind: "done", file, result });
 	};
 
 	return (
@@ -161,14 +161,22 @@ export function BackupSection({ project, admin, download = saveFile }: BackupSec
 							読み込んでいます({imported.done} / {imported.total} ページ)
 						</p>
 					)}
-					{imported.kind === "done" && <ImportSummary result={imported.result} />}
+					{imported.kind === "done" && (
+						<ImportSummary result={imported.result} retry={() => void runImport(imported.file)} />
+					)}
 				</>
 			)}
 		</section>
 	);
 }
 
-function ImportSummary({ result }: { readonly result: ImportResult }) {
+type ImportSummaryProps = {
+	readonly result: ImportResult;
+	/** 同じファイルを、もう一度読み込む(ファイルを選び直さなくてよい。同じファイルを選んでも、選んだことにならない)。 */
+	readonly retry: () => void;
+};
+
+function ImportSummary({ result, retry }: ImportSummaryProps) {
 	return (
 		<>
 			<p className="page-status" role="status">
@@ -178,10 +186,15 @@ function ImportSummary({ result }: { readonly result: ImportResult }) {
 				<p>同じ名前のページがあったので、書き換えずに飛ばしました: {result.skipped.join("、")}</p>
 			)}
 			{result.failed.length > 0 && (
-				<p className="project-error" role="alert">
-					送れなかったページ: {result.failed.join("、")}
-					。もう一度同じファイルを読み込むと、続きから作ります。
-				</p>
+				<>
+					<p className="project-error" role="alert">
+						送れなかったページ: {result.failed.join("、")}
+						。もう一度読み込むと、続きから作ります。
+					</p>
+					<button type="button" onClick={retry}>
+						もう一度読み込む
+					</button>
+				</>
 			)}
 		</>
 	);
