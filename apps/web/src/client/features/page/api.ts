@@ -11,6 +11,7 @@ import {
 	parsePageInfo,
 	parsePageLinks,
 	parsePageList,
+	parsePageSaved,
 	parsePageTitles,
 	parseSearchResults,
 	parseSnapshot,
@@ -78,6 +79,11 @@ export function openPage(name: string): Promise<PageInfo> {
  */
 export function findPage(id: PageId): Promise<PageInfo> {
 	return request(`${pagePath(id)}/info`, undefined, parsePageInfo);
+}
+
+/** ページが保存されている(台帳に、開いただけでないページとして載っている)か(ADR-0043)。 */
+export function isPageSaved(id: PageId): Promise<boolean> {
+	return request(`${pagePath(id)}/info`, undefined, parsePageSaved);
 }
 
 /** ページの一覧を取り出す(ADR-0025)。offset は、何件目から取り出すか。 */

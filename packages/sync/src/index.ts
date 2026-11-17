@@ -54,6 +54,7 @@ export {
 	parsePageInfo,
 	parsePageLinks,
 	parsePageList,
+	parsePageSaved,
 	parsePageSort,
 	parsePageTitle,
 	parsePageTitles,

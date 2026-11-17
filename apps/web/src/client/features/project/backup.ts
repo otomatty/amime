@@ -1,14 +1,14 @@
-import { toTitleLc } from "@tsuzuri/shared";
 import {
 	buildProjectFile,
 	firstLineHolder,
 	importLineIds,
 	type PageCard,
+	type PageId,
 	type ProjectFile,
 	type ProjectFilePage,
 	planPageImport,
 } from "@tsuzuri/sync";
-import { createPageApi, listPages, openPage, pinPage, searchTitles } from "../page/api.ts";
+import { createPageApi, isPageSaved, listPages, openPage, pinPage } from "../page/api.ts";
 import { createClientId } from "../page/client-id.ts";
 import { createCommitId } from "../page/commit-id.ts";
 
@@ -142,8 +142,13 @@ type PageOutcome = "created" | "skipped" | "failed";
 
 /** 1つのページの、1回目の読み込みの結果。finish は、すべてのページのあとで、1行目を戻す処理。 */
 type Staged =
-	| { readonly outcome: "skipped" | "failed" }
-	| { readonly outcome: "created"; readonly finish: (() => Promise<unknown>) | null };
+	| { readonly outcome: "failed" }
+	| { readonly outcome: "skipped"; readonly id: PageId }
+	| {
+			readonly outcome: "created";
+			readonly id: PageId;
+			readonly finish: (() => Promise<unknown>) | null;
+	  };
 
 /**
  * 1つのページを作る(行を足し、固定する。1行目は、いったん名前にしておく。planPageImport)。
@@ -164,7 +169,7 @@ async function stagePage(
 			lines: snapshot.lines,
 			pinned: info.pinned,
 		});
-		if (plan === null) return { outcome: "skipped" };
+		if (plan === null) return { outcome: "skipped", id: info.id };
 		for (const changes of plan.commits) {
 			await api.commit({ id: createCommitId(), changes });
 		}
@@ -172,23 +177,25 @@ async function stagePage(
 		const { firstLine } = plan;
 		const finish =
 			firstLine === null ? null : () => api.commit({ id: createCommitId(), changes: [firstLine] });
-		return { outcome: "created", finish };
+		return { outcome: "created", id: info.id, finish };
 	} catch {
 		return { outcome: "failed" };
 	}
 }
 
-/** 台帳に載るのを待つ回数と間隔。ページは、保存の数秒後(最大で10秒ほど)に台帳に載る。 */
+/** 台帳に載るのを待つ回数と間隔(最大で20秒)。ページは、保存の数秒後(最大で10秒ほど)に台帳に載る。 */
 const LISTED_TRIES = 40;
 const LISTED_INTERVAL_MS = 500;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** その名前のページが、台帳に載る(保存されたページとして、名前で探せる)まで待つ。載らなければ false。 */
-async function waitListed(title: string, wait: (ms: number) => Promise<void>): Promise<boolean> {
+/**
+ * そのページが、台帳に、保存されたページとして載るまで待つ。載らなければ false。
+ * 名前で探す(searchTitles)と、名前の似たページが多いプロジェクトでは、候補に入らないことがある。IDで確かめる。
+ */
+async function waitSaved(id: PageId, wait: (ms: number) => Promise<void>): Promise<boolean> {
 	for (let attempt = 0; attempt < LISTED_TRIES; attempt += 1) {
-		const titles = await searchTitles(title);
-		if (titles.some((found) => toTitleLc(found) === toTitleLc(title))) return true;
+		if (await isPageSaved(id)) return true;
 		await wait(LISTED_INTERVAL_MS);
 	}
 	return false;
@@ -209,12 +216,13 @@ async function finishPage(
 	file: ProjectFile,
 	page: ProjectFilePage,
 	finish: () => Promise<unknown>,
-	staged: ReadonlySet<ProjectFilePage>,
+	staged: ReadonlyMap<ProjectFilePage, PageId>,
 	wait: (ms: number) => Promise<void>,
 ): Promise<PageOutcome> {
 	try {
 		const holder = firstLineHolder(file, page);
-		if (holder !== null && !(staged.has(holder) && (await waitListed(holder.title, wait)))) {
+		const holderId = holder === null ? undefined : staged.get(holder);
+		if (holder !== null && (holderId === undefined || !(await waitSaved(holderId, wait)))) {
 			return "failed";
 		}
 		await finish();
@@ -237,8 +245,8 @@ export async function importProject(
 	const client = createClientId();
 	const outcomes = new Map<ProjectFilePage, PageOutcome>();
 	const finishing: [ProjectFilePage, () => Promise<unknown>][] = [];
-	// 1回目で、作ったか、もうあったページ。
-	const staged = new Set<ProjectFilePage>();
+	// 1回目で、作ったか、もうあったページと、そのID。
+	const staged = new Map<ProjectFilePage, PageId>();
 	let done = 0;
 	const settle = (page: ProjectFilePage, outcome: PageOutcome) => {
 		outcomes.set(page, outcome);
@@ -249,7 +257,7 @@ export async function importProject(
 	// まず、すべてのページを、それぞれの名前で作る。そのあとで、名前と1行目が違うページの1行目を戻す。
 	for (const page of file.pages) {
 		const result = await stagePage(file, page, client);
-		if (result.outcome !== "failed") staged.add(page);
+		if (result.outcome !== "failed") staged.set(page, result.id);
 		if (result.outcome === "created" && result.finish !== null)
 			finishing.push([page, result.finish]);
 		else settle(page, result.outcome);

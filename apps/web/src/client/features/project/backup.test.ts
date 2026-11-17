@@ -257,17 +257,15 @@ describe("importProject(書き出したファイルを、プロジェクトに�
 			const page = id === undefined ? undefined : pages.get(id);
 			return page === undefined ? undefined : json({ version: page.version, lines: page.lines });
 		};
-		// 台帳に載るのは、保存の少しあと。名前で探すと、listedAfter 回目までは、まだ載っていない。
-		let searched = 0;
-		const titles = (query: string) => {
-			searched += 1;
-			if (searched <= listedAfter) return json({ titles: [] });
-			const saved = [...pages.values()].filter((p) => p.version > 0 && p.title === query);
-			return json({ titles: saved.map((p) => p.title) });
+		// 台帳に載るのは、保存の少しあと。保存されたかを listedAfter 回目まで問われるあいだは、まだ載っていない。
+		let asked = 0;
+		const saved = (id: string) => {
+			asked += 1;
+			return json({ id, saved: asked > listedAfter && (pages.get(id)?.version ?? 0) > 0 });
 		};
 		const calls = stubServer((url, init) => {
-			const query = /\/pages\/titles\?q=([^&]*)$/.exec(url)?.[1];
-			if (query !== undefined) return titles(decodeURIComponent(query));
+			const infoId = /\/pages\/([^/]+)\/info$/.exec(url)?.[1];
+			if (infoId !== undefined) return saved(infoId);
 			const byTitle = /\/pages\/by-title\/([^/?]+)$/.exec(url)?.[1];
 			if (byTitle !== undefined)
 				return openByTitle(decodeURIComponent(byTitle).replaceAll("_", " "));

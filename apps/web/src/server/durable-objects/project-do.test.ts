@@ -185,8 +185,17 @@ describe("ProjectDO(プロジェクトのページの台帳)", () => {
 			const stub = project("info");
 			const opened = await stub.open("旅のメモ");
 
-			expect(await stub.info(opened.id)).toEqual(opened);
+			expect(await stub.info(opened.id)).toEqual({ ...opened, saved: false });
 			expect(await stub.info("unknown" as PageId)).toBeNull();
+		});
+
+		it("保存されたページ(台帳に、保存されたと知らされたページ)かどうかも返す(ADR-0043)", async () => {
+			const stub = project("info-saved");
+			const opened = await stub.open("保存するメモ");
+
+			await stub.index(opened.id, saved("保存するメモ"));
+
+			expect(await stub.info(opened.id)).toEqual({ ...opened, saved: true });
 		});
 	});
 

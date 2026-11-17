@@ -12,6 +12,7 @@ import {
 	parsePageInfo,
 	parsePageLinks,
 	parsePageList,
+	parsePageSaved,
 	parsePageSort,
 	parsePageTitle,
 	parsePageTitles,
@@ -74,6 +75,20 @@ describe("parsePageId", () => {
 
 	it.each([[""], ["a b"], ["a/b"], ["a".repeat(65)], [null]])("%j は受け付けない", (input) => {
 		expect(parsePageId(input)).toEqual({ ok: false, error: "invalid" });
+	});
+});
+
+describe("parsePageSaved(ページが保存されているか。ADR-0043)", () => {
+	it("ページの情報の saved を受け付ける", () => {
+		const info = { id: "p1", title: "メモ", problem: null, pinned: false };
+
+		expect(parsePageSaved({ ...info, saved: true })).toEqual({ ok: true, value: true });
+		expect(parsePageSaved({ ...info, saved: false })).toEqual({ ok: true, value: false });
+	});
+
+	it("saved がなければ、受け付けない", () => {
+		expect(parsePageSaved({ id: "p1" }).ok).toBe(false);
+		expect(parsePageSaved({ saved: "yes" }).ok).toBe(false);
 	});
 });
 
