@@ -2,6 +2,19 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { mapColumn, mergeText } from "./merge-text.ts";
 
+/** 2つの文字列に共通する、順に並んだ文字の、最も多い数(テストで比べるための素直な計算)。 */
+function longestCommon(a: string, b: string): number {
+	let next = new Array<number>(b.length + 1).fill(0);
+	for (let i = a.length - 1; i >= 0; i -= 1) {
+		const row = new Array<number>(b.length + 1).fill(0);
+		for (let j = b.length - 1; j >= 0; j -= 1) {
+			row[j] = a[i] === b[j] ? (next[j + 1] ?? 0) + 1 : Math.max(next[j] ?? 0, row[j + 1] ?? 0);
+		}
+		next = row;
+	}
+	return next[0] ?? 0;
+}
+
 describe("mergeText", () => {
 	it("片方しか変えていなければ、変えたほうになる", () => {
 		expect(mergeText("abc", "abc", "abXc")).toBe("abXc");
@@ -111,6 +124,80 @@ describe("mergeText", () => {
 		);
 	});
 
+	it("同じ文字が続く本文でも、足した文字を落とさない(先頭と末尾の同じ部分が重なるとき)", () => {
+		expect(mergeText("aa", "aaa", "aab")).toBe("aaab");
+		expect(mergeText("aa", "aab", "aaa")).toBe("aaba");
+		expect(mergeText("abab", "ababab", "ababX")).toBe("abababX");
+	});
+
+	it("片方が本文を変え、もう片方が末尾に足しただけなら、変えた本文のあとに、足した文字が来る", () => {
+		// 変えた側の手順(どの文字を残し、どこに足すか)が、いつも、元の本文を変えたあとの本文にしているか。
+		const text = fc.string({ unit: fc.constantFrom("a", "b", "あ", "😀"), maxLength: 10 });
+		fc.assert(
+			fc.property(text, text, (base, changed) => {
+				fc.pre(changed !== base);
+
+				// 末尾に足した文字は、changed が末尾に足した文字よりあと(先に入っていた changed を前にする)。
+				expect(mergeText(base, changed, `${base}末`)).toBe(`${changed}末`);
+			}),
+		);
+	});
+
+	it("片方が何か所かで消して足し、もう片方が残っている元の1文字を消したら、その文字は消えて、ほかはそのまま", () => {
+		// 書き換えた側は、残した元の文字を、すべて残したものとして見比べる(残す文字を最も多くする)。
+		// そうでないと、「消して、足し直した」ことになり、もう片方が消した文字が戻ってしまう。
+		// 元の文字は、すべて違う文字にする(同じ文字が並ぶと、どれを消したかが決まらない)。
+		const letters = fc.uniqueArray(fc.constantFrom("a", "b", "c", "d", "e", "f", "g", "h"), {
+			minLength: 1,
+			maxLength: 8,
+		});
+		const gap = fc.string({ unit: fc.constantFrom("1", "2"), maxLength: 2 });
+		const edit = letters.chain((base) =>
+			fc.record({
+				base: fc.constant(base),
+				gaps: fc.array(gap, { minLength: base.length + 1, maxLength: base.length + 1 }),
+				keep: fc.array(fc.boolean(), { minLength: base.length, maxLength: base.length }),
+				removed: fc.nat(base.length - 1),
+			}),
+		);
+		fc.assert(
+			fc.property(edit, ({ base, gaps, keep, removed }) => {
+				fc.pre(keep[removed] === true);
+				/** 書き換えた側の本文。skip の文字は、もう片方が消したものとして除く。 */
+				const write = (skip: number | null) =>
+					gaps
+						.map((inserted, index) =>
+							index < base.length && keep[index] === true && index !== skip
+								? inserted + (base[index] ?? "")
+								: inserted,
+						)
+						.join("");
+				const original = base.join("");
+				const edited = write(null);
+				fc.pre(edited !== original);
+				const without = base.filter((_, index) => index !== removed).join("");
+
+				expect(mergeText(original, edited, without)).toBe(write(removed));
+				expect(mergeText(original, without, edited)).toBe(write(removed));
+			}),
+			{ numRuns: 300 },
+		);
+	});
+
+	it("同じ文字が並んでいても、残す元の文字は、いつも最も多くする", () => {
+		const text = fc.string({ unit: fc.constantFrom("a", "b", "c"), minLength: 1, maxLength: 9 });
+		fc.assert(
+			fc.property(text, text, (base, changed) => {
+				fc.pre(changed !== base);
+				// 相手が全部を消すと、残るのは、changed が足した文字だけになる。消えた分が、残した元の文字の数。
+				const merged = mergeText(base, changed, "");
+
+				expect(changed.length - merged.length).toBe(longestCommon(base, changed));
+			}),
+			{ numRuns: 500 },
+		);
+	});
+
 	it("統合した結果を、同じ変更でもう一度統合しても、足した文字が別々の場所なら変わらない", () => {
 		expect(mergeText("abc", mergeText("abc", "aXbc", "abYc"), "abYc")).toBe("aXbYc");
 	});
@@ -185,6 +272,51 @@ describe("mergeText(手間の上限)", () => {
 		const budget = { chars: 0, cells: 0 };
 
 		expect(mergeText("abc", "abc", "abXc", { budget })).toBe("abXc");
+	});
+
+	it("見比べるまでもないとき(片方しか変えていない、両方が同じ本文にした)は、手間を引かない", () => {
+		const budget = { chars: 1000, cells: 1000 };
+
+		expect(mergeText("abc", "abc", "abXc", { budget })).toBe("abXc");
+		expect(mergeText("abc", "abXc", "abc", { budget })).toBe("abXc");
+		expect(mergeText("abc", "abXc", "abXc", { budget })).toBe("abXc");
+		expect(budget).toEqual({ chars: 1000, cells: 1000 });
+	});
+
+	it("見比べる本文の量が、上限とちょうど同じなら、統合する", () => {
+		const budget = { chars: 11, cells: 1000 };
+
+		expect(mergeText("abc", "aXbc", "abYc", { budget })).toBe("aXbYc");
+		expect(budget.chars).toBe(0);
+	});
+
+	it("細かく見比べる範囲の大きさが、残りとちょうど同じなら、細かく見比べる", () => {
+		const budget = { chars: 1000, cells: 6 };
+
+		expect(mergeText("abcde", "abXYZe", "abcdeQ", { budget })).toBe("abXYZeQ");
+		expect(budget.cells).toBe(0);
+	});
+
+	it("両方の範囲を細かく見比べたら、両方の大きさを引く。あとから届いた側も、残りの範囲で見比べる", () => {
+		// current は「cd」と「XYZ」(2 × 3)、incoming は「b」と「QR」(1 × 2)。
+		const enough = { chars: 1000, cells: 100 };
+		expect(mergeText("abcde", "abXYZe", "aQRcde", { budget: enough })).toBe("aQRXYZe");
+		expect(enough.cells).toBe(100 - 6 - 2);
+
+		// current を見比べると、残りは 1。incoming の範囲(2)は、まるごと置き換えたものとして扱う。
+		const short = { chars: 1000, cells: 7 };
+		mergeText("abcde", "abXYZe", "aQRcde", { budget: short });
+		expect(short.cells).toBe(1);
+	});
+
+	it("上限を渡さなくても、1回に細かく見比べる範囲には上限がある。超えたら、範囲をまるごと置き換えたものとして扱う", () => {
+		// 先頭と末尾だけを変えた、1100文字の本文。見比べる範囲は 1100 × 1100 で、上限(100万)を超える。
+		const base = Array.from({ length: 1100 }, (_, index) => String.fromCodePoint(0x4e00 + index));
+		const current = ["先", ...base.slice(1, -1), "末"].join("");
+		const incoming = base.filter((_, index) => index !== 500).join("");
+
+		// current は「全部を消して、全部を足した」とみなすので、incoming が消した文字も、current の中に残る。
+		expect(mergeText(base.join(""), current, incoming)).toBe(current);
 	});
 });
 
