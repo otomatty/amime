@@ -10,6 +10,7 @@ import {
 	setRole,
 	setVisibility,
 } from "./api.ts";
+import { BackupSection } from "./backup-section.tsx";
 import "./project.css";
 
 const VISIBILITY_LABELS: Record<Visibility, string> = {
@@ -302,6 +303,7 @@ export function ProjectSettings({
 			{admin && list !== null && list !== "failed" && (
 				<Invites project={project.name} list={list.invites} origin={origin} run={run} />
 			)}
+			<BackupSection project={project.name} admin={admin} />
 		</section>
 	);
 }

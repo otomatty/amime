@@ -30,6 +30,16 @@ export {
 	parseProjectMembers,
 } from "./project.ts";
 export {
+	buildProjectFile,
+	insertionCommits,
+	PROJECT_FILE_FORMAT,
+	PROJECT_FILE_VERSION,
+	type ProjectFile,
+	type ProjectFileError,
+	type ProjectFilePage,
+	parseProjectFile,
+} from "./project-file.ts";
+export {
 	MAX_LINE_LENGTH,
 	parseClientId,
 	parseClientMessage,

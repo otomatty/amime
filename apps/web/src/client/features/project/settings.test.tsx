@@ -95,6 +95,20 @@ describe("ProjectSettings(プロジェクトの設定)", () => {
 		);
 	});
 
+	it("書き出しと読み込みの欄を出す。読み込みは、管理者だけ(ADR-0043)", async () => {
+		stubServer();
+		renderSettings();
+		expect(await screen.findByRole("heading", { name: "書き出しと読み込み" })).toBeDefined();
+		expect(screen.getByLabelText("読み込むファイル")).toBeDefined();
+		cleanup();
+
+		stubServer({ members: [{ ...taro, id: "u1" }], invites: [] });
+		renderSettings({ ...team, role: "member" });
+		await memberItems();
+		expect(screen.getByRole("button", { name: "書き出す" })).toBeDefined();
+		expect(screen.queryByLabelText("読み込むファイル")).toBeNull();
+	});
+
 	it("メンバーを読み込めなかったら、そのことを伝える", async () => {
 		stubServer(null);
 
