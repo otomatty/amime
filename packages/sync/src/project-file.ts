@@ -178,27 +178,41 @@ export function planPageImport(
 	const lines = page.lines.map((text, index): Line => ({ id: ids[index] as LineId, text }));
 	// 1行目を名前にした行。
 	const staged = lines.map((line, index) => (index === 0 ? { ...line, text: page.title } : line));
-	if (target.lines.length === 0 && target.version > 0) return null;
-	if (target.lines.length > lines.length) return null;
+	let previous: LineId | null = null;
+	const all = splitChanges(
+		staged.map((line): Change => {
+			const change: Change = { type: "insert", line, after: previous, before: null };
+			previous = line.id;
+			return change;
+		}),
+	);
+	// 送ったコミットの数(いまの行が、どのコミットまでで作られたか)。コミットの区切りでなければ、読み込みで作った行ではない。
+	let sent = 0;
+	let covered = 0;
+	for (const commit of all) {
+		if (covered >= target.lines.length) break;
+		covered += commit.length;
+		sent += 1;
+	}
+	if (covered !== target.lines.length) return null;
 	const resumable = target.lines.every(
 		(line, index) =>
 			line.id === lines[index]?.id &&
 			(line.text === staged[index]?.text || line.text === lines[index]?.text),
 	);
 	if (!resumable) return null;
-	let previous = target.lines.at(-1)?.id ?? null;
-	const changes = staged.slice(target.lines.length).map((line): Change => {
-		const change: Change = { type: "insert", line, after: previous, before: null };
-		previous = line.id;
-		return change;
-	});
-	const pin = page.pinned && !target.pinned;
-	const first = target.lines[0]?.text ?? page.title;
 	const original = page.lines.slice(0, 1).join("");
+	const first = target.lines[0]?.text ?? page.title;
+	// 版は、変更の効いたコミットごとに1つ進む。読み込みのコミット(と、1行目を戻す変更)の数と違えば、
+	// 読み込んだあとで、だれかが編集している(行が途中までと同じでも、消した行を足し直さない)。
+	const restoredFirst = first === original && original !== page.title ? 1 : 0;
+	if (target.version !== sent + restoredFirst) return null;
+	const changes = all.slice(sent);
+	const pin = page.pinned && !target.pinned;
 	const firstLine: Change | null =
 		first === original
 			? null
 			: { type: "update", id: ids[0] as LineId, text: original, base: first };
 	if (changes.length === 0 && !pin && firstLine === null) return null;
-	return { commits: splitChanges(changes), pin, firstLine };
+	return { commits: changes, pin, firstLine };
 }

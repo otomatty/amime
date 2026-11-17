@@ -213,18 +213,33 @@ describe("planPageImport(1つのページを、どう読み込むか)", () => {
 		expect(longPlan?.commits.flat()).toHaveLength(20);
 	});
 
-	it("前の読み込みが途中で止まったページには、続きの行だけを足す", () => {
-		const partial = {
-			version: 1,
-			lines: [{ id: "i1" as LineId, text: "買い物" }],
-			pinned: false,
-		};
+	/** 2回のコミットになるページ(2,000行と2行)。 */
+	const long = {
+		...page("長い"),
+		lines: Array.from({ length: MAX_CHANGES + 2 }, (_, i) => `行${i}`),
+	};
+	const longIds = long.lines.map((_, i) => `l${i}` as LineId);
+	const firstCommit = (version: number) => ({
+		version,
+		lines: long.lines
+			.slice(0, MAX_CHANGES)
+			.map((text, i) => ({ id: longIds[i] as LineId, text: i === 0 ? "長い" : text })),
+		pinned: false,
+	});
 
-		const plan = planPageImport(shop, ids, partial);
+	it("前の読み込みが途中で止まったページ(送ったコミットの数と版が合う)には、続きの行だけを足す", () => {
+		const plan = planPageImport(long, longIds, firstCommit(1));
 
-		expect(texts(plan)).toEqual([["牛乳", "卵"]]);
-		expect(plan?.commits[0]?.[0]).toMatchObject({ after: "i1" });
-		expect(plan?.pin).toBe(true);
+		expect(texts(plan)).toEqual([[`行${MAX_CHANGES}`, `行${MAX_CHANGES + 1}`]]);
+		expect(plan?.commits[0]?.[0]).toMatchObject({ after: `l${MAX_CHANGES - 1}` });
+	});
+
+	it("読み込み終えたあとで編集されたページは、行が途中までと同じでも、書き換えない(版が合わない)", () => {
+		// 読み込み終えたあと(版は2)、末尾の2行を消した(版は3)。消した行を、足し直さない。
+		expect(planPageImport(long, longIds, firstCommit(3))).toBeNull();
+		// コミットの区切りでないところまでの行。
+		const cut = { ...firstCommit(1), lines: firstCommit(1).lines.slice(0, 10) };
+		expect(planPageImport(long, longIds, cut)).toBeNull();
 	});
 
 	it("行はすべて読み込んであるが、固定できていなかったページは、固定だけする", () => {
@@ -276,8 +291,22 @@ describe("planPageImport(1つのページを、どう読み込むか)", () => {
 			pinned: true,
 		};
 		const cleared = { version: 5, lines: [], pinned: false };
+		// 行の数と版は、読み込み終えたページと同じだが、行IDか本文が違う。
+		const sameShape = {
+			version: 1,
+			lines: shop.lines.map((text, i) => ({ id: `x${i}` as LineId, text })),
+			pinned: false,
+		};
+		const changedText = {
+			version: 1,
+			lines: shop.lines.map((text, i) => ({
+				id: ids[i] as LineId,
+				text: i === 2 ? "卵 2個" : text,
+			})),
+			pinned: false,
+		};
 
-		for (const existing of [other, edited, longer, cleared]) {
+		for (const existing of [other, edited, longer, cleared, sameShape, changedText]) {
 			expect(planPageImport(shop, ids, existing)).toBeNull();
 		}
 	});
