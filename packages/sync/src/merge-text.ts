@@ -31,10 +31,10 @@ type Script = {
 function commonPrefix(a: readonly string[], b: readonly string[]): number {
 	// 上限を越えても、短いほうの末尾の先は undefined なので、比べがそこで止まる。上限は、比べる前に止める目印。
 	// まったく同じ列なら越えてしまうが、呼ぶ側(mergeText、mapColumn)が、同じ本文を先に返している。
-	// Stryker disable next-line MethodExpression: 上のとおり、結果は変わらない
+	// そのため、長いほうを上限にしても(Math.max)、上限を省いても、結果は変わらない。
+	// Stryker disable next-line MethodExpression: 上のとおり、結果は変わらない(この行の変異は、これだけ)
 	const limit = Math.min(a.length, b.length);
 	let length = 0;
-	// Stryker disable next-line ConditionalExpression,EqualityOperator: 上のとおり、結果は変わらない
 	while (length < limit && a[length] === b[length]) length += 1;
 	return length;
 }
@@ -113,7 +113,7 @@ function editScript(
 	let i = 0;
 	let j = 0;
 	// a を先に読み終えたあとも回ると、a[i] は undefined で、表の外を読む。比べは偽になり、b の残りを足す(下の、ループのあとと同じ)。
-	// Stryker disable next-line ConditionalExpression,EqualityOperator: 上のとおり、結果は変わらない
+	// そのため、i の条件を省いても、結果は変わらない(j の条件は、省くと範囲の外を読む)。
 	while (i < a.length && j < b.length) {
 		if (a[i] === b[j]) {
 			i += 1;
@@ -223,8 +223,7 @@ export function mergeText(
  * - その位置の文字が消されていたら、消された場所に寄る。
  */
 export function mapColumn(before: string, after: string, column: number): number {
-	// 同じ本文なら、下の手順でも同じ位置になる。見比べずに済ませるための近道。
-	// Stryker disable next-line ConditionalExpression: 上のとおり、結果は変わらない
+	// 同じ本文なら、下の手順でも同じ位置になる(負の位置を除く)。見比べずに済ませるための近道。
 	if (before === after) return Math.min(column, after.length);
 
 	const origin = graphemes(before);
@@ -239,7 +238,6 @@ export function mapColumn(before: string, after: string, column: number): number
 		if (kept[index] === true) {
 			// 文字の途中の位置は、その文字の中での位置を保つ。
 			// 文字の終わりちょうどの位置は、ここで返しても、次の文字の先頭として返しても、同じ位置になる。
-			// Stryker disable next-line EqualityOperator: 上のとおり、結果は変わらない
 			if (column < end) return to + (column - from);
 			to += grapheme.length;
 		}

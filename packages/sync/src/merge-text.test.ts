@@ -184,6 +184,10 @@ describe("mergeText", () => {
 		);
 	});
 
+	it("細かく見比べる途中で、変えたあとの本文を読み終えたら、残りの元の文字を消す(範囲の外を読まない)", () => {
+		expect(mergeText("cabb", "bca", "cabbZ")).toBe("bcaZ");
+	});
+
 	it("同じ文字が並んでいても、残す元の文字は、いつも最も多くする", () => {
 		const text = fc.string({ unit: fc.constantFrom("a", "b", "c"), minLength: 1, maxLength: 9 });
 		fc.assert(
