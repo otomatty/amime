@@ -127,7 +127,7 @@ describe("BackupSection(書き出しと読み込み。ADR-0043)", () => {
 			screen.getByText(/同じ名前のページがあったので、書き換えずに飛ばしました: 二/),
 		).toBeDefined();
 		expect(screen.getByRole("alert").textContent).toMatch(
-			/送れなかったページ: 三。もう一度読み込むと、まだないページだけを作ります。/,
+			/送れなかったページ: 三。もう一度同じファイルを読み込むと、続きから作ります。/,
 		);
 		expect(vi.mocked(importProject).mock.calls[0]?.[0]).toEqual(file);
 	});

@@ -165,7 +165,7 @@ function ImportSummary({ result }: { readonly result: ImportResult }) {
 			{result.failed.length > 0 && (
 				<p className="project-error" role="alert">
 					送れなかったページ: {result.failed.join("、")}
-					。もう一度読み込むと、まだないページだけを作ります。
+					。もう一度同じファイルを読み込むと、続きから作ります。
 				</p>
 			)}
 		</>

@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildProjectFile,
-	insertionCommits,
+	importLineIds,
+	importOrder,
 	PROJECT_FILE_FORMAT,
 	PROJECT_FILE_VERSION,
+	type ProjectFilePage,
 	parseProjectFile,
+	planPageImport,
 } from "./project-file.ts";
-import { MAX_LINE_LENGTH } from "./schema.ts";
+import { MAX_CHANGES, MAX_COMMIT_TEXT_LENGTH, MAX_LINE_LENGTH } from "./schema.ts";
 import type { LineId } from "./types.ts";
 
 const page = (title: string, ...rest: string[]) => ({
@@ -80,8 +83,13 @@ describe("parseProjectFile(書き出したファイルを読む)", () => {
 		});
 	});
 
+	it("名前と1行目は、違ってよい(1行目が空、長すぎる、ほかのページと同じ名前のときは、名前が残る)", () => {
+		const file = { ...valid(), pages: [{ ...page("買い物"), lines: ["", "牛乳"] }] };
+
+		expect(parseProjectFile(JSON.stringify(file))).toEqual({ ok: true, value: file });
+	});
+
 	it.each([
-		["1行目と名前が違う", { ...page("買い物"), lines: ["別の名前"] }],
 		["行がない", { ...page("買い物"), lines: [] }],
 		["行の中に改行がある", page("買い物", "1行目\n2行目")],
 		["行が長すぎる", page("買い物", "あ".repeat(MAX_LINE_LENGTH + 1))],
@@ -94,33 +102,141 @@ describe("parseProjectFile(書き出したファイルを読む)", () => {
 	});
 });
 
-describe("insertionCommits(ページの行を、空のページに足すコミット)", () => {
-	const ids = () => {
-		let next = 0;
-		return () => {
-			next += 1;
-			return `l${next}` as LineId;
-		};
-	};
+describe("importOrder(読み込む順)", () => {
+	it("1行目が名前になるページを先に、名前と1行目が違うページを後に読み込む。それぞれの中の順は変えない", () => {
+		// 「メモ」の1行目は「予定」だが、元のプロジェクトでは「予定」が取られていたので、名前が残っていた。
+		// 先に「メモ」を作ると、「予定」という名前になってしまい、あとの「予定」が飛ばされる。
+		const memo = { ...page("メモ"), lines: ["予定", "本文"] };
+		const empty = { ...page("空"), lines: ["", "本文"] };
+		const plan = page("予定");
+		const shop = page("買い物");
 
-	it("行を、上から順に、前の行の後ろへ足す", () => {
-		expect(insertionCommits(["題", "本文"], ids())).toEqual([
-			[
-				{ type: "insert", line: { id: "l1", text: "題" }, after: null, before: null },
-				{ type: "insert", line: { id: "l2", text: "本文" }, after: "l1", before: null },
-			],
+		expect(importOrder([memo, plan, empty, shop]).map((p) => p.title)).toEqual([
+			"予定",
+			"買い物",
+			"メモ",
+			"空",
 		]);
 	});
 
-	it("1回のコミットの変更の数に上限があるので、上限ごとに分ける。続きは、前のコミットの最後の行の後ろへ足す", () => {
-		const commits = insertionCommits(["a", "b", "c", "d", "e"], ids(), 2);
+	it("名前の大文字と小文字、前後の空白の違いは、同じ名前として扱う", () => {
+		const page1 = { ...page("Todo"), lines: [" todo ", "本文"] };
 
-		expect(commits.map((changes) => changes.length)).toEqual([2, 2, 1]);
-		expect(commits[1]?.[0]).toMatchObject({ line: { text: "c" }, after: "l2" });
-		expect(commits[2]?.[0]).toMatchObject({ line: { text: "e" }, after: "l4" });
+		expect(importOrder([page("あ"), page1]).map((p) => p.title)).toEqual(["あ", "Todo"]);
+	});
+});
+
+describe("importLineIds(読み込むページの行ID)", () => {
+	const file = buildProjectFile("notes", [page("買い物", "牛乳", "卵"), page("予定")], 0);
+	const byTitle = (title: string) => file.pages.find((p) => p.title === title) as ProjectFilePage;
+	const shop = byTitle("買い物");
+	const plan = byTitle("予定");
+
+	it("同じファイルの同じページなら、いつも同じ行IDになる(やり直しと、同時の読み込みで、行が重ならない)", () => {
+		expect(importLineIds(file, shop)).toEqual(importLineIds(file, shop));
+		expect(importLineIds(file, shop)).toHaveLength(3);
+		expect(new Set(importLineIds(file, shop)).size).toBe(3);
 	});
 
-	it("行がなければ、コミットもない", () => {
-		expect(insertionCommits([], ids())).toEqual([]);
+	it("ページかファイルが違えば、違う行IDになる。どれも、行IDに使える形", () => {
+		const other = { ...file, exportedAt: "2027-01-01T00:00:00.000Z" };
+		const all = [
+			...importLineIds(file, shop),
+			...importLineIds(file, plan),
+			...importLineIds(other, shop),
+		];
+
+		expect(new Set(all).size).toBe(all.length);
+		for (const id of all) expect(id).toMatch(/^[\w-]{1,64}$/);
+	});
+});
+
+describe("planPageImport(1つのページを、どう読み込むか)", () => {
+	const ids = ["i1", "i2", "i3"] as LineId[];
+	const shop = { ...page("買い物", "牛乳", "卵"), pinned: true };
+	const empty = { version: 0, lines: [], pinned: false };
+	const texts = (plan: ReturnType<typeof planPageImport>) =>
+		plan?.commits.map((changes) =>
+			changes.map((change) => (change.type === "insert" ? change.line.text : change.type)),
+		);
+
+	it("まだないページには、すべての行を上から順に、前の行の後ろへ足す。固定していたなら、固定する", () => {
+		expect(planPageImport(shop, ids, empty)).toEqual({
+			commits: [
+				[
+					{ type: "insert", line: { id: "i1", text: "買い物" }, after: null, before: null },
+					{ type: "insert", line: { id: "i2", text: "牛乳" }, after: "i1", before: null },
+					{ type: "insert", line: { id: "i3", text: "卵" }, after: "i2", before: null },
+				],
+			],
+			pin: true,
+		});
+	});
+
+	it("1回のコミットに収まらない行は、変更の数と本文の長さの上限ごとに分ける", () => {
+		const many = { ...page("多い"), lines: Array.from({ length: MAX_CHANGES + 1 }, () => "a") };
+		const long = {
+			...page("長い"),
+			lines: Array.from({ length: 20 }, () => "あ".repeat(MAX_LINE_LENGTH)),
+		};
+		const idsOf = (p: ProjectFilePage) => p.lines.map((_, i) => `l${i}` as LineId);
+
+		const manyPlan = planPageImport(many, idsOf(many), empty);
+		const longPlan = planPageImport(long, idsOf(long), empty);
+
+		expect(manyPlan?.commits.map((c) => c.length)).toEqual([MAX_CHANGES, 1]);
+		expect(manyPlan?.commits[1]?.[0]).toMatchObject({ after: `l${MAX_CHANGES - 1}` });
+		for (const commit of longPlan?.commits ?? []) {
+			const length = commit.reduce(
+				(sum, c) => sum + (c.type === "insert" ? c.line.text.length : 0),
+				0,
+			);
+			expect(length).toBeLessThanOrEqual(MAX_COMMIT_TEXT_LENGTH);
+		}
+		expect(longPlan?.commits.flat()).toHaveLength(20);
+	});
+
+	it("前の読み込みが途中で止まったページには、続きの行だけを足す", () => {
+		const partial = {
+			version: 1,
+			lines: [{ id: "i1" as LineId, text: "買い物" }],
+			pinned: false,
+		};
+
+		const plan = planPageImport(shop, ids, partial);
+
+		expect(texts(plan)).toEqual([["牛乳", "卵"]]);
+		expect(plan?.commits[0]?.[0]).toMatchObject({ after: "i1" });
+		expect(plan?.pin).toBe(true);
+	});
+
+	it("行はすべて読み込んであるが、固定できていなかったページは、固定だけする", () => {
+		const done = {
+			version: 1,
+			lines: shop.lines.map((text, i) => ({ id: ids[i] as LineId, text })),
+			pinned: false,
+		};
+
+		expect(planPageImport(shop, ids, done)).toEqual({ commits: [], pin: true });
+		expect(planPageImport(shop, ids, { ...done, pinned: true })).toBeNull();
+	});
+
+	it("同じ名前の、ほかのページ(行IDか本文が違う、行が多い、中身を消した)は、書き換えない", () => {
+		const other = { version: 3, lines: [{ id: "x" as LineId, text: "買い物" }], pinned: false };
+		const edited = {
+			version: 2,
+			lines: [{ id: "i1" as LineId, text: "買い物(直した)" }],
+			pinned: false,
+		};
+		const longer = {
+			version: 2,
+			lines: [...shop.lines, "足した"].map((text, i) => ({ id: `i${i + 1}` as LineId, text })),
+			pinned: true,
+		};
+		const cleared = { version: 5, lines: [], pinned: false };
+
+		for (const existing of [other, edited, longer, cleared]) {
+			expect(planPageImport(shop, ids, existing)).toBeNull();
+		}
 	});
 });

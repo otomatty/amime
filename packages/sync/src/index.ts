@@ -31,13 +31,17 @@ export {
 } from "./project.ts";
 export {
 	buildProjectFile,
-	insertionCommits,
+	type ImportTarget,
+	importLineIds,
+	importOrder,
+	type PageImport,
 	PROJECT_FILE_FORMAT,
 	PROJECT_FILE_VERSION,
 	type ProjectFile,
 	type ProjectFileError,
 	type ProjectFilePage,
 	parseProjectFile,
+	planPageImport,
 } from "./project-file.ts";
 export {
 	MAX_LINE_LENGTH,

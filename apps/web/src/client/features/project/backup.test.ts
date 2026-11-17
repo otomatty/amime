@@ -94,6 +94,52 @@ describe("exportProject(プロジェクトのすべてのページを、1つの�
 		expect((await exportProject("team", { now: () => 0 })).pages).toEqual([]);
 	});
 
+	it("名前は、一覧(台帳)の名前にする。1行目が名前にできないページでも、名前を失わない", async () => {
+		stubServer((url) => {
+			if (url.includes("?sort=")) return json({ pages: [card("p1", "メモ")], total: 1 });
+			return json({
+				version: 2,
+				lines: [
+					{ id: "a", text: "" },
+					{ id: "b", text: "本文" },
+				],
+			});
+		});
+
+		const file = await exportProject("team", { now: () => 0 });
+
+		expect(file.pages.map((page) => [page.title, page.lines])).toEqual([["メモ", ["", "本文"]]]);
+	});
+
+	it("失敗したあとは、ほかのページを読み終えても、進み具合を知らせない(画面が、書き出し中に戻らない)", async () => {
+		stubServer((url) => {
+			if (url.includes("?sort=")) {
+				return json({ pages: [card("bad", "一"), card("slow", "二"), card("c", "三")], total: 3 });
+			}
+			if (url.endsWith("/bad")) return json({ error: "unavailable" }, 503);
+			return undefined;
+		});
+		const original = vi.mocked(fetch).getMockImplementation();
+		vi.mocked(fetch).mockImplementation(async (url, init) => {
+			if (String(url).endsWith("/slow") || String(url).endsWith("/c")) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				return json({ version: 1, lines: [{ id: "a", text: "二" }] });
+			}
+			return original?.(url, init) ?? json({}, 500);
+		});
+		const progress: [number, number][] = [];
+
+		await expect(
+			exportProject("team", {
+				now: () => 0,
+				onProgress: (done, total) => progress.push([done, total]),
+			}),
+		).rejects.toThrow();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		expect(progress).toEqual([]);
+	});
+
 	it("読めないページがあれば、途中までのファイルにせず、失敗を知らせる", async () => {
 		stubServer((url) => {
 			if (url.includes("?sort=")) return json({ pages: [card("p1", "一")], total: 1 });
@@ -113,36 +159,83 @@ describe("importProject(書き出したファイルを、プロジェクトに�
 		updated: 2000,
 	});
 
-	/** まだないページ(本文が空)を開き、送られたコミットを受け付けるサーバー。exists の名前は、もうある。 */
+	type StoredLine = { id: string; text: string };
+	type Stored = { title: string; version: number; lines: StoredLine[]; pinned: boolean };
+
+	/**
+	 * 名前でページを開き、コミットと固定を受け付けるサーバー。状態を持つ。
+	 * exists の名前のページは、もうある(ほかの人が作ったページ)。
+	 * 同じ ID の行を足す変更は、本物と同じく何もしない。
+	 */
 	function server(exists: readonly string[] = []) {
-		const ids = new Map<string, string>();
+		const pages = new Map<string, Stored>();
+		for (const title of exists) {
+			pages.set(`id-${pages.size}`, {
+				title,
+				version: 4,
+				lines: [{ id: "x", text: title }],
+				pinned: false,
+			});
+		}
+		const find = (title: string) => [...pages].find(([, page]) => page.title === title)?.[0];
 		const openByTitle = (title: string) => {
-			const id = `id-${ids.size}`;
-			ids.set(id, title);
-			return json({ id, title, problem: null, pinned: false });
+			const id = find(title) ?? `id-${pages.size}`;
+			if (!pages.has(id)) pages.set(id, { title, version: 0, lines: [], pinned: false });
+			const page = pages.get(id) as Stored;
+			return json({ id, title, problem: null, pinned: page.pinned });
 		};
-		const load = (id: string) => {
-			const title = ids.get(id) ?? "";
-			return exists.includes(title)
-				? json({ version: 4, lines: [{ id: "x", text: title }] })
-				: json({ version: 0, lines: [] });
+		const commit = (id: string, body: string) => {
+			const page = pages.get(id) as Stored;
+			const changes = JSON.parse(body).changes as { line: StoredLine; after: string | null }[];
+			for (const { line, after } of changes) {
+				if (page.lines.some((l) => l.id === line.id)) continue;
+				page.lines.splice(
+					after === null ? 0 : page.lines.findIndex((l) => l.id === after) + 1,
+					0,
+					line,
+				);
+			}
+			page.version += 1;
+			return json({ version: page.version, applied: changes });
 		};
-		return stubServer((url, init) => {
+		const pin = (id: string) => {
+			const page = pages.get(id) as Stored;
+			page.pinned = true;
+			return json({ id, title: page.title, problem: null, pinned: true });
+		};
+		const load = (id: string | undefined) => {
+			const page = id === undefined ? undefined : pages.get(id);
+			return page === undefined ? undefined : json({ version: page.version, lines: page.lines });
+		};
+		const calls = stubServer((url, init) => {
 			const byTitle = /\/pages\/by-title\/([^/?]+)$/.exec(url)?.[1];
 			if (byTitle !== undefined)
 				return openByTitle(decodeURIComponent(byTitle).replaceAll("_", " "));
-			if (/\/pages\/[^/]+\/commits$/.test(url) && init?.method === "POST")
-				return json({ version: 1, applied: JSON.parse(String(init.body)).changes });
-			const pin = /\/pages\/([^/]+)\/pin$/.exec(url)?.[1];
-			if (pin !== undefined)
-				return json({ id: pin, title: ids.get(pin), problem: null, pinned: true });
-			const id = /\/pages\/([^/]+)$/.exec(url)?.[1];
-			return id === undefined ? undefined : load(id);
+			const commitId = /\/pages\/([^/]+)\/commits$/.exec(url)?.[1];
+			if (commitId !== undefined && init?.method === "POST")
+				return commit(commitId, String(init.body));
+			const pinId = /\/pages\/([^/]+)\/pin$/.exec(url)?.[1];
+			if (pinId !== undefined) return pin(pinId);
+			return load(/\/pages\/([^/]+)$/.exec(url)?.[1]);
+		});
+		return { calls, pages: () => [...pages.values()] };
+	}
+
+	/** 条件に合う要求を、決めた回数だけ失敗させる。 */
+	function failWhen(match: (url: string, body: string) => boolean, times = 1) {
+		const original = vi.mocked(fetch).getMockImplementation();
+		let left = times;
+		vi.mocked(fetch).mockImplementation(async (url, init) => {
+			if (left > 0 && match(String(url), String(init?.body))) {
+				left -= 1;
+				return json({ error: "unavailable" }, 503);
+			}
+			return original?.(url, init) ?? json({}, 500);
 		});
 	}
 
 	it("まだない名前のページを作り、すべての行を送る。固定していたページは、固定する", async () => {
-		const calls = server();
+		const { calls } = server();
 		const file = buildProjectFile(
 			"old",
 			[page("買い物", "牛乳", " 卵"), { ...page("予定"), pinned: true, created: 3000 }],
@@ -164,7 +257,7 @@ describe("importProject(書き出したファイルを、プロジェクトに�
 	});
 
 	it("同じ名前のページがもうあれば、書き換えずに飛ばす", async () => {
-		const calls = server(["買い物"]);
+		const { calls, pages } = server(["買い物"]);
 
 		const result = await importProject(
 			buildProjectFile("old", [page("買い物", "牛乳"), page("予定")], 0),
@@ -172,23 +265,66 @@ describe("importProject(書き出したファイルを、プロジェクトに�
 
 		expect(result).toEqual({ created: ["予定"], skipped: ["買い物"], failed: [] });
 		expect(calls.filter((call) => call.url.endsWith("/commits"))).toHaveLength(1);
+		expect(pages()[0]?.lines).toEqual([{ id: "x", text: "買い物" }]);
 	});
 
 	it("送れなかったページは、失敗として知らせ、ほかのページは続ける", async () => {
 		server();
-		const failing = vi.mocked(fetch);
-		const original = failing.getMockImplementation();
-		failing.mockImplementation(async (url, init) => {
-			if (String(url).includes("/commits") && String(init?.body).includes("壊れる")) {
-				return json({ error: "unavailable" }, 503);
-			}
-			return original?.(url, init) ?? json({}, 500);
-		});
+		failWhen((url, body) => url.includes("/commits") && body.includes("壊れる"));
 
 		const result = await importProject(buildProjectFile("old", [page("壊れる"), page("予定")], 0));
 
 		expect(result.created).toEqual(["予定"]);
 		expect(result.failed).toEqual(["壊れる"]);
+	});
+
+	it("途中で止まったページは、やり直すと、続きの行だけを送って仕上げる", async () => {
+		const { pages } = server();
+		const lines = Array.from({ length: 2_000 }, (_, i) => `行${i}`);
+		const file = buildProjectFile("old", [page("長い", ...lines)], 0);
+		failWhen((url, body) => url.includes("/commits") && body.includes("行1999"));
+
+		expect(await importProject(file)).toEqual({ created: [], skipped: [], failed: ["長い"] });
+		expect(pages()[0]?.lines).toHaveLength(2_000);
+
+		expect(await importProject(file)).toEqual({ created: ["長い"], skipped: [], failed: [] });
+		expect(pages()[0]?.lines.map((line) => line.text)).toEqual(["長い", ...lines]);
+	});
+
+	it("固定だけできなかったページは、やり直すと、固定する", async () => {
+		const { pages } = server();
+		const file = buildProjectFile("old", [{ ...page("予定", "本文"), pinned: true }], 0);
+		failWhen((url) => url.endsWith("/pin"));
+
+		expect((await importProject(file)).failed).toEqual(["予定"]);
+		expect(await importProject(file)).toEqual({ created: ["予定"], skipped: [], failed: [] });
+		expect(pages()[0]).toMatchObject({ pinned: true, lines: [{ text: "予定" }, { text: "本文" }] });
+	});
+
+	it("同じファイルを読み込み直しても、行は増えない(読み込んであるページは、飛ばす)", async () => {
+		const { pages } = server();
+		const file = buildProjectFile("old", [page("買い物", "牛乳")], 0);
+
+		await importProject(file);
+		expect(await importProject(file)).toEqual({ created: [], skipped: ["買い物"], failed: [] });
+		expect(pages()[0]?.lines).toHaveLength(2);
+	});
+
+	it("名前と1行目が違うページは、後に作る(先に作ると、ほかのページの名前を取ってしまう)", async () => {
+		const { calls } = server();
+		const memo = { ...page("メモ"), lines: ["予定", "本文"] };
+
+		const result = await importProject(
+			buildProjectFile("old", [memo, { ...page("予定"), created: 9000 }], 0),
+		);
+
+		expect(result.created).toEqual(["予定", "メモ"]);
+		expect(calls.filter((call) => call.url.includes("/by-title/")).map((call) => call.url)).toEqual(
+			[
+				expect.stringContaining(encodeURIComponent("予定")),
+				expect.stringContaining(encodeURIComponent("メモ")),
+			],
+		);
 	});
 
 	it("進み具合を、ページごとに知らせる", async () => {

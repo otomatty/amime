@@ -1,12 +1,12 @@
 import {
 	buildProjectFile,
-	insertionCommits,
-	type LineId,
+	importLineIds,
+	importOrder,
 	type PageCard,
 	type ProjectFile,
 	type ProjectFilePage,
+	planPageImport,
 } from "@tsuzuri/sync";
-import { createIdPrefix } from "../editor/editor-model.ts";
 import { createPageApi, listPages, openPage, pinPage } from "../page/api.ts";
 import { createClientId } from "../page/client-id.ts";
 import { createCommitId } from "../page/commit-id.ts";
@@ -23,7 +23,11 @@ type Progress = (done: number, total: number) => void;
 /** 同時に読み書きするページの数。多すぎると、サーバーとブラウザの両方に負担がかかる。 */
 const CONCURRENCY = 4;
 
-/** items を、同時に concurrency 個までの task で処理する。結果は items と同じ順。1つでも失敗したら、失敗する。 */
+/**
+ * items を、同時に concurrency 個までの task で処理する。結果は items と同じ順。1つでも失敗したら、失敗する。
+ * 失敗したあとは、新しい task を始めず、動いている task が終わっても onDone を呼ばない
+ * (失敗を知らせたあとで、進み具合が届かないようにする)。
+ */
 async function inParallel<T, R>(
 	items: readonly T[],
 	task: (item: T) => Promise<R>,
@@ -32,13 +36,19 @@ async function inParallel<T, R>(
 ): Promise<R[]> {
 	const results: R[] = new Array(items.length);
 	let next = 0;
+	let failed = false;
 	const worker = async () => {
-		while (next < items.length) {
+		while (!failed && next < items.length) {
 			const index = next;
 			next += 1;
-			// biome-ignore lint/style/noNonNullAssertion: index は items の範囲の中
-			results[index] = await task(items[index]!);
-			onDone();
+			try {
+				// biome-ignore lint/style/noNonNullAssertion: index は items の範囲の中
+				results[index] = await task(items[index]!);
+			} catch (error) {
+				failed = true;
+				throw error;
+			}
+			if (!failed) onDone();
 		}
 	};
 	await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
@@ -78,11 +88,11 @@ export async function exportProject(
 			const { lines } = await createPageApi(card.id, client).load();
 			// 一覧に出たあとで消されたページは、本文が空になる。書き出さない。
 			if (lines.length === 0) return null;
-			const texts = lines.map((line) => line.text);
-			// 名前は、1行目から決まる(一覧の名前が、まだ追いついていないこともある)。
+			// 名前は、台帳の名前にする。1行目が空、長すぎる、ほかのページと同じ名前のときは、
+			// 名前は1行目と違う(ADR-0024)。1行目を名前にすると、そのページを読み込めなくなる。
 			return {
-				title: texts[0] ?? card.title,
-				lines: texts,
+				title: card.title,
+				lines: lines.map((line) => line.text),
 				pinned: card.pinned,
 				created: card.created,
 				updated: card.updated,
@@ -112,8 +122,12 @@ export type ImportResult = {
 
 type PageOutcome = "created" | "skipped" | "failed";
 
-/** 1つのページを読み込む。同じ名前のページがもうあれば、書き換えない。 */
+/**
+ * 1つのページを読み込む。同じ名前の、ほかのページがもうあれば、書き換えない。
+ * 前の読み込みが途中で止まったページは、続きを送る(planPageImport)。
+ */
 async function importPage(
+	file: ProjectFile,
 	page: ProjectFilePage,
 	client: ReturnType<typeof createClientId>,
 ): Promise<PageOutcome> {
@@ -121,17 +135,16 @@ async function importPage(
 		const info = await openPage(page.title);
 		const api = createPageApi(info.id, client);
 		const snapshot = await api.load();
-		if (snapshot.version > 0 || snapshot.lines.length > 0) return "skipped";
-		const prefix = createIdPrefix();
-		let serial = 0;
-		const createId = () => {
-			serial += 1;
-			return `${prefix}-${serial.toString(36)}` as LineId;
-		};
-		for (const changes of insertionCommits(page.lines, createId)) {
+		const plan = planPageImport(page, importLineIds(file, page), {
+			version: snapshot.version,
+			lines: snapshot.lines,
+			pinned: info.pinned,
+		});
+		if (plan === null) return "skipped";
+		for (const changes of plan.commits) {
 			await api.commit({ id: createCommitId(), changes });
 		}
-		if (page.pinned) await pinPage(info.id, true);
+		if (plan.pin) await pinPage(info.id, true);
 		return "created";
 	} catch {
 		return "failed";
@@ -146,24 +159,26 @@ type ImportOptions = {
  * 書き出しファイルのページを、いま開いているプロジェクトに作る。
  * 同じ名前のページがもうあれば、書き換えずに飛ばす(読み込みで、いまのページを失わない)。
  * 送れなかったページがあっても、ほかのページは続ける。結果に、それぞれの名前を返す。
+ * 同じファイルを読み込み直すと、途中で止まったページの続きと、まだないページだけを作る。
  */
 export async function importProject(
 	file: ProjectFile,
 	{ onProgress }: ImportOptions = {},
 ): Promise<ImportResult> {
 	const client = createClientId();
+	const pages = importOrder(file.pages);
 	let done = 0;
-	// 名前が同じページを同時に開くと、同じページに2回書き込むことがある。読み込みは1つずつ行う。
+	// 名前は、行を足したときに台帳が決める。ほかのページの名前に影響するので、読み込みは1つずつ、決めた順に行う。
 	const outcomes = await inParallel(
-		file.pages,
-		(page) => importPage(page, client),
+		pages,
+		(page) => importPage(file, page, client),
 		() => {
 			done += 1;
-			onProgress?.(done, file.pages.length);
+			onProgress?.(done, pages.length);
 		},
 		1,
 	);
 	const titles = (outcome: PageOutcome) =>
-		file.pages.filter((_, index) => outcomes[index] === outcome).map((page) => page.title);
+		pages.filter((_, index) => outcomes[index] === outcome).map((page) => page.title);
 	return { created: titles("created"), skipped: titles("skipped"), failed: titles("failed") };
 }
