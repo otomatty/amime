@@ -97,7 +97,7 @@ describe("exportProject(プロジェクトのすべてのページを、1つの�
 				return json({ pages, total: cards.length });
 			}
 			const id = /\/pages\/([^/]+)$/.exec(url)?.[1];
-			if (id === "p5") return json({ version: 3, lines: [] });
+			if (id === "p5") return json({ error: "deleted" }, 410);
 			return json({ version: 3, lines: [{ id: "a", text: `${id}` }] });
 		});
 
@@ -107,13 +107,36 @@ describe("exportProject(プロジェクトのすべてのページを、1つの�
 		expect(file.pages).toHaveLength(100);
 	});
 
-	it("一覧に出たあとで消されたページ(本文が空)は、書き出さない", async () => {
+	it("一覧に出たあとで消されたページ(410、404)は、書き出さない。失敗にもしない", async () => {
 		stubServer((url) => {
-			if (url.includes("?sort=")) return json({ pages: [card("gone", "消えた")], total: 1 });
-			return json({ version: 0, lines: [] });
+			if (url.includes("?sort=")) {
+				return json({
+					pages: [card("gone", "消えた"), card("missing", "ない"), card("p1", "残る")],
+					total: 3,
+				});
+			}
+			if (url.endsWith("/gone")) return json({ error: "deleted" }, 410);
+			if (url.endsWith("/missing")) return json({ error: "unknown-page" }, 404);
+			return json({ version: 1, lines: [{ id: "a", text: "残る" }] });
 		});
 
-		expect((await exportProject("team", { now: () => 0 })).pages).toEqual([]);
+		const file = await exportProject("team", { now: () => 0 });
+
+		expect(file.pages.map((page) => page.title)).toEqual(["残る"]);
+	});
+
+	it("保存されているが行のないページ(2人が別々の行を消した、など)は、空の1行のページとして書き出す", async () => {
+		stubServer((url) => {
+			if (url.includes("?sort="))
+				return json({ pages: [card("p1", "空", { pinned: true })], total: 1 });
+			return json({ version: 7, lines: [] });
+		});
+
+		const file = await exportProject("team", { now: () => 0 });
+
+		expect(file.pages.map((page) => [page.title, page.lines, page.pinned])).toEqual([
+			["空", [""], true],
+		]);
 	});
 
 	it("名前は、一覧(台帳)の名前にする。1行目が名前にできないページでも、名前を失わない", async () => {

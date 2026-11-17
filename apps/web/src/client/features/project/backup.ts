@@ -11,6 +11,7 @@ import {
 import { createPageApi, isPageSaved, listPages, openPage, pinPage } from "../page/api.ts";
 import { createClientId } from "../page/client-id.ts";
 import { createCommitId } from "../page/commit-id.ts";
+import { PageApiError } from "../page/page-api-error.ts";
 
 /**
  * プロジェクトの書き出しと読み込み(ADR-0043、US-14)。
@@ -103,14 +104,27 @@ export async function exportProject(
 	const pages = await inParallel(
 		cards,
 		async (card): Promise<ProjectFilePage | null> => {
-			const { lines } = await createPageApi(card.id, client).load();
-			// 一覧に出たあとで消されたページは、本文が空になる。書き出さない。
-			if (lines.length === 0) return null;
+			const loaded = await createPageApi(card.id, client)
+				.load()
+				.catch((error: unknown) => {
+					// 一覧に出たあとで消されたページ(410、404)は、書き出さない。それ以外の失敗は、書き出しの失敗。
+					if (
+						error instanceof PageApiError &&
+						(error.kind === "gone" || error.kind === "missing")
+					) {
+						return null;
+					}
+					throw error;
+				});
+			if (loaded === null) return null;
+			// 保存されているが行のないページ(2人が別々の行を消した、など)もある。名前と固定を失わないように、
+			// 空の1行のページとして書き出す(ファイルのページには、1行以上が要る)。
+			const texts = loaded.lines.map((line) => line.text);
 			// 名前は、台帳の名前にする。1行目が空、長すぎる、ほかのページと同じ名前のときは、
 			// 名前は1行目と違う(ADR-0024)。1行目を名前にすると、そのページを読み込めなくなる。
 			return {
 				title: card.title,
-				lines: lines.map((line) => line.text),
+				lines: texts.length === 0 ? [""] : texts,
 				pinned: card.pinned,
 				created: card.created,
 				updated: card.updated,
