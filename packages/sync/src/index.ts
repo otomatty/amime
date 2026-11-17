@@ -31,9 +31,9 @@ export {
 } from "./project.ts";
 export {
 	buildProjectFile,
+	firstLineHolder,
 	type ImportTarget,
 	importLineIds,
-	importOrder,
 	type PageImport,
 	PROJECT_FILE_FORMAT,
 	PROJECT_FILE_VERSION,

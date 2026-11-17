@@ -1,5 +1,5 @@
 import { type ProjectFile, type ProjectFileError, parseProjectFile } from "@tsuzuri/sync";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { exportProject, type ImportResult, importProject } from "./backup.ts";
 
 /** 書き出したファイルの名前。プロジェクトの名前と、書き出した日(その端末の日付)を入れる。 */
@@ -36,6 +36,7 @@ type ExportState =
 
 type ImportState =
 	| { readonly kind: "idle" }
+	| { readonly kind: "reading" }
 	| { readonly kind: "invalid"; readonly message: string }
 	| { readonly kind: "ready"; readonly file: ProjectFile }
 	| { readonly kind: "running"; readonly done: number; readonly total: number }
@@ -58,6 +59,8 @@ export function BackupSection({ project, admin, download = saveFile }: BackupSec
 	const fileId = useId();
 	const [exported, setExported] = useState<ExportState>({ kind: "idle" });
 	const [imported, setImported] = useState<ImportState>({ kind: "idle" });
+	// 選んだ回数。読み終えるのを待つあいだに選び直されたら、前のファイルの結果は使わない。
+	const chosenCount = useRef(0);
 
 	const runExport = async () => {
 		setExported({ kind: "running", done: 0, total: 0 });
@@ -74,8 +77,20 @@ export function BackupSection({ project, admin, download = saveFile }: BackupSec
 	};
 
 	const choose = async (chosen: File | undefined) => {
+		chosenCount.current += 1;
+		const current = chosenCount.current;
 		if (chosen === undefined) return setImported({ kind: "idle" });
-		const parsed = parseProjectFile(await chosen.text());
+		// 読み終えるまで、前に選んだファイルを読み込めないようにする。
+		setImported({ kind: "reading" });
+		const text = await chosen.text().catch(() => null);
+		if (current !== chosenCount.current) return;
+		if (text === null) {
+			return setImported({
+				kind: "invalid",
+				message: "ファイルを読めませんでした。もう一度選んでください。",
+			});
+		}
+		const parsed = parseProjectFile(text);
 		setImported(
 			parsed.ok
 				? { kind: "ready", file: parsed.value }

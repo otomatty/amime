@@ -109,6 +109,42 @@ describe("BackupSection(書き出しと読み込み。ADR-0043)", () => {
 		expect(screen.queryByRole("button", { name: "読み込む" })).toBeNull();
 	});
 
+	it("別のファイルを選び直すと、読み終えるまで、前のファイルを読み込めない。最後に選んだファイルだけを使う", async () => {
+		render(<BackupSection project="team" admin={true} />);
+		choose(JSON.stringify(file));
+		expect(await screen.findByRole("button", { name: "読み込む" })).toBeDefined();
+
+		let finishSlow: (text: string) => void = () => {};
+		const slow = new File(["{}"], "slow.json");
+		slow.text = () =>
+			new Promise((resolve) => {
+				finishSlow = resolve;
+			});
+		const fast = new File([JSON.stringify(buildProjectFile("new", [page("三")], 0))], "fast.json");
+		const input = screen.getByLabelText("読み込むファイル");
+		fireEvent.change(input, { target: { files: [slow] } });
+
+		expect(screen.queryByRole("button", { name: "読み込む" })).toBeNull();
+		fireEvent.change(input, { target: { files: [fast] } });
+		expect(await screen.findByText(/「new」から書き出した 1 ページです/)).toBeDefined();
+		finishSlow(JSON.stringify(file));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(screen.getByText(/「new」から書き出した 1 ページです/)).toBeDefined();
+	});
+
+	it("ファイルを読めなければ、そう知らせる", async () => {
+		render(<BackupSection project="team" admin={true} />);
+		const broken = new File([""], "broken.json");
+		broken.text = () => Promise.reject(new Error("NotReadableError"));
+
+		fireEvent.change(screen.getByLabelText("読み込むファイル"), { target: { files: [broken] } });
+
+		expect((await screen.findByRole("alert")).textContent).toBe(
+			"ファイルを読めませんでした。もう一度選んでください。",
+		);
+	});
+
 	it("読み込むと、進み具合を出し、作ったページと飛ばしたページ、送れなかったページを知らせる", async () => {
 		let report: (done: number, total: number) => void = () => {};
 		vi.mocked(importProject).mockImplementation(async (_file, options) => {

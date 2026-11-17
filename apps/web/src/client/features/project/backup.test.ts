@@ -81,8 +81,30 @@ describe("exportProject(プロジェクトのすべてのページを、1つの�
 			created: 5000,
 			updated: 2000,
 		});
-		expect(calls.filter((call) => call.url.includes("?sort="))).toHaveLength(2);
+		// 2回たどって、取りこぼしがないことを確かめる。
+		expect(calls.filter((call) => call.url.includes("?sort="))).toHaveLength(4);
 		expect(progress.at(-1)).toEqual([101, 101]);
+	});
+
+	it("たどっているあいだに、取り出したページが消されて、一覧がずれても、ほかのページを取りこぼさない", async () => {
+		const cards = Array.from({ length: 101 }, (_, i) => card(`p${i}`, `ページ${i}`));
+		stubServer((url) => {
+			const offset = /[?&]offset=(\d+)/.exec(url)?.[1];
+			if (offset !== undefined) {
+				const pages = cards.slice(Number(offset), Number(offset) + 100);
+				// 先頭の100件を取り出したあとで、その中の1件が消される。残りの1件が、1つ前にずれる。
+				if (offset === "0" && cards[5]?.id === "p5") cards.splice(5, 1);
+				return json({ pages, total: cards.length });
+			}
+			const id = /\/pages\/([^/]+)$/.exec(url)?.[1];
+			if (id === "p5") return json({ version: 3, lines: [] });
+			return json({ version: 3, lines: [{ id: "a", text: `${id}` }] });
+		});
+
+		const file = await exportProject("team", { now: () => 0 });
+
+		expect(file.pages.map((page) => page.title)).toContain("ページ100");
+		expect(file.pages).toHaveLength(100);
 	});
 
 	it("一覧に出たあとで消されたページ(本文が空)は、書き出さない", async () => {
@@ -167,7 +189,7 @@ describe("importProject(書き出したファイルを、プロジェクトに�
 	 * exists の名前のページは、もうある(ほかの人が作ったページ)。
 	 * 同じ ID の行を足す変更は、本物と同じく何もしない。
 	 */
-	function server(exists: readonly string[] = []) {
+	function server(exists: readonly string[] = [], { listedAfter = 0 } = {}) {
 		const pages = new Map<string, Stored>();
 		for (const title of exists) {
 			pages.set(`id-${pages.size}`, {
@@ -184,18 +206,46 @@ describe("importProject(書き出したファイルを、プロジェクトに�
 			const page = pages.get(id) as Stored;
 			return json({ id, title, problem: null, pinned: page.pinned });
 		};
+		/** 本物の台帳と同じく、名前を1行目に合わせる。空の1行目と、行のあるほかのページの名前には、合わせない。 */
+		const retitle = (id: string, page: Stored) => {
+			const wanted = page.lines[0]?.text ?? "";
+			const holder = find(wanted);
+			if (
+				wanted === "" ||
+				(holder !== undefined && holder !== id && pages.get(holder)?.version !== 0)
+			)
+				return;
+			// 開いただけのページの名前は、空いているものとして扱い、そのページを台帳から消す。
+			if (holder !== undefined && holder !== id) pages.delete(holder);
+			page.title = wanted;
+		};
+		type Sent = {
+			type: string;
+			id?: string;
+			text?: string;
+			line?: StoredLine;
+			after?: string | null;
+		};
+		const apply = (page: Stored, change: Sent) => {
+			if (change.type === "update") {
+				const line = page.lines.find((l) => l.id === change.id);
+				if (line !== undefined) line.text = change.text ?? "";
+				return;
+			}
+			const { line, after } = change as { line: StoredLine; after: string | null };
+			if (page.lines.some((l) => l.id === line.id)) return;
+			page.lines.splice(
+				after === null ? 0 : page.lines.findIndex((l) => l.id === after) + 1,
+				0,
+				line,
+			);
+		};
 		const commit = (id: string, body: string) => {
 			const page = pages.get(id) as Stored;
-			const changes = JSON.parse(body).changes as { line: StoredLine; after: string | null }[];
-			for (const { line, after } of changes) {
-				if (page.lines.some((l) => l.id === line.id)) continue;
-				page.lines.splice(
-					after === null ? 0 : page.lines.findIndex((l) => l.id === after) + 1,
-					0,
-					line,
-				);
-			}
+			const changes = JSON.parse(body).changes as Sent[];
+			for (const change of changes) apply(page, change);
 			page.version += 1;
+			retitle(id, page);
 			return json({ version: page.version, applied: changes });
 		};
 		const pin = (id: string) => {
@@ -207,7 +257,17 @@ describe("importProject(書き出したファイルを、プロジェクトに�
 			const page = id === undefined ? undefined : pages.get(id);
 			return page === undefined ? undefined : json({ version: page.version, lines: page.lines });
 		};
+		// 台帳に載るのは、保存の少しあと。名前で探すと、listedAfter 回目までは、まだ載っていない。
+		let searched = 0;
+		const titles = (query: string) => {
+			searched += 1;
+			if (searched <= listedAfter) return json({ titles: [] });
+			const saved = [...pages.values()].filter((p) => p.version > 0 && p.title === query);
+			return json({ titles: saved.map((p) => p.title) });
+		};
 		const calls = stubServer((url, init) => {
+			const query = /\/pages\/titles\?q=([^&]*)$/.exec(url)?.[1];
+			if (query !== undefined) return titles(decodeURIComponent(query));
 			const byTitle = /\/pages\/by-title\/([^/?]+)$/.exec(url)?.[1];
 			if (byTitle !== undefined)
 				return openByTitle(decodeURIComponent(byTitle).replaceAll("_", " "));
@@ -310,21 +370,77 @@ describe("importProject(書き出したファイルを、プロジェクトに�
 		expect(pages()[0]?.lines).toHaveLength(2);
 	});
 
-	it("名前と1行目が違うページは、後に作る(先に作ると、ほかのページの名前を取ってしまう)", async () => {
-		const { calls } = server();
+	it("名前と1行目が違うページも、それぞれの名前で戻す(ほかのページの名前を取らない)", async () => {
+		// 元のプロジェクト: 「メモ」の1行目は「予定」だが、「予定」が取られていたので、名前が残っていた。
+		// 「予定」の1行目は空なので、名前は「予定」のまま。
+		const { pages } = server();
+		const memo = { ...page("メモ"), lines: ["予定", "本文"] };
+		const plan = { ...page("予定"), lines: ["", "予定の本文"], created: 9000 };
+
+		const result = await importProject(buildProjectFile("old", [memo, plan], 0));
+
+		expect(result).toEqual({ created: ["メモ", "予定"], skipped: [], failed: [] });
+		expect(pages().map((p) => [p.title, p.lines.map((line) => line.text)])).toEqual([
+			["メモ", ["予定", "本文"]],
+			["予定", ["", "予定の本文"]],
+		]);
+	});
+
+	it("1行目の名前のページが台帳に載るのを待ってから、1行目を戻す", async () => {
+		const { pages } = server([], { listedAfter: 3 });
+		const waits: number[] = [];
 		const memo = { ...page("メモ"), lines: ["予定", "本文"] };
 
 		const result = await importProject(
 			buildProjectFile("old", [memo, { ...page("予定"), created: 9000 }], 0),
+			{
+				wait: async (ms) => {
+					waits.push(ms);
+				},
+			},
 		);
 
-		expect(result.created).toEqual(["予定", "メモ"]);
-		expect(calls.filter((call) => call.url.includes("/by-title/")).map((call) => call.url)).toEqual(
-			[
-				expect.stringContaining(encodeURIComponent("予定")),
-				expect.stringContaining(encodeURIComponent("メモ")),
-			],
-		);
+		expect(result.created).toEqual(["メモ", "予定"]);
+		expect(waits).toHaveLength(3);
+		expect(pages()[0]?.lines[0]?.text).toBe("予定");
+	});
+
+	it("1行目の名前のページを作れなかったか、台帳に載らなければ、1行目を戻さない(名前を取らない)。やり直すと仕上げる", async () => {
+		const { pages } = server();
+		const memo = { ...page("メモ"), lines: ["予定", "本文"] };
+		const plan = { ...page("予定", "予定の本文"), created: 9000 };
+		const withBody = buildProjectFile("old", [memo, plan], 0);
+		failWhen((url, body) => url.includes("/commits") && body.includes("予定の本文"));
+
+		expect(await importProject(withBody, { wait: async () => {} })).toEqual({
+			created: [],
+			skipped: [],
+			failed: ["メモ", "予定"],
+		});
+		expect(pages().map((p) => [p.title, p.lines[0]?.text])).toEqual([
+			["メモ", "メモ"],
+			["予定", undefined],
+		]);
+		expect(await importProject(withBody, { wait: async () => {} })).toEqual({
+			created: ["メモ", "予定"],
+			skipped: [],
+			failed: [],
+		});
+		expect(pages().map((p) => [p.title, p.lines[0]?.text])).toEqual([
+			["メモ", "予定"],
+			["予定", "予定"],
+		]);
+	});
+
+	it("1行目を戻せなかったページは、やり直すと、1行目だけを戻す", async () => {
+		const { pages } = server();
+		const file = buildProjectFile("old", [{ ...page("メモ"), lines: ["", "本文"] }], 0);
+		failWhen((url, body) => url.includes("/commits") && body.includes('"update"'));
+
+		expect((await importProject(file)).failed).toEqual(["メモ"]);
+		expect(pages()[0]?.lines.map((line) => line.text)).toEqual(["メモ", "本文"]);
+		expect(await importProject(file)).toEqual({ created: ["メモ"], skipped: [], failed: [] });
+		expect(pages()[0]).toMatchObject({ title: "メモ", lines: [{ text: "" }, { text: "本文" }] });
 	});
 
 	it("進み具合を、ページごとに知らせる", async () => {

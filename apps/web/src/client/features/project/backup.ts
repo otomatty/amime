@@ -1,13 +1,14 @@
+import { toTitleLc } from "@tsuzuri/shared";
 import {
 	buildProjectFile,
+	firstLineHolder,
 	importLineIds,
-	importOrder,
 	type PageCard,
 	type ProjectFile,
 	type ProjectFilePage,
 	planPageImport,
 } from "@tsuzuri/sync";
-import { createPageApi, listPages, openPage, pinPage } from "../page/api.ts";
+import { createPageApi, listPages, openPage, pinPage, searchTitles } from "../page/api.ts";
 import { createClientId } from "../page/client-id.ts";
 import { createCommitId } from "../page/commit-id.ts";
 
@@ -24,7 +25,7 @@ type Progress = (done: number, total: number) => void;
 const CONCURRENCY = 4;
 
 /**
- * items を、同時に concurrency 個までの task で処理する。結果は items と同じ順。1つでも失敗したら、失敗する。
+ * items を、同時に CONCURRENCY 個までの task で処理する。結果は items と同じ順。1つでも失敗したら、失敗する。
  * 失敗したあとは、新しい task を始めず、動いている task が終わっても onDone を呼ばない
  * (失敗を知らせたあとで、進み具合が届かないようにする)。
  */
@@ -32,7 +33,6 @@ async function inParallel<T, R>(
 	items: readonly T[],
 	task: (item: T) => Promise<R>,
 	onDone: () => void,
-	concurrency = CONCURRENCY,
 ): Promise<R[]> {
 	const results: R[] = new Array(items.length);
 	let next = 0;
@@ -51,12 +51,12 @@ async function inParallel<T, R>(
 			if (!failed) onDone();
 		}
 	};
-	await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+	await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
 	return results;
 }
 
-/** 保存されているページを、一覧から最後まで取り出す(作った順)。 */
-async function allPages(): Promise<PageCard[]> {
+/** 一覧を、最初から最後まで1回たどる(作った順)。 */
+async function listOnce(): Promise<PageCard[]> {
 	const cards: PageCard[] = [];
 	for (;;) {
 		const { pages, total } = await listPages({ sort: "created", offset: cards.length });
@@ -64,6 +64,24 @@ async function allPages(): Promise<PageCard[]> {
 		// 取り出しているあいだにページが消えると、total に届かないことがある。空の応答で止める。
 		if (pages.length === 0 || cards.length >= total) return cards;
 	}
+}
+
+/** 一覧をたどり直す回数の上限。 */
+const MAX_PASSES = 3;
+
+/**
+ * 保存されているページを、一覧から取り出す(並びは、書き出しファイルを作るときに決める)。
+ * 一覧は、何件目からを指して取り出す。取り出しているあいだに、取り出し終えた範囲のページが消されると、
+ * 後ろのページが前にずれて、取りこぼす。新しいページが見つからなくなるまで、たどり直す。
+ */
+async function allPages(): Promise<PageCard[]> {
+	const found = new Map<string, PageCard>();
+	for (let pass = 0; pass < MAX_PASSES; pass += 1) {
+		const before = found.size;
+		for (const card of await listOnce()) if (!found.has(card.id)) found.set(card.id, card);
+		if (pass > 0 && found.size === before) break;
+	}
+	return [...found.values()];
 }
 
 type ExportOptions = {
@@ -122,15 +140,21 @@ export type ImportResult = {
 
 type PageOutcome = "created" | "skipped" | "failed";
 
+/** 1つのページの、1回目の読み込みの結果。finish は、すべてのページのあとで、1行目を戻す処理。 */
+type Staged =
+	| { readonly outcome: "skipped" | "failed" }
+	| { readonly outcome: "created"; readonly finish: (() => Promise<unknown>) | null };
+
 /**
- * 1つのページを読み込む。同じ名前の、ほかのページがもうあれば、書き換えない。
- * 前の読み込みが途中で止まったページは、続きを送る(planPageImport)。
+ * 1つのページを作る(行を足し、固定する。1行目は、いったん名前にしておく。planPageImport)。
+ * 同じ名前の、ほかのページがもうあれば、書き換えない。
+ * 前の読み込みが途中で止まったページは、続きを送る。
  */
-async function importPage(
+async function stagePage(
 	file: ProjectFile,
 	page: ProjectFilePage,
 	client: ReturnType<typeof createClientId>,
-): Promise<PageOutcome> {
+): Promise<Staged> {
 	try {
 		const info = await openPage(page.title);
 		const api = createPageApi(info.id, client);
@@ -140,20 +164,65 @@ async function importPage(
 			lines: snapshot.lines,
 			pinned: info.pinned,
 		});
-		if (plan === null) return "skipped";
+		if (plan === null) return { outcome: "skipped" };
 		for (const changes of plan.commits) {
 			await api.commit({ id: createCommitId(), changes });
 		}
 		if (plan.pin) await pinPage(info.id, true);
+		const { firstLine } = plan;
+		const finish =
+			firstLine === null ? null : () => api.commit({ id: createCommitId(), changes: [firstLine] });
+		return { outcome: "created", finish };
+	} catch {
+		return { outcome: "failed" };
+	}
+}
+
+/** 台帳に載るのを待つ回数と間隔。ページは、保存の数秒後(最大で10秒ほど)に台帳に載る。 */
+const LISTED_TRIES = 40;
+const LISTED_INTERVAL_MS = 500;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** その名前のページが、台帳に載る(保存されたページとして、名前で探せる)まで待つ。載らなければ false。 */
+async function waitListed(title: string, wait: (ms: number) => Promise<void>): Promise<boolean> {
+	for (let attempt = 0; attempt < LISTED_TRIES; attempt += 1) {
+		const titles = await searchTitles(title);
+		if (titles.some((found) => toTitleLc(found) === toTitleLc(title))) return true;
+		await wait(LISTED_INTERVAL_MS);
+	}
+	return false;
+}
+
+type ImportOptions = {
+	readonly onProgress?: Progress;
+	/** 待つ(テストで差し替える)。 */
+	readonly wait?: (ms: number) => Promise<void>;
+};
+
+/**
+ * 名前と1行目が違うページの1行目を戻す。1行目の名前を持つページ(firstLineHolder)が台帳に載ってから戻す。
+ * そのページを作れなかったか、台帳に載らなければ、戻さない(戻すと、このページが名前を取ってしまう)。
+ * どちらも、やり直したときに仕上げる。
+ */
+async function finishPage(
+	file: ProjectFile,
+	page: ProjectFilePage,
+	finish: () => Promise<unknown>,
+	staged: ReadonlySet<ProjectFilePage>,
+	wait: (ms: number) => Promise<void>,
+): Promise<PageOutcome> {
+	try {
+		const holder = firstLineHolder(file, page);
+		if (holder !== null && !(staged.has(holder) && (await waitListed(holder.title, wait)))) {
+			return "failed";
+		}
+		await finish();
 		return "created";
 	} catch {
 		return "failed";
 	}
 }
-
-type ImportOptions = {
-	readonly onProgress?: Progress;
-};
 
 /**
  * 書き出しファイルのページを、いま開いているプロジェクトに作る。
@@ -163,22 +232,32 @@ type ImportOptions = {
  */
 export async function importProject(
 	file: ProjectFile,
-	{ onProgress }: ImportOptions = {},
+	{ onProgress, wait = sleep }: ImportOptions = {},
 ): Promise<ImportResult> {
 	const client = createClientId();
-	const pages = importOrder(file.pages);
+	const outcomes = new Map<ProjectFilePage, PageOutcome>();
+	const finishing: [ProjectFilePage, () => Promise<unknown>][] = [];
+	// 1回目で、作ったか、もうあったページ。
+	const staged = new Set<ProjectFilePage>();
 	let done = 0;
-	// 名前は、行を足したときに台帳が決める。ほかのページの名前に影響するので、読み込みは1つずつ、決めた順に行う。
-	const outcomes = await inParallel(
-		pages,
-		(page) => importPage(file, page, client),
-		() => {
-			done += 1;
-			onProgress?.(done, pages.length);
-		},
-		1,
-	);
+	const settle = (page: ProjectFilePage, outcome: PageOutcome) => {
+		outcomes.set(page, outcome);
+		done += 1;
+		onProgress?.(done, file.pages.length);
+	};
+	// 名前は、行を足したときに台帳が決め、ほかのページの名前に影響する。1つずつ行う。
+	// まず、すべてのページを、それぞれの名前で作る。そのあとで、名前と1行目が違うページの1行目を戻す。
+	for (const page of file.pages) {
+		const result = await stagePage(file, page, client);
+		if (result.outcome !== "failed") staged.add(page);
+		if (result.outcome === "created" && result.finish !== null)
+			finishing.push([page, result.finish]);
+		else settle(page, result.outcome);
+	}
+	for (const [page, finish] of finishing) {
+		settle(page, await finishPage(file, page, finish, staged, wait));
+	}
 	const titles = (outcome: PageOutcome) =>
-		pages.filter((_, index) => outcomes[index] === outcome).map((page) => page.title);
+		file.pages.filter((page) => outcomes.get(page) === outcome).map((page) => page.title);
 	return { created: titles("created"), skipped: titles("skipped"), failed: titles("failed") };
 }

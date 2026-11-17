@@ -108,20 +108,15 @@ export function parseProjectFile(text: string): Result<ProjectFile, ProjectFileE
 	return result.success ? ok(result.output) : err("invalid");
 }
 
-/** 1行目が、そのままページの名前になるか。 */
-function namesItself(page: ProjectFilePage): boolean {
-	// 1行目(ページには、かならず1行以上ある)。
-	const first = page.lines.slice(0, 1).join("");
-	return toTitleLc(titleOfLine(first)) === toTitleLc(page.title);
-}
-
 /**
- * 読み込む順。1行目が名前になるページを先に、名前と1行目が違うページを後にする(それぞれの中の順は保つ)。
- * 台帳は、行を足したページの名前を1行目に合わせ、そのとき、開いただけのページの名前は空いているものとして扱う。
- * 名前と1行目が違うページ(1行目が、ほかのページの名前)を先に作ると、そのページが、ほかのページの名前を取ってしまう。
+ * 名前と1行目が違うページ(page)の1行目を名前に持つ、ファイルの中のページ。なければ null。
+ * page の1行目を戻す前に、このページが台帳に載っている(保存されている)必要がある。まだ載っていなければ、
+ * 台帳は、その名前を空いているものとして扱い、page に名前を取らせてしまう。
  */
-export function importOrder(pages: readonly ProjectFilePage[]): ProjectFilePage[] {
-	return [...pages.filter(namesItself), ...pages.filter((page) => !namesItself(page))];
+export function firstLineHolder(file: ProjectFile, page: ProjectFilePage): ProjectFilePage | null {
+	const wanted = toTitleLc(titleOfLine(page.lines.slice(0, 1).join("")));
+	if (wanted === toTitleLc(page.title)) return null;
+	return file.pages.find((other) => toTitleLc(other.title) === wanted) ?? null;
 }
 
 /** 文字列の 32 ビットの FNV-1a。seed で、別の値の列にする。 */
@@ -151,18 +146,29 @@ export type ImportTarget = {
 	readonly pinned: boolean;
 };
 
-/** 1つのページの読み込み。送るコミット(変更の列)と、固定するか。 */
+/**
+ * 1つのページの読み込み。
+ * - commits: 行を足すコミット(変更の列)。1行目は、いったん名前にしておく
+ * - pin: 固定するか
+ * - firstLine: 1行目を、元の本文に戻す変更。すべてのページの commits を送ったあとで送る。戻さなくてよければ null
+ */
 export type PageImport = {
 	readonly commits: readonly (readonly Change[])[];
 	readonly pin: boolean;
+	readonly firstLine: Change | null;
 };
 
 /**
  * 1つのページを、どう読み込むか。書き換えてはいけないページなら null(飛ばす)。
  * - まだないページ(開いただけ): すべての行を、上から順に、前の行の後ろへ足す
- * - 前の読み込みが途中で止まったページ(行IDと本文が、読み込む行の先頭と同じ): 続きの行だけを足す
+ * - 前の読み込みが途中で止まったページ(行IDと本文が、読み込む行の先頭と同じ): 続きだけを行う
  * - それ以外(同じ名前の、ほかのページ): 書き換えない
  * 行は、1回のコミットに収まる大きさ(変更の数と本文の長さ)ごとに分ける。
+ *
+ * 名前と1行目が違うページ(1行目が空、長すぎる、ほかのページの名前)は、1行目を名前にして作り、
+ * すべてのページを作ったあとで、1行目を元に戻す(firstLine)。台帳は、行を足したページの名前を1行目に合わせ、
+ * そのとき、まだ行のないページの名前は空いているものとして扱う。1行目から作ると、ほかのページの名前を取ってしまう。
+ * 先にすべてのページが自分の名前を持てば、1行目を戻しても、ほかのページの名前は取られない(元のプロジェクトと同じ)。
  */
 export function planPageImport(
 	page: ProjectFilePage,
@@ -170,20 +176,29 @@ export function planPageImport(
 	target: ImportTarget,
 ): PageImport | null {
 	const lines = page.lines.map((text, index): Line => ({ id: ids[index] as LineId, text }));
+	// 1行目を名前にした行。
+	const staged = lines.map((line, index) => (index === 0 ? { ...line, text: page.title } : line));
 	if (target.lines.length === 0 && target.version > 0) return null;
 	if (target.lines.length > lines.length) return null;
 	const resumable = target.lines.every(
-		(line, index) => line.id === lines[index]?.id && line.text === lines[index]?.text,
+		(line, index) =>
+			line.id === lines[index]?.id &&
+			(line.text === staged[index]?.text || line.text === lines[index]?.text),
 	);
 	if (!resumable) return null;
-	const rest = lines.slice(target.lines.length);
 	let previous = target.lines.at(-1)?.id ?? null;
-	const changes = rest.map((line): Change => {
+	const changes = staged.slice(target.lines.length).map((line): Change => {
 		const change: Change = { type: "insert", line, after: previous, before: null };
 		previous = line.id;
 		return change;
 	});
 	const pin = page.pinned && !target.pinned;
-	if (changes.length === 0 && !pin) return null;
-	return { commits: splitChanges(changes), pin };
+	const first = target.lines[0]?.text ?? page.title;
+	const original = page.lines.slice(0, 1).join("");
+	const firstLine: Change | null =
+		first === original
+			? null
+			: { type: "update", id: ids[0] as LineId, text: original, base: first };
+	if (changes.length === 0 && !pin && firstLine === null) return null;
+	return { commits: splitChanges(changes), pin, firstLine };
 }

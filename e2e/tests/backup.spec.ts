@@ -71,6 +71,21 @@ async function importFile(page: Page, file: ExportedFile, count: number): Promis
 	await page.getByRole("button", { name: "読み込む", exact: true }).click();
 }
 
+/** その名前のページ(id)が台帳に載り、1行目が、ほかのページに取られている名前だと分かるまで待つ。 */
+async function expectTaken(page: Page, title: string, id: string): Promise<void> {
+	await expect
+		.poll(
+			async () => {
+				const opened = await page.request.get(
+					`/api/projects/e2e/pages/by-title/${encodeURIComponent(title)}`,
+				);
+				return (await opened.json()) as { id: string; problem: string | null };
+			},
+			{ timeout: 20_000 },
+		)
+		.toMatchObject({ id, problem: "taken" });
+}
+
 type ExportedFile = {
 	format: string;
 	pages: { title: string; lines: string[]; pinned: boolean }[];
@@ -132,24 +147,49 @@ test.describe("プロジェクトの書き出しと読み込み(ADR-0043、US-14
 		await expect(page.getByTestId("line").first()).toHaveText(removed);
 	});
 
-	test("1行目が空のページ(名前は1行目と違う)も、名前のまま書き出し、読み込める", async ({
+	test("名前と1行目が違うページ(1行目が空、1行目がほかのページの名前)も、それぞれの名前で戻る", async ({
 		page,
 	}) => {
 		const token = randomUUID().slice(0, 8);
-		const title = `${token}-1行目が空`;
-		const id = await createPage(page, title, ["本文"], "");
-		await waitListed(page, token, 1);
+		const memo = `${token}-メモ`;
+		const plan = `${token}-予定`;
+		// 「メモ」を先に作り、あとから1行目を「予定」にする。「予定」は取られているので、名前は「メモ」のまま。
+		// 「予定」の1行目は空なので、名前は「予定」のまま。
+		const memoId = await createPage(page, memo, ["本文"]);
+		const planId = await createPage(page, plan, ["予定の本文"], "");
+		await waitListed(page, token, 2);
+		const renamed = await page.request.post(`/api/projects/e2e/pages/${memoId}/commits`, {
+			data: {
+				id: randomUUID(),
+				client: randomUUID(),
+				changes: [{ type: "update", id: "l0", text: plan, base: memo }],
+			},
+		});
+		expect(renamed.ok()).toBe(true);
+		await expectTaken(page, memo, memoId);
 
 		const exported = await exportFile(page);
 		const ours = exported.pages.filter((entry) => entry.title.startsWith(token));
-		expect(ours.map((entry) => [entry.title, entry.lines])).toEqual([[title, ["", "本文"]]]);
+		expect(ours.map((entry) => [entry.title, entry.lines])).toEqual([
+			[memo, [plan, "本文"]],
+			[plan, ["", "予定の本文"]],
+		]);
 
-		expect((await page.request.delete(`/api/projects/e2e/pages/${id}`)).ok()).toBe(true);
-		await importFile(page, { ...exported, pages: ours }, 1);
+		for (const id of [memoId, planId]) {
+			expect((await page.request.delete(`/api/projects/e2e/pages/${id}`)).ok()).toBe(true);
+		}
+		await importFile(page, { ...exported, pages: ours }, 2);
 
 		await expect(
-			page.getByRole("status").filter({ hasText: "1 ページを作りました。" }),
-		).toBeVisible();
-		expect(await savedLines(page, title)).toEqual(["", "本文"]);
+			page.getByRole("status").filter({ hasText: "2 ページを作りました。" }),
+		).toBeVisible({ timeout: 30_000 });
+		expect(await savedLines(page, plan)).toEqual(["", "予定の本文"]);
+		// 「メモ」が台帳に載り直しても(保存の数秒後)、「予定」の名前を取らない。
+		const restored = await page.request.get(
+			`/api/projects/e2e/pages/by-title/${encodeURIComponent(memo)}`,
+		);
+		const { id } = (await restored.json()) as { id: string };
+		await expectTaken(page, memo, id);
+		expect(await savedLines(page, memo)).toEqual([plan, "本文"]);
 	});
 });

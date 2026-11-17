@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildProjectFile,
+	firstLineHolder,
 	importLineIds,
-	importOrder,
 	PROJECT_FILE_FORMAT,
 	PROJECT_FILE_VERSION,
 	type ProjectFilePage,
@@ -102,27 +102,32 @@ describe("parseProjectFile(書き出したファイルを読む)", () => {
 	});
 });
 
-describe("importOrder(読み込む順)", () => {
-	it("1行目が名前になるページを先に、名前と1行目が違うページを後に読み込む。それぞれの中の順は変えない", () => {
-		// 「メモ」の1行目は「予定」だが、元のプロジェクトでは「予定」が取られていたので、名前が残っていた。
-		// 先に「メモ」を作ると、「予定」という名前になってしまい、あとの「予定」が飛ばされる。
-		const memo = { ...page("メモ"), lines: ["予定", "本文"] };
-		const empty = { ...page("空"), lines: ["", "本文"] };
-		const plan = page("予定");
-		const shop = page("買い物");
+describe("firstLineHolder(1行目の名前を持つ、ファイルの中のページ)", () => {
+	const memo = { ...page("メモ"), lines: ["予定", "本文"] };
+	const plan = { ...page("予定"), lines: ["", "本文"] };
+	const file = buildProjectFile(
+		"notes",
+		[memo, plan, page("買い物"), { ...page("無題"), lines: ["どこにもない"] }],
+		0,
+	);
+	const of = (title: string) => file.pages.find((p) => p.title === title) as ProjectFilePage;
 
-		expect(importOrder([memo, plan, empty, shop]).map((p) => p.title)).toEqual([
-			"予定",
-			"買い物",
-			"メモ",
-			"空",
-		]);
+	it("名前と1行目が違うページの1行目が、ファイルの中のページの名前なら、そのページ", () => {
+		expect(firstLineHolder(file, of("メモ"))).toBe(of("予定"));
+	});
+
+	it("1行目が名前のページ、1行目がファイルの中のどのページの名前でもないページは、null", () => {
+		expect(firstLineHolder(file, of("買い物"))).toBeNull();
+		expect(firstLineHolder(file, of("無題"))).toBeNull();
+		expect(firstLineHolder(file, of("予定"))).toBeNull();
 	});
 
 	it("名前の大文字と小文字、前後の空白の違いは、同じ名前として扱う", () => {
-		const page1 = { ...page("Todo"), lines: [" todo ", "本文"] };
+		const todo = page("Todo");
+		const note = { ...page("ノート"), lines: [" todo ", "本文"] };
+		const mixed = buildProjectFile("notes", [todo, note], 0);
 
-		expect(importOrder([page("あ"), page1]).map((p) => p.title)).toEqual(["あ", "Todo"]);
+		expect(firstLineHolder(mixed, note)).toEqual(todo);
 	});
 });
 
@@ -170,7 +175,19 @@ describe("planPageImport(1つのページを、どう読み込むか)", () => {
 				],
 			],
 			pin: true,
+			firstLine: null,
 		});
+	});
+
+	it("名前と1行目が違うページは、まず1行目を名前にして作り、あとで1行目を元に戻す", () => {
+		// 先に、すべてのページが自分の名前を持つ。1行目を戻したとき、1行目がほかのページの名前なら、
+		// 台帳は名前を変えない(元のプロジェクトと同じ)。1行目から作ると、ほかのページの名前を取ってしまう。
+		const memo = { ...page("メモ"), lines: ["予定", "本文"] };
+
+		const plan = planPageImport(memo, ["i1", "i2"] as LineId[], empty);
+
+		expect(texts(plan)).toEqual([["メモ", "本文"]]);
+		expect(plan?.firstLine).toEqual({ type: "update", id: "i1", text: "予定", base: "メモ" });
 	});
 
 	it("1回のコミットに収まらない行は、変更の数と本文の長さの上限ごとに分ける", () => {
@@ -217,8 +234,33 @@ describe("planPageImport(1つのページを、どう読み込むか)", () => {
 			pinned: false,
 		};
 
-		expect(planPageImport(shop, ids, done)).toEqual({ commits: [], pin: true });
+		expect(planPageImport(shop, ids, done)).toEqual({ commits: [], pin: true, firstLine: null });
 		expect(planPageImport(shop, ids, { ...done, pinned: true })).toBeNull();
+	});
+
+	it("1行目を戻す前に止まったページは、1行目だけを戻す。戻してあれば、何もしない", () => {
+		const memo = { ...page("メモ"), lines: ["", "本文"] };
+		const memoIds = ["i1", "i2"] as LineId[];
+		const created = {
+			version: 1,
+			lines: [
+				{ id: "i1" as LineId, text: "メモ" },
+				{ id: "i2" as LineId, text: "本文" },
+			],
+			pinned: false,
+		};
+		const restored = {
+			...created,
+			version: 2,
+			lines: [{ ...created.lines[0], text: "" }, created.lines[1]],
+		};
+
+		expect(planPageImport(memo, memoIds, created)).toEqual({
+			commits: [],
+			pin: false,
+			firstLine: { type: "update", id: "i1", text: "", base: "メモ" },
+		});
+		expect(planPageImport(memo, memoIds, restored as typeof created)).toBeNull();
 	});
 
 	it("同じ名前の、ほかのページ(行IDか本文が違う、行が多い、中身を消した)は、書き換えない", () => {
