@@ -24,7 +24,10 @@ type RenamedLine = {
 
 /** written だけの行を解析して、1つのリンクになるなら、そのリンク先の名前。ならなければ null。 */
 function linkedTitle(written: string, type: "page-link" | "hashtag"): string | null {
+	// 1つのリンクだけを書いた行なので、行の役割(ふつうの行)は、どの指定でも読み方が変わらない。
+	// Stryker disable next-line ObjectLiteral,StringLiteral: 上のとおり、結果は変わらない
 	const [node] = inlineNodes(parseLine(written, { kind: "text", blockIndent: 0 }));
+	// 種類と終わりの確かめは、呼ぶ側の名前の比べ(同じ名前か)にも含まれる。読み手のために、ここでも書く。
 	return node?.type === type && node.end === written.length ? node.title : null;
 }
 
@@ -35,9 +38,10 @@ function linkedTitle(written: string, type: "page-link" | "hashtag"): string | n
  */
 export function writePageLink(to: string, type: "page-link" | "hashtag"): string | null {
 	const tag = `#${to.replaceAll(" ", "_")}`;
-	if (type === "hashtag" && toTitleLc(linkedTitle(tag, "hashtag") ?? "") === toTitleLc(to)) {
-		return tag;
-	}
+	// タグとして読めないとき(null)は、名前と比べない。空の名前は、「#」が読めない名前とも同じになってしまう。
+	const tagged = type === "hashtag" ? linkedTitle(tag, "hashtag") : null;
+	// 終わりまでタグとして読めたなら、その名前は to と同じ(空白をアンダースコアにしただけ)。名前の比べは、確かめのために書く。
+	if (tagged !== null && toTitleLc(tagged) === toTitleLc(to)) return tag;
 	const bracket = `[${to}]`;
 	return linkedTitle(bracket, "page-link") === to ? bracket : null;
 }
@@ -70,13 +74,15 @@ function renameInLine(
 		const linked = toTitleLc(node.title);
 		const to = targets.get(linked);
 		const written = to === undefined ? null : writePageLink(to, node.type);
+		// to がなければ、written も null。to === undefined は、型を絞るために書く。
 		expected.unshift(to === undefined || written === null ? linked : toTitleLc(to));
 		if (written === null) continue;
 		text = text.slice(0, node.start) + written + text.slice(node.end);
 		renamed.unshift(linked);
 	}
 	const actual = linksIn(text, role).map((node) => toTitleLc(node.title));
-	if (text === raw || actual.join("\n") !== expected.join("\n")) return null;
+	// 並びをそのまま比べる(改行でつなぐと、リンクがないことと、空の名前のリンクが1つあることが、同じになる)。
+	if (text === raw || JSON.stringify(actual) !== JSON.stringify(expected)) return null;
 	return { text, renamed: [...new Set(renamed)] };
 }
 
@@ -97,6 +103,8 @@ export function renameLinks(lines: readonly string[], renames: readonly Rename[]
 
 	return lines.flatMap((raw, index) => {
 		const role = roles[index];
+		// 1行目は、タイトルとして読む(リンクを読まない)ので、ここで外さなくても書き換わらない。
+		// role は、行と同じ数だけある。どちらも、読み手のために書く。
 		if (index === 0 || role === undefined) return [];
 		const line = renameInLine(raw, role, targets);
 		return line === null ? [] : [{ index, ...line }];

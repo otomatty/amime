@@ -20,12 +20,14 @@ export function recordEdit(before: readonly Line[], after: readonly Line[]): Own
 	return { forward: diffLines(before, after), backward: diffLines(after, before) };
 }
 
-/** 変更の列が、それぞれの行に書き込む本文(行を足す変更と、本文を置き換える変更)。 */
+/**
+ * 変更の列が足した行の本文。打ち消し(やり直し)で行を消すのは、その編集(打ち消し)が足した行だけなので、
+ * 行を消してよいかを決めるには、足した行の本文だけがあればよい(本文を置き換えた行は、消さない)。
+ */
 function writtenTexts(changes: readonly Change[]): Map<LineId, string> {
 	const texts = new Map<LineId, string>();
 	for (const change of changes) {
 		if (change.type === "insert") texts.set(change.line.id, change.line.text);
-		if (change.type === "update") texts.set(change.id, change.text);
 	}
 	return texts;
 }
@@ -50,6 +52,7 @@ function applyKeepingOthers(
 		if (change.type === "delete") {
 			return current.get(change.id) === expected.get(change.id) ? [change] : [];
 		}
+		// 行を足す・動かす変更は、そのまま適用する。下の手順に進めても、元にした本文がないので、同じになる。
 		if (change.type !== "update") return [change];
 		const text = current.get(change.id);
 		// 行がなくなっていたら、適用しても何も起きない。元にした本文がなければ、そのまま置き換える。

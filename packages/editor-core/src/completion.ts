@@ -26,6 +26,8 @@ export type LinkQuery = {
 
 type LinkNode = Extract<InlineNode, { readonly type: "page-link" | "hashtag" }>;
 
+// 既定は、ふつうの行。記法の読み方は、表やコードなどの行の役割でだけ変わる。
+// Stryker disable next-line ObjectLiteral,StringLiteral: 上のとおり、ふつうの行と同じに読む指定では、結果は変わらない
 const TEXT_LINE: LineRole = { kind: "text", blockIndent: 0 };
 
 /**
@@ -47,6 +49,9 @@ function insideOtherNotation(text: string, column: number, role: LineRole): bool
 	return inlineNodes(parseLine(text, role)).some(
 		(node) =>
 			node.type !== "text" &&
+			// 括弧のリンクの中にカーソルがあるときは、ここで数えても数えなくても、同じ結果になる
+			// (書けているリンクとして扱うか、名前の前なので対象にしない)。読み手のために書く。
+			// Stryker disable next-line ConditionalExpression,StringLiteral: 上のとおり、結果は変わらない
 			node.type !== "page-link" &&
 			node.type !== "hashtag" &&
 			!("children" in node) &&
@@ -72,6 +77,7 @@ export function linkQueryAt(
 	const closing = `${text.slice(0, column)}]${text.slice(column)}`;
 	const tryClosing = written?.type !== "page-link" && !insideOtherNotation(text, column, role);
 	const unclosed = tryClosing ? linkAt(closing, column, role) : null;
+	// 閉じたものとして読んで見つかるのは、カーソルのところで閉じたリンクだけ(後ろで閉じるリンクなら、written になっている)。
 	const bracket = unclosed?.type === "page-link" && unclosed.content.end === column;
 	const node = bracket ? unclosed : written;
 	if (node === null) return null;
@@ -109,6 +115,7 @@ function completed(
 	title: string,
 	role: LineRole,
 ): { readonly text: string; readonly column: number } | null {
+	// writePageLink は、"hashtag" かどうかだけを見る。
 	const written = writePageLink(title, link.kind === "bracket" ? "page-link" : "hashtag");
 	if (written === null) return null;
 	// 記号([ か #)から、名前の終わりまでを置き換える。閉じる括弧がもうあれば、それも含める。
@@ -119,8 +126,13 @@ function completed(
 	const linked = inlineNodes(parseLine(line, role)).some(
 		(node) =>
 			(node.type === "page-link" || node.type === "hashtag") &&
+			// 始まり、終わり、名前の確かめは、互いに重なっている(どれか1つを省いても、ほかの2つで同じ判定になる)。
+			// 補完した文字が、別の記法と組になったときに備えて、すべて書く。
+			// Stryker disable next-line ConditionalExpression: 上のとおり、結果は変わらない
 			node.start === from &&
+			// Stryker disable next-line ConditionalExpression: 上のとおり、結果は変わらない
 			node.end === end &&
+			// Stryker disable next-line ConditionalExpression: 上のとおり、結果は変わらない
 			toTitleLc(node.title) === toTitleLc(title),
 	);
 	return linked ? { text: line, column: end } : null;

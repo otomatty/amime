@@ -10,4 +10,8 @@ describe("invariant", () => {
 		expect(() => invariant(false, "cursor out of range")).toThrow(InvariantError);
 		expect(() => invariant(false, "cursor out of range")).toThrow("cursor out of range");
 	});
+
+	it("誤りの名前は InvariantError(ログで、どの種類の誤りかが分かる)", () => {
+		expect(new InvariantError("x").name).toBe("InvariantError");
+	});
 });

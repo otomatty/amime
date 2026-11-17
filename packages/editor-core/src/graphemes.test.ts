@@ -1,3 +1,4 @@
+import { InvariantError } from "@tsuzuri/shared";
 import { describe, expect, it } from "vitest";
 import {
 	ceilToBoundary,
@@ -59,6 +60,11 @@ describe("nextBoundary", () => {
 
 	it("行末ではそれ以上進まない", () => {
 		expect(nextBoundary("abc", 3)).toBe(3);
+	});
+
+	it("行の前の位置(負の位置)は、呼び出し側の誤りとして InvariantError で知らせる", () => {
+		expect(() => nextBoundary("abc", -1)).toThrow(InvariantError);
+		expect(() => nextBoundary("abc", -1)).toThrow("index -1 is outside of the text");
 	});
 });
 
