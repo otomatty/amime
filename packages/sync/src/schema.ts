@@ -195,6 +195,14 @@ export const parsePageTitle = (
 export const parsePageInfo = (input: unknown): Result<PageInfo, "invalid"> =>
 	parse(PageInfoSchema, input);
 
+const PageSavedSchema = v.object({ saved: v.boolean() });
+
+/** サーバーから届いた、ページが保存されているか(開いただけでないか)を検査する(ADR-0043)。 */
+export const parsePageSaved = (input: unknown): Result<boolean, "invalid"> => {
+	const parsed = parse(PageSavedSchema, input);
+	return parsed.ok ? ok(parsed.value.saved) : parsed;
+};
+
 const SearchResultsSchema = v.object({
 	hits: v.array(
 		v.object({

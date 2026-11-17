@@ -4,6 +4,7 @@ import {
 	createPageApi,
 	deletePage,
 	findPage,
+	isPageSaved,
 	listPages,
 	loadIcon,
 	loadLinks,
@@ -33,6 +34,17 @@ afterEach(() => {
 
 const client = "tab-1" as ClientId;
 const pageId = "p-1" as PageId;
+
+describe("isPageSaved(ページが保存されているか。ADR-0043)", () => {
+	it("IDで引いて、保存されているかを返す", async () => {
+		const fetchMock = stubFetch(
+			json({ id: "p-1", title: "メモ", problem: null, pinned: false, saved: true }),
+		);
+
+		expect(await isPageSaved(pageId)).toBe(true);
+		expect(fetchMock).toHaveBeenCalledWith("/api/projects/team/pages/p-1/info", undefined);
+	});
+});
 
 describe("findPage(IDからページを引く。ADR-0042)", () => {
 	const info = { id: "p-1", title: "出張メモ", problem: null, pinned: false };

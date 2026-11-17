@@ -360,9 +360,10 @@ export class ProjectDO extends DurableObject {
 	}
 
 	/** IDからページを引く(ADR-0042)。台帳にない(開いたことのない、削除した)ページは null。 */
-	info(id: PageId): PageInfo | null {
+	info(id: PageId): (PageInfo & { readonly saved: boolean }) | null {
 		const existing = this.#byId(id);
-		return existing === null ? null : toInfo(existing);
+		// saved: 保存されたページか(開いただけでないか)。読み込みで、ページが台帳に載ったのを確かめる(ADR-0043)。
+		return existing === null ? null : { ...toInfo(existing), saved: existing.version > 0 };
 	}
 
 	/** その名前のページの、最初の画像のURL(一覧のカードに出すもの)。ページか画像がなければ null。 */

@@ -61,28 +61,35 @@ function textLength(change: Change): number {
 }
 
 /**
- * 差分の先頭から、1つのコミットに収まる分を取り出す。少なくとも1つは取り出す。
+ * changes の start から、1つのコミットに収まる分の終わり(含まない位置)。少なくとも1つは入れる。
  * 差分は上から順に適用できる並びなので、途中までを先に送っても正しく適用できる。
  */
-function firstCommit(changes: readonly Change[]): readonly Change[] {
+function commitEnd(changes: readonly Change[], start: number): number {
 	let length = 0;
-	const end = changes.findIndex((change, index) => {
-		length += textLength(change);
-		return index > 0 && (index >= MAX_CHANGES || length > MAX_COMMIT_TEXT_LENGTH);
-	});
-	return end === -1 ? changes : changes.slice(0, end);
+	for (let index = start; index < changes.length; index += 1) {
+		length += textLength(changes[index] as Change);
+		const count = index - start;
+		if (count > 0 && (count >= MAX_CHANGES || length > MAX_COMMIT_TEXT_LENGTH)) return index;
+	}
+	return changes.length;
+}
+
+/** 差分の先頭から、1つのコミットに収まる分を取り出す。 */
+function firstCommit(changes: readonly Change[]): readonly Change[] {
+	return changes.slice(0, commitEnd(changes, 0));
 }
 
 /**
  * 変更の列を、1つのコミットに収まる大きさに、順序を保って分ける。
  * 端末内に残してあった変更を、画面を通さずにサーバーへ入れるときに使う(ADR-0022)。
+ * 書き出したページを読み込むときにも使う(ADR-0043)。行の数に上限がないので、残り全体を写し直さずに進める。
  */
 export function splitChanges(changes: readonly Change[]): (readonly Change[])[] {
 	const parts: (readonly Change[])[] = [];
-	for (let rest = changes; rest.length > 0; ) {
-		const part = firstCommit(rest);
-		parts.push(part);
-		rest = rest.slice(part.length);
+	for (let start = 0; start < changes.length; ) {
+		const end = commitEnd(changes, start);
+		parts.push(changes.slice(start, end));
+		start = end;
 	}
 	return parts;
 }

@@ -30,6 +30,20 @@ export {
 	parseProjectMembers,
 } from "./project.ts";
 export {
+	buildProjectFile,
+	firstLineHolder,
+	type ImportTarget,
+	importLineIds,
+	type PageImport,
+	PROJECT_FILE_FORMAT,
+	PROJECT_FILE_VERSION,
+	type ProjectFile,
+	type ProjectFileError,
+	type ProjectFilePage,
+	parseProjectFile,
+	planPageImport,
+} from "./project-file.ts";
+export {
 	MAX_LINE_LENGTH,
 	parseClientId,
 	parseClientMessage,
@@ -40,6 +54,7 @@ export {
 	parsePageInfo,
 	parsePageLinks,
 	parsePageList,
+	parsePageSaved,
 	parsePageSort,
 	parsePageTitle,
 	parsePageTitles,

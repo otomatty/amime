@@ -184,7 +184,8 @@ describe("ページのAPI", () => {
 
 			expect(found.status).toBe(200);
 			expect(found.headers.get("cache-control")).toBe("no-store");
-			expect(await found.json()).toEqual(info);
+			// 開いただけのページは、まだ保存されていない(ADR-0043)。
+			expect(await found.json()).toEqual({ ...info, saved: false });
 			const unknown = await get("/api/pages/0123456789abcdef0123456789abcdef/info");
 			expect(unknown.status).toBe(404);
 			expect(await unknown.json()).toEqual({ error: "unknown-page" });
