@@ -242,15 +242,16 @@ describe("planPageImport(1つのページを、どう読み込むか)", () => {
 		expect(planPageImport(long, longIds, cut)).toBeNull();
 	});
 
-	it("行はすべて読み込んであるが、固定できていなかったページは、固定だけする", () => {
+	it("固定は、行を足す前に行う。行を足し始めたあとは、固定し直さない(固定を外したのは、ほかの人かもしれない)", () => {
 		const done = {
 			version: 1,
 			lines: shop.lines.map((text, i) => ({ id: ids[i] as LineId, text })),
 			pinned: false,
 		};
 
-		expect(planPageImport(shop, ids, done)).toEqual({ commits: [], pin: true, firstLine: null });
-		expect(planPageImport(shop, ids, { ...done, pinned: true })).toBeNull();
+		expect(planPageImport(shop, ids, { ...empty, pinned: true })?.pin).toBe(false);
+		expect(planPageImport(shop, ids, done)).toBeNull();
+		expect(planPageImport(long, longIds, firstCommit(1))?.pin).toBe(false);
 	});
 
 	it("1行目を戻す前に止まったページは、1行目だけを戻す。戻してあれば、何もしない", () => {

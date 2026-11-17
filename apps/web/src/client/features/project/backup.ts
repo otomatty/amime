@@ -184,10 +184,11 @@ async function stagePage(
 			pinned: info.pinned,
 		});
 		if (plan === null) return { outcome: "skipped", id: info.id };
+		// 固定してから、行を足す。固定できなければ、行を足さずに失敗にする(やり直すと、固定から行う)。
+		if (plan.pin) await pinPage(info.id, true);
 		for (const changes of plan.commits) {
 			await api.commit({ id: createCommitId(), changes });
 		}
-		if (plan.pin) await pinPage(info.id, true);
 		const { firstLine } = plan;
 		const finish =
 			firstLine === null ? null : () => api.commit({ id: createCommitId(), changes: [firstLine] });

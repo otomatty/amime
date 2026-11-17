@@ -372,14 +372,25 @@ describe("importProject(書き出したファイルを、プロジェクトに�
 		expect(pages()[0]?.lines.map((line) => line.text)).toEqual(["長い", ...lines]);
 	});
 
-	it("固定だけできなかったページは、やり直すと、固定する", async () => {
+	it("固定できなかったページは、行を足さずに失敗にする。やり直すと、固定してから行を足す", async () => {
 		const { pages } = server();
 		const file = buildProjectFile("old", [{ ...page("予定", "本文"), pinned: true }], 0);
 		failWhen((url) => url.endsWith("/pin"));
 
 		expect((await importProject(file)).failed).toEqual(["予定"]);
+		expect(pages()[0]?.lines).toEqual([]);
 		expect(await importProject(file)).toEqual({ created: ["予定"], skipped: [], failed: [] });
 		expect(pages()[0]).toMatchObject({ pinned: true, lines: [{ text: "予定" }, { text: "本文" }] });
+	});
+
+	it("読み込み終えたあとで固定を外したページは、同じファイルを読み込み直しても、固定し直さない", async () => {
+		const { pages } = server();
+		const file = buildProjectFile("old", [{ ...page("予定", "本文"), pinned: true }], 0);
+		await importProject(file);
+		(pages()[0] as { pinned: boolean }).pinned = false;
+
+		expect(await importProject(file)).toEqual({ created: [], skipped: ["予定"], failed: [] });
+		expect(pages()[0]?.pinned).toBe(false);
 	});
 
 	it("同じファイルを読み込み直しても、行は増えない(読み込んであるページは、飛ばす)", async () => {

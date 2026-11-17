@@ -149,7 +149,7 @@ export type ImportTarget = {
 /**
  * 1つのページの読み込み。
  * - commits: 行を足すコミット(変更の列)。1行目は、いったん名前にしておく
- * - pin: 固定するか
+ * - pin: 固定するか。行を足す前に行う
  * - firstLine: 1行目を、元の本文に戻す変更。すべてのページの commits を送ったあとで送る。戻さなくてよければ null
  */
 export type PageImport = {
@@ -208,7 +208,8 @@ export function planPageImport(
 	const restoredFirst = first === original && original !== page.title ? 1 : 0;
 	if (target.version !== sent + restoredFirst) return null;
 	const changes = all.slice(sent);
-	const pin = page.pinned && !target.pinned;
+	// 固定は、行を足す前に行う(行を足し始めたページでは、固定を外したのが、ほかの人かもしれない)。
+	const pin = page.pinned && target.lines.length === 0 && !target.pinned;
 	const firstLine: Change | null =
 		first === original
 			? null

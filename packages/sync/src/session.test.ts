@@ -342,7 +342,7 @@ describe("splitChanges(変更の列を、コミットに収まる大きさに分
 	it("本文の長さでも分ける。1つの変更が上限より長くても、1つは入れる", () => {
 		const long = (index: number): Change => ({
 			type: "insert",
-			line: line(`n${index}`, "x".repeat(MAX_COMMIT_TEXT_LENGTH)),
+			line: line(`n${index}`, "x".repeat(MAX_COMMIT_TEXT_LENGTH + 1)),
 			after: null,
 			before: null,
 		});
