@@ -101,7 +101,7 @@ jobs:
       # 開発用のログイン(名前を入れるだけでログインできる)は、公開環境では無効にする(ADR-0032)。
       - name: 本番用のビルドで開発用のログインが無効であることを確認
         if: steps.tip.outputs.latest == 'true'
-        run: grep -q '"DEV_LOGIN":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
+        run: grep -q '"DEV_LOGIN":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v1/workers/default/worker.config.json
       # ログインとプロジェクトの設定を、シークレットのファイルにする(docs/deploy.md の 3)。
       # 登録していない値は、空になる(その機能は、使えないままになる)。
       - name: シークレットのファイルを用意

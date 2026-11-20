@@ -22,7 +22,7 @@ const BUDGETS: Budget[] = [
 	{ name: "Worker", pattern: /^bundle\/index\.js$/, maxGzipBytes: 256 * KIB },
 ];
 
-const root = process.argv[2] ?? "apps/web/.cloudflare/output/v0/workers/default";
+const root = process.argv[2] ?? "apps/web/.cloudflare/output/v1/workers/default";
 
 function walk(dir: string): string[] {
 	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
