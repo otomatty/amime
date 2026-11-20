@@ -80,10 +80,10 @@ jobs:
       - run: pnpm build
       # 開発用のログイン(名前を入れるだけでログインできる)は、公開環境では無効にする(ADR-0032)。
       - name: 本番用のビルドで開発用のログインが無効であることを確認
-        run: grep -q '"DEV_LOGIN":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
+        run: grep -q '"DEV_LOGIN":{"type":"text","value":"disabled"}' apps/web/.cloudflare/output/v1/workers/default/worker.config.json
       # プロジェクトを作れる人は、公開環境では、シークレットで渡す(誰でも作れる設定を、埋め込まない。ADR-0033)。
       - name: 本番用のビルドでプロジェクトを作れる人が埋め込まれていないことを確認
-        run: grep -q '"PROJECT_CREATORS":{"type":"secret"}' apps/web/.cloudflare/output/v0/workers/default/worker.config.json
+        run: grep -q '"PROJECT_CREATORS":{"type":"secret"}' apps/web/.cloudflare/output/v1/workers/default/worker.config.json
       - name: アップロードせずにデプロイ内容を検証
         run: pnpm --filter @tsuzuri/web exec cf deploy --prebuilt --mode production --dry-run
       # 画面のJS・CSSと、Worker の大きさ(gzip)が、上限を超えていないこと。結果は、ジョブの概要に表で出る。
