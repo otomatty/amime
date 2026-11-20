@@ -78,7 +78,7 @@ jobs:
       # 見逃した変異の場所と中身は、HTML の報告で見られる。
       - name: 報告を残す
         if: always() && steps.scope.outputs.run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-report
           path: reports/mutation
